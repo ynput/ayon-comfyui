@@ -100,11 +100,9 @@ class ComfyLocalSetting(BaseSettingsModel):
         default=True,
         title="Use managed virtual environment with python",
         description=(
-            "If not on windows, use a either"
-            "a specified installation of python when "
-            "'Use alternate python' is enabled, "
-            "or the default version that shows up "
-            "on execution of 'python' in the console, to make "
+            "If not on windows, use either a specified installation of python "
+            "when 'Use alternate python' is enabled, or the default version "
+            "that shows up on execution of 'python' in the console, to make "
             "a virtual environment in the AYON folder that holds all "
             "dependencies."
         ),
