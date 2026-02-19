@@ -21,8 +21,9 @@ def ensure_wsrpc():
     we have to inject the module here.
 
     This is also explicitly forbidden, but since we're not trying to
-    get our custom nodes 'officially' published by ComfyUI, it's premissable for now.
-    Should that change in the future, then wsrpc reliant functionality can be rewritten."""
+    get our custom nodes 'officially' published by ComfyUI, it's permitted
+    for now. Should that change in the future, then wsrpc reliant
+    functionality can be rewritten."""
 
     if not importlib.util.find_spec("wsrpc_aiohttp"):
         exec_ = sys.executable
