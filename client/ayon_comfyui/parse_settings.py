@@ -319,12 +319,12 @@ class ComfyLocalSettings:
 
     @property
     def port_webui(self) -> int:
-        """Return string representation of webui connection port."""
+        """Return webui connection port."""
         return self._port_web
 
     @property
     def port_backend(self) -> int:
-        """Return string representation of backend connection port."""
+        """Return backend connection port."""
         return self._port_server
 
     @property
