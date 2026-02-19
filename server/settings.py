@@ -127,18 +127,16 @@ class ComfyLocalSettings(BaseSettingsModel):
     """Group together settings."""
 
     # Port settings
-    server_pulse_port: str = SettingsField(
-        "55055",
+    server_pulse_port: int = SettingsField(
+        55055,
         title="Default port to pulse connection to backend",
         description="Websocket port to send heartbeat over, to make sure the backend process is still alive",
-        regex=r"\b[1-9]\d+\b",
     )
 
-    frontend_port: str = SettingsField(
-        "55056",
+    frontend_port: int = SettingsField(
+        55056,
         title="Default port for frontend RPC",
         description="Websocket port to communicate with local browser instance",
-        regex=r"\b[1-9]\d+\b",
     )
 
     local_setting_list: list[ComfyLocalSetting] = SettingsField(
