@@ -6,9 +6,9 @@
 
 
 [project]
-name = "ayon-addon-template"
+name = "ayon-comfyui"
 version = "0.1.0"
-description = "Add your description here"
+description = "AYON ComfyUI integration"
 license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.9.6"
