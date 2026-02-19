@@ -27,6 +27,6 @@ ayon_required_addons = {}
 ayon_compatible_addons = {}
 
 # Fetch plugin from following location on package?
-comfyui_plugin_fetch = True
+comfyui_plugin_fetch = False
 # comfyui plugin development location (will be pulled into package on build.)
-comfyui_plugin = R"C:\Users\sas.vangulik\Documents\comfy_nodes_ayon"
+comfyui_plugin = R""
