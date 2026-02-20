@@ -8,7 +8,7 @@ if __name__ == "__main__":
         "C:\\Users\\sas.vangulik\\AppData\\Local\\Ynput\\AYON\\dependency_packages\\ayon_2503211538_windows.zip\\runtime"
     )
 
-# TODO: Deprecate WSRPC. We don't need functionality here nessecarily.
+# TODO: Deprecate WSRPC. We don't need functionality here necessarily.
 from wsrpc_aiohttp import Route, WebSocketAsync, decorators
 
 from .client_tracker import TRACKER
@@ -36,7 +36,7 @@ class ComfyUIAyonRoute(Route):
         print(client_id)
         name, ip = client_id["hostname"], client_id["ip"]
         # We need to use this to save client ID somewhere as a hash maybe
-        print("RECIEVED RPC:", message, name, ip)
+        print("RECEIVED RPC:", message, name, ip)
 
         return "Hi from ayon_menu python plugin!"
 

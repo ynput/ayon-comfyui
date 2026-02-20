@@ -206,7 +206,7 @@ app.registerExtension({
   // Add commands to menu
   menuCommands: [
     { 
-      path: ["AYON", "My Extension"], 
+      path: ["AYON"],
       commands: ["myCommand","showWorkfiles","showCreator","logGraph","logApp"] 
     },
   ]

@@ -307,8 +307,8 @@ class ComfyLocalSettings:
                 get_studio_settings().get("comfyui").get("local_settings")
             )
 
-        self._port_server = self._settings["server_pulse_port"]
-        self._port_web = self._settings["frontend_port"]
+        self._port_server: int = self._settings["server_pulse_port"]
+        self._port_web: int = self._settings["frontend_port"]
         self._parse_settings()
 
     def _parse_settings(self) -> None:
@@ -318,13 +318,13 @@ class ComfyLocalSettings:
             self._profiles[profile.name] = profile
 
     @property
-    def port_webui(self) -> str:
-        """Return string representation of webui connection port."""
+    def port_webui(self) -> int:
+        """Return webui connection port."""
         return self._port_web
 
     @property
-    def port_backend(self) -> str:
-        """Return string representation of backend connection port."""
+    def port_backend(self) -> int:
+        """Return backend connection port."""
         return self._port_server
 
     @property

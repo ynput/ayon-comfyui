@@ -61,6 +61,10 @@ def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
     py_file = plugin_path / "ayon_menu" / "consts.py"
     js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
 
+    # TODO: We really shouldn't be updating files inside the packaged plugin,
+    #  but for now this is the easiest way to get the settings in there
+    #  without having to do some sort of IPC or environment variable passing
+    #  to comfyUI, which would be more robust but also more work to implement.
     with open(py_file, "w", encoding="utf-8") as py_f:
         py_f.write(python)
 
