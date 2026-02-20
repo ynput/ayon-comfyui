@@ -69,14 +69,6 @@ class ComfyPrelaunchHook(PreLaunchHook):
             "--use-dev", "run", script_path
         )
 
-        fname = os.path.expanduser("~\\Desktop\\comfy_log.txt")
-        with open(fname, "w") as file:
-            print(self.launch_context.launch_args, "\n", file=file)
-            print(self.launch_context.kwargs, "\n", file=file)
-            print(self.launch_context.env, "\n", file=file)
-            print(get_launch_script_path(), "\n", file=file)
-            print(new_launch_args, "\n", file=file)
-
         # uses ayon_console to launch a script.
         new_launch_args = get_ayon_launcher_args(
             "--use-dev", "run", script_path

@@ -1,9 +1,10 @@
-"""Runs a client to broadcast to JS"""
+"""Runs a client to broadcast to JS."""
 
 from __future__ import annotations
 
 import asyncio
-import os
+import logging
+import sys
 from collections import deque
 from typing import TYPE_CHECKING, NoReturn
 
@@ -12,21 +13,14 @@ if TYPE_CHECKING:
 import json
 from concurrent.futures import Future
 from threading import Thread
-from traceback import print_tb
 from typing import ClassVar
 
 from wsrpc_aiohttp import WSRPCClient
 
 from ayon_comfyui.api.qtthread_interface import QThread_interface
 
-
-def log_to_file(msg, err: BaseException = None):
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-    with open(fname, "a") as file:
-        errs = [err, type(err)] if err is not None else []
-        print(msg, *errs, file=file, flush=True)
-        if err:
-            print_tb(err.__traceback__, file=file)
+logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+log = logging.getLogger("ayon_comfyui")
 
 
 # TODO(@sas): Deprecate
@@ -35,7 +29,7 @@ class TemporaryClientClass(Thread):
         asyncio.run(self.async_run())
 
     async def async_run(self):
-        log_to_file(
+        log.info(
             "plan to attempt broadcast 'getWorkfile'"
             " to client websocket in 20 s"
         )
@@ -46,13 +40,13 @@ class TemporaryClientClass(Thread):
         try:
             await temp_client.connect()
             result = await temp_client.call("ayonComfyUI.do_retrieve_workfile")
-            log_to_file(result)
+            log.info(result)
             result = await temp_client.call(
                 "ayonComfyUI.do_imprint",
                 imprint_info="Hi! I'm text that is going to be imprinted into the node.",
             )
         except BaseException as err:
-            log_to_file("error", err)
+            log.debug(f"Error on imprint: {err}")  # noqa: G004
         finally:
             await temp_client.close()
 
@@ -79,7 +73,7 @@ class RPCServerStub:
             try:
                 await self._client.connect()
             except BaseException as e:  # noqa: BLE001
-                log_to_file("Couldn't connect to internal WSRPC server", e)
+                log.debug(f"failure in server stub start {e}")  # noqa: G004
 
             while True:
                 while len(RPCServerStub._awaitables_queue) > 0:
@@ -93,7 +87,7 @@ class RPCServerStub:
                         # an associated function in the qt queue
 
                         result = await coro
-                        log_to_file(result)
+                        log.info(result)
                         if future is not None:
                             future: Future
                             future.set_result(result)
@@ -101,10 +95,9 @@ class RPCServerStub:
                         if callable(and_then):
                             and_then(result)
                     except BaseException as e:  # noqa: PERF203, BLE001
-                        log_to_file(
-                            "Error occured processing function "
-                            "in RPC Server Client Thread",
-                            e,
+                        log.debug(
+                            "Error occured processing function "  # noqa: G004
+                            f"in RPC Server Client Thread: {e}"
                         )
 
                 await asyncio.sleep(0.1)
@@ -159,7 +152,7 @@ class RPCServerStub:
         if not self._running:
             return None
 
-        log_to_file("query_workfile")
+        log.info("query_workfile")
 
         coro = self._thread._client.call("ayonComfyUI.do_retrieve_workfile")
         and_then = None
@@ -178,7 +171,7 @@ class RPCServerStub:
         if not self._running:
             return
 
-        log_to_file("load_workfile")
+        log.info("load_workfile")
 
         coro = self._thread._client.call(
             "ayonComfyUI.do_load_workfile", workfile_path=path
@@ -195,9 +188,9 @@ class RPCServerStub:
         if not self._running:
             return
 
-        log_to_file(f"imprint_context\n{data}")
+        log.info(f"imprint_context\n{data}")
         json_data = json.dumps(data)
-        log_to_file(json_data)
+        log.info(json_data)
         coro = self._thread._client.call(
             "ayonComfyUI.do_context_imprint", imprint_info=json_data
         )
@@ -212,7 +205,7 @@ class RPCServerStub:
         """Query load entire context operation."""
         if not self._running:
             return None
-        log_to_file("_load_context (full context)")
+        log.info("_load_context (full context)")
         coro = self._thread._client.call("ayonComfyUI.do_context_retrieve")
         and_then = None
 
@@ -220,7 +213,7 @@ class RPCServerStub:
         self._schedule(coro, context_get_fut, and_then)
         # block until load is complete.
         context_json_raw = context_get_fut.result()
-        log_to_file(context_json_raw)
+        log.info(context_json_raw)
         return (
             json.loads(context_json_raw)
             if context_json_raw is not None
@@ -230,7 +223,7 @@ class RPCServerStub:
     def load_context(self) -> None:
         """Query load context, return only the context."""
         context_json_raw = self._load_context()
-        log_to_file("load context")
+        log.info("load context")
         if context_json_raw:
             return context_json_raw["context"]
         return None
@@ -238,7 +231,7 @@ class RPCServerStub:
     def list_instances(self) -> list[dict]:
         """Query load context, return only the instances."""
         context_json_raw = self._load_context()
-        log_to_file("list instances")
+        log.info("list instances")
         if context_json_raw:
             return context_json_raw["instances"]
         return None
@@ -248,7 +241,7 @@ class RPCServerStub:
         if not self._running:
             return
 
-        log_to_file("imprint_instances")
+        log.info("imprint_instances")
         json_data = json.dumps(data)
 
         coro = self._thread._client.call(
@@ -358,20 +351,3 @@ class RPCServerStub:
             )
 
         self._imprint_instances(instances)
-
-
-def run_test_op():
-    # Attempt to connect to server and issue a command
-
-    try:
-        cli_thread = TemporaryClientClass()
-        cli_thread.start()
-    except BaseException as e:
-        log_to_file(
-            "failure in stub thread start",
-            e,
-        )
-
-
-# if __name__ == "__main__":
-#     run_test_op()

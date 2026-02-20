@@ -15,7 +15,7 @@ import traceback
 from pathlib import Path
 from textwrap import dedent
 from threading import Thread
-from traceback import format_tb, print_tb
+from traceback import format_tb
 
 from ayon_core.lib import env_value_to_bool
 from ayon_core.pipeline import get_current_project_name, install_host
@@ -56,11 +56,9 @@ def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
     #  but for now this is the easiest way to get the settings in there
     #  without having to do some sort of IPC or environment variable passing
     #  to comfyUI, which would be more robust but also more work to implement.
-    with open(py_file, "w", encoding="utf-8") as py_f:
-        py_f.write(python)
+    Path(py_file).write_text(python, encoding="utf-8")
 
-    with open(js_file, "w", encoding="utf-8") as js_f:
-        js_f.write(javascript)
+    Path(js_file).write_text(javascript, encoding="utf-8")
 
 
 def _subproc_launch_ComfyUI() -> subprocess.Popen:
@@ -223,8 +221,10 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         args.extend(("--extra-model-paths-config", tmp.name))
         tmp_path = tmp.name
 
-    log.info(f"Launching ComfyUI locally with YAML comfig:"  # noqa: G004
-             f"\n{yaml}\n\nand arguments:\n{args}")
+    log.info(
+        f"Launching ComfyUI locally with YAML comfig:"  # noqa: G004
+        f"\n{yaml}\n\nand arguments:\n{args}"
+    )
 
     # Cleanup env
     delim = ":"
@@ -301,12 +301,15 @@ def main(*subproc_args):
         profile = profile_selector.profile
     except BaseException as e:
         log.debug(
-            "".join([
-                "error during profile dialog ",
-                e,
-                "\n",
-                "\n".join(format_tb(e.__traceback__))])
+            "".join(
+                [
+                    "error during profile dialog ",
+                    e,
+                    "\n",
+                    "\n".join(format_tb(e.__traceback__)),
+                ]
             )
+        )
 
     # sys.excepthook = safe_excepthook
 
@@ -333,8 +336,8 @@ def main(*subproc_args):
         pass
         # Crashes.
         # rpc.show_tool_by_name("workfiles", save=False)
-        # with open(fname, "a") as file:
-        #    print("Showed hostfiles", file=file)
+        # log.info("Showed workfiles")
+
     # Launch ComfyUI if the connection isn't external.
 
     # ComfyUI launch procedure
