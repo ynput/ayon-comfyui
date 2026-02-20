@@ -38,16 +38,7 @@ logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
 log = logging.getLogger("ayon_comfyui")
 
 
-def log_to_file(msg, err: BaseException = None):
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-    with open(fname, "a") as file:
-        errs = [err, type(err)] if err is not None else []
-        print(msg, *errs, file=file, flush=True)
-        if err:
-            print_tb(err.__traceback__, file=file)
-
-
-def safe_excepthook(*args):
+def safe_excepthook(*args):  # noqa: ANN201, ANN002, D103
     traceback.print_exception(*args)
 
 
@@ -175,7 +166,8 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         main_path = Path(comfy_main_location) / "main.py"
         comfy_main_location = str(main_path)
 
-    log_to_file(comfy_main_location)
+    log.info("Comfy Folder:")
+    log.info(comfy_main_location)
 
     # win only for now ?
     args = [
@@ -220,8 +212,6 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
 
     yaml += "".join(paths)
 
-    log_to_file(yaml)
-
     proc = None
     # Generate temporary file,
     # dont delete tempfile otherwise comfy gets confused
@@ -233,11 +223,9 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         args.extend(("--extra-model-paths-config", tmp.name))
         tmp_path = tmp.name
 
-    with open(fname, "a") as file:
-        print(*args, sep="\n", file=file)
-        print(yaml, file=file)
+    log.info(f"Launching ComfyUI locally with YAML comfig:"  # noqa: G004
+             f"\n{yaml}\n\nand arguments:\n{args}")
 
-    log_to_file(args)
     # Cleanup env
     delim = ":"
     if sys.platform == "win32":
@@ -274,25 +262,19 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
 
 def main(*subproc_args):
     """Local launch."""
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-    with open(fname, "w") as file:
-        print(*subproc_args, sep="\n", file=file)
-
-    # sys.excepthook = safe_excepthook
+    sys.excepthook = safe_excepthook
 
     from ayon_comfyui.api import ComfyUIHost
 
     host = ComfyUIHost()
     install_host(host)
 
-    with open(fname, "a") as file:
-        print("Installed host", file=file)
+    log.info("Installed host")
 
     app = get_ayon_qt_app()
     app.setQuitOnLastWindowClosed(False)
 
-    with open(fname, "a") as file:
-        print("got QT app", file=file)
+    log.info("got QT app")
 
     env_workfiles_on_launch = os.getenv(
         "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1"
@@ -318,13 +300,12 @@ def main(*subproc_args):
 
         profile = profile_selector.profile
     except BaseException as e:
-        with open(fname, "a") as file:
-            print(
-                "error during profile dialog",
+        log.debug(
+            "".join([
+                "error during profile dialog ",
                 e,
                 "\n",
-                "\n".join(format_tb(e.__traceback__)),
-                file=file,
+                "\n".join(format_tb(e.__traceback__))])
             )
 
     # sys.excepthook = safe_excepthook
@@ -337,18 +318,15 @@ def main(*subproc_args):
         )
         sys.exit(0)
 
-    with open(fname, "a") as file:
-        print("workfiles on launch:", workfiles_on_launch, file=file)
+    # Currently Unused
+    log.info(f"Workfiles on launch: {workfiles_on_launch}")  # noqa:G004
 
     try:
         # Launch comfyUI
         _subproc_launch_ComfyUI()
     except BaseException as e:
-        from traceback import print_tb
-
-        with open(fname, "a") as file:
-            print("problems launching comfyUI", type(e), e, file=file)
-            print_tb(e.__traceback__, file=file)
+        log.debug("Problems launching ComfyUI")
+        log.debug("\n".join(format_tb(e.__traceback__)))
     # Somehow wrap a connection here.
 
     if workfiles_on_launch:
@@ -361,8 +339,7 @@ def main(*subproc_args):
 
     # ComfyUI launch procedure
 
-    with open(fname, "a") as file:
-        print("Creating QRPCmanager", file=file)
+    log.info("Creating QRPCmanager")
 
     try:
         rpcman = QRPCManager(
@@ -372,28 +349,20 @@ def main(*subproc_args):
             server_port=settings.port_webui,
             use_https=False,
         )
-        with open(fname, "a") as file:
-            print("created rpc manager", file=file)
+        log.info("Created rpc manager")
         rpcman.start_server()
-        with open(fname, "a") as file:
-            print("called start_server", file=file)
+        log.info("called start_server")
     except BaseException as e:
-        from traceback import print_tb
-
-        with open(fname, "a") as file:
-            print("problem starting server", type(e), e, file=file)
-            print_tb(e.__traceback__, file=file)
+        log.debug("Problems starting server")
+        log.debug("\n".join(format_tb(e.__traceback__)))
     # Launch Qt Thread
-    log_to_file("launching qt thread")
+    log.info("launching qt thread")
 
     try:
         ret = app.exec_()
     except BaseException as e:
-        from traceback import print_tb
-
-        with open(fname, "a") as file:
-            print("problem keeping qt thread alive", type(e), e, file=file)
-            print_tb(e.__traceback__, file=file)
+        log.debug("Problems keeping thread alive")
+        log.debug("\n".join(format_tb(e.__traceback__)))
     # terminate connection after Qt Thread.
 
     sys.exit(ret)
