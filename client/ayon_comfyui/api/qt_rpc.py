@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import logging
+import sys
 from collections import deque
 from typing import TYPE_CHECKING, ClassVar, Type
 
@@ -22,15 +23,8 @@ from ayon_comfyui.api.rpc_client import RPCClient
 from ayon_comfyui.api.rpc_server import RPCServer
 from ayon_comfyui.api.rpc_server_stub import RPCServerStub
 
-
-def log_to_file(msg, err: BaseException = None):
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-    with open(fname, "a") as file:
-        errs = [err, type(err)] if err is not None else []
-        print(msg, *errs, file=file, flush=True)
-        if err:
-            print_tb(err.__traceback__, file=file)
-
+logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+log = logging.getLogger("ayon_comfyui")
 
 @dataclass
 class ClientRPCkwargs:
@@ -84,7 +78,7 @@ class QRPCManager(QObject, QThread_interface):
         # Sneak constructed object into class definition.
         # Semi-Singleton behavior.
         self.__class__._stored_man = self  # noqa: SLF001
-        log_to_file("within QRPCManager init")
+        log.info("within QRPCManager init")
         super().__init__(parent=parent)
 
         self._client_rpc_data = ClientRPCkwargs(
@@ -109,7 +103,7 @@ class QRPCManager(QObject, QThread_interface):
         self._loop_timer = loop_timer
 
     def schedule(self, function: Callable, *args, **kwargs):
-        log_to_file("scheduled function to qt thread")
+        log.info("scheduled function to qt thread")
         f = partial(function, *args, **kwargs)
         self._main_tasks.append(f)
 
@@ -119,7 +113,7 @@ class QRPCManager(QObject, QThread_interface):
         current_tasks = len(self._main_tasks)
 
         if current_tasks > 0:
-            log_to_file("processing tasks...")
+            log.info("processing tasks...")
         # move tasks out of list
         # (generator expression later made concrete during filter)
         task_list = (self._main_tasks.popleft() for _ in range(current_tasks))
@@ -128,41 +122,33 @@ class QRPCManager(QObject, QThread_interface):
         results = [task() for task in task_list]
 
         [
-            log_to_file("Error encountered in scheduled task: ", res.error)
+            log.debug(f"Error encountered in scheduled task: {res.error}")  # noqa: G004
             for res in results
             if res.is_err
         ]
 
     def start_server(self) -> None:
         """Wraps server start logic in thread."""
-        log_to_file("within QRPCManager start_server")
+        log.info("within QRPCManager start_server")
         try:
             self._server_thread.start()
         except BaseException as e:
-            log_to_file(
-                "failure in server thread start",
-                e,
-            )
-        log_to_file("server thread supposedly started")
+            log.debug(f"failure in server thread start: {e}")  # noqa: G004
+
+        log.info("server thread supposedly started")
         try:
             self._client_thread.start()
         except BaseException as e:
-            log_to_file(
-                "failure in thread start",
-                e,
-            )
-        log_to_file("client thread supposedly started")
+            log.debug(f"failure in client thread start {e}")  # noqa: G004
+        log.info("client thread supposedly started")
         self._loop_timer.start()
-        log_to_file("Started QT loop")
-        log_to_file("Setting up stub.")
+        log.info("Started QT loop")
+        log.info("Setting up stub.")
         try:
             self._stub_client.setup_class(self)
             self._stub_client.run()
         except BaseException as e:  # noqa: BLE001
-            log_to_file(
-                "failure in server stub thread start",
-                e,
-            )
+            log.info(f"failure in server stub start {e}")  # noqa: G004
 
     @classmethod
     def get_instance(cls) -> QRPCManager:
@@ -175,6 +161,7 @@ class QRPCManager(QObject, QThread_interface):
 
     @property
     def stub(self) -> RPCServerStub:
+        """Return stored stub."""
         return self._stub_client
 
 
@@ -204,7 +191,7 @@ class RPCClientThread(Thread):
             asyncio.ensure_future(self.rpc.ping(), loop=self.loop)  # noqa: RUF006
             self.loop.run_forever()
         except BaseException as e:  # noqa: BLE001
-            log_to_file("Error occured during client run", e)
+            log.debug(f"Error during client run: {e}")  # noqa: G004
 
     @property
     def connected(self) -> bool:
@@ -234,4 +221,4 @@ class RPCServerThread(Thread):
             # Run server
             self.rpc_server.run_server(self.rpc_kwargs.port, loop=self.loop)
         except BaseException as e:  # noqa: BLE001
-            log_to_file("Error occured during server run", e)
+            log.debug(f"Error during server run: {e}")  # noqa: G004

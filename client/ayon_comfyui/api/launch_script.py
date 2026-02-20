@@ -6,9 +6,13 @@ by using `ayon_console run launch_script.py args, ...`
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from typing import Type
+
+logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+log = logging.getLogger("ayon_comfyui")
 
 # Use whole ass path for completeness sake to make sure it resolves
 from ayon_comfyui.api.launch_logic import main
@@ -21,9 +25,7 @@ def valdidate_args(*args: argv_t) -> None:
 
     Returns Nothing.
     """
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchscript_log.txt")
-    with open(fname, "w") as file:
-        print(*args, sep="\n", file=file)
+    log.info(f"launching with {args}")  # noqa: G004
 
     main(*args)
 
