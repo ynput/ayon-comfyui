@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, NoReturn
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
+
+    from ayon_comfyui.api.qtthread_interface import QThread_interface
 import json
 from concurrent.futures import Future
 from threading import Thread
@@ -17,38 +19,10 @@ from typing import ClassVar
 
 from wsrpc_aiohttp import WSRPCClient
 
-from ayon_comfyui.api.qtthread_interface import QThread_interface
+from ayon_comfyui.api.consts import LOG_LEVEL
 
-logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
-
-
-# TODO(@sas): Deprecate
-class TemporaryClientClass(Thread):
-    def run(self):
-        asyncio.run(self.async_run())
-
-    async def async_run(self):
-        log.info(
-            "plan to attempt broadcast 'getWorkfile'"
-            " to client websocket in 20 s"
-        )
-        await asyncio.sleep(20)
-
-        temp_client = WSRPCClient("ws://localhost:55056/ws/")
-
-        try:
-            await temp_client.connect()
-            result = await temp_client.call("ayonComfyUI.do_retrieve_workfile")
-            log.info(result)
-            result = await temp_client.call(
-                "ayonComfyUI.do_imprint",
-                imprint_info="Hi! I'm text that is going to be imprinted into the node.",
-            )
-        except BaseException as err:
-            log.debug(f"Error on imprint: {err}")  # noqa: G004
-        finally:
-            await temp_client.close()
 
 
 # TODO(@sas): Make sure this syncs with server settings for port.
@@ -60,16 +34,33 @@ class RPCServerStub:
     _thread = None
     _ready = False
     _running = False
+    _url = ""
+
+    def __init__(
+        self,
+        hostname: str,
+        port: int | str,
+        use_https: bool = False,  # noqa: FBT001, FBT002
+    ):
+        self._host = hostname
+        self._port = int(port)
+        self._https = use_https
+        self.__class__._url = (  # noqa : SLF001
+            f"ws{'s' if self._https else ''}://{self._host}:{self._port}/ws/"
+        )
 
     class RPCServerClientThread(Thread):
+        """Manage thread."""
+
         _client: ClassVar[WSRPCClient] = None
+        _url = ""
 
         def run(self):
             asyncio.run(self.async_run())
 
         async def async_run(self) -> NoReturn:
             """Plan to execute functions in queue."""
-            self._client = WSRPCClient("ws://localhost:55056/ws/")
+            self._client = WSRPCClient(self._url)
             try:
                 await self._client.connect()
             except BaseException as e:  # noqa: BLE001
@@ -120,7 +111,7 @@ class RPCServerStub:
         if not cls._ready:
             # Class is not ready yet
             return
-
+        cls._thread._url = cls._url  # noqa:SLF001
         cls._thread.start()
         cls._running = True
 
@@ -214,11 +205,7 @@ class RPCServerStub:
         # block until load is complete.
         context_json_raw = context_get_fut.result()
         log.info(context_json_raw)
-        return (
-            json.loads(context_json_raw)
-            if context_json_raw is not None
-            else {}
-        )
+        return json.loads(context_json_raw) if context_json_raw is not None else {}
 
     def load_context(self) -> None:
         """Query load context, return only the context."""
@@ -294,8 +281,7 @@ class RPCServerStub:
             instances = [
                 instance
                 for instance in instances
-                if instance.get("instance_id")
-                != instances_to_remove.get("instance_id")
+                if instance.get("instance_id") != instances_to_remove.get("instance_id")
             ]
         elif isinstance(instances_to_remove, list):
             ids_to_rem = [
@@ -322,8 +308,7 @@ class RPCServerStub:
         if isinstance(instances_to_update, dict):
             instances = [
                 instance
-                if instance.get("instance_id")
-                != instances_to_update.get("instance_id")
+                if instance.get("instance_id") != instances_to_update.get("instance_id")
                 else instances_to_update
                 for instance in instances
             ]

@@ -10,16 +10,15 @@ import aiohttp.web
 from ayon_core.tools.utils import host_tools
 from wsrpc_aiohttp import ClientException, Route, WebSocketAsync, decorators
 
+from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.qtthread_interface import QThread_interface
 
-logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
 
 def filter_exceptions(result: list):
-    return next(
-        (r for r in result if not isinstance(r, ClientException)), None
-    )
+    return next((r for r in result if not isinstance(r, ClientException)), None)
 
 
 def show_tool_by_name(tool_name):
@@ -71,9 +70,7 @@ class AyonLocalHost(Route):
 
         # fire off function and feed back returned result into function
         # TODO(@sas): This function SHOULD be present on the qt thread
-        await self.socket.broadcast(
-            "getPublishNodes", dummy_callback_printresult
-        )
+        await self.socket.broadcast("getPublishNodes", dummy_callback_printresult)
 
     @decorators.proxy
     async def do_retrieve_workfile(self) -> None:
@@ -145,9 +142,7 @@ class AyonLocalHost(Route):
         return None
 
     @decorators.proxy
-    async def do_context_imprint(
-        self, imprint_info: str = "No imprint."
-    ) -> bool:
+    async def do_context_imprint(self, imprint_info: str = "No imprint.") -> bool:
         """Creates a node in the browser session.
 
         Returns:

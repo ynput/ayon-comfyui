@@ -7,11 +7,12 @@ by using `ayon_console run launch_script.py args, ...`
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from typing import Type
 
-logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+from ayon_comfyui.api.consts import LOG_LEVEL
+
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
 # Use whole ass path for completeness sake to make sure it resolves

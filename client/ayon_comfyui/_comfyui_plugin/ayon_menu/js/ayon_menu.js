@@ -56,7 +56,7 @@ app.registerExtension({
           }
 
         }
-        
+        // TODO: Account for https
         let url = `ws://localhost:${AYON_WEBUI_PORT}/ws/`
         this.RPC = new WSRPC(url);
 

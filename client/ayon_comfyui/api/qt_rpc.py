@@ -10,33 +10,36 @@ from typing import TYPE_CHECKING, ClassVar, Type
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import partial
 from threading import Thread
-from traceback import print_tb
 
 from qtpy.QtCore import QObject, QTimer
 
+from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.qtthread_interface import QThread_interface
 from ayon_comfyui.api.result import safe_partial
-from ayon_comfyui.api.rpc_client import RPCClient
 from ayon_comfyui.api.rpc_server import RPCServer
 from ayon_comfyui.api.rpc_server_stub import RPCServerStub
+from ayon_comfyui.api.ws_client import WSClientThread
 
-logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
+
 @dataclass
-class ClientRPCkwargs:
-    """Struct for RPC client kwargs."""
+class ClientWSkwargs:
+    """Struct for WS client kwargs."""
 
     hostname: str
     port: int | str
     use_https: bool
+    retries: int = field(default=3)
+    retry_interval: float = field(default=5.0)
 
     @property
     def kwargs(self):
-        """Arguments to be forwarded into RPC Client constructor."""
+        """Arguments to be forwarded into WS Client constructor."""
         return asdict(self)
 
 
@@ -81,7 +84,7 @@ class QRPCManager(QObject, QThread_interface):
         log.info("within QRPCManager init")
         super().__init__(parent=parent)
 
-        self._client_rpc_data = ClientRPCkwargs(
+        self._client_rpc_data = ClientWSkwargs(
             hostname=client_hostname,
             port=client_port,
             use_https=use_https,
@@ -91,9 +94,11 @@ class QRPCManager(QObject, QThread_interface):
 
         self._server_thread = RPCServerThread(self._server_rpc_data, self)
 
-        self._client_thread = RPCClientThread(self._client_rpc_data, self)
+        self._ws_client_thread = WSClientThread(**self._client_rpc_data.kwargs)
 
-        self._stub_client = RPCServerStub()
+        self._stub_client = RPCServerStub(
+            client_hostname, client_port, use_https
+        )
 
         # Define QTimers to process the tasks
         loop_timer = QTimer()
@@ -136,11 +141,16 @@ class QRPCManager(QObject, QThread_interface):
             log.debug(f"failure in server thread start: {e}")  # noqa: G004
 
         log.info("server thread supposedly started")
+        # try:
+        #     self._rpc_client_thread.start()
+        # except BaseException as e:
+        #     log.debug(f"failure in client thread start {e}")
         try:
-            self._client_thread.start()
+            self._ws_client_thread.start()
         except BaseException as e:
-            log.debug(f"failure in client thread start {e}")  # noqa: G004
-        log.info("client thread supposedly started")
+            log.debug(f"failure in ws client thread start {e}")  # noqa: G004
+
+        log.info("ws client thread supposedly started")
         self._loop_timer.start()
         log.info("Started QT loop")
         log.info("Setting up stub.")
@@ -163,42 +173,6 @@ class QRPCManager(QObject, QThread_interface):
     def stub(self) -> RPCServerStub:
         """Return stored stub."""
         return self._stub_client
-
-
-class RPCClientThread(Thread):
-    """Manages async event loop for RPC Client in a Thread."""
-
-    def __init__(self, rpc_data: ClientRPCkwargs, qt_thread: QRPCManager):
-        super().__init__()
-        self.loop = None
-        self.rpc = None
-        self.rpc_kwargs = rpc_data
-        self.qt_thread = qt_thread
-
-    def run(self) -> None:
-        """On thread run, wrap event loop and RPC client."""
-        try:
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            self.rpc = RPCClient(**self.rpc_kwargs.kwargs)
-            # await connection
-            self.loop.run_until_complete(self.rpc.connect())
-
-            # We don't care about the ref to this future,
-            # since this is going to launch as a polling operation.
-            # TODO(@sas): Deprecate WSRPC and simplify to regular websocket.
-            #             This avoids an unneeded dependency addition @ Comfyui.
-            asyncio.ensure_future(self.rpc.ping(), loop=self.loop)  # noqa: RUF006
-            self.loop.run_forever()
-        except BaseException as e:  # noqa: BLE001
-            log.debug(f"Error during client run: {e}")  # noqa: G004
-
-    @property
-    def connected(self) -> bool:
-        """Return whether wrapped rpc client is connected."""
-        if self.rpc:
-            return self.rpc.connected
-        return False
 
 
 class RPCServerThread(Thread):

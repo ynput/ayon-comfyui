@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
-from traceback import print_tb
+import sys
 from typing import Any
 
 import pyblish.api
@@ -32,9 +32,10 @@ from ayon_core.pipeline import (
 from ayon_core.settings import get_project_settings
 
 from ayon_comfyui import COMFYUI_ADDON_ROOT
+from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.qt_rpc import QRPCManager
 
-logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
 PLUGINS_DIR = os.path.join(COMFYUI_ADDON_ROOT, "plugins")

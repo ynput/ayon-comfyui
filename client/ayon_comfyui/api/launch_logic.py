@@ -22,6 +22,7 @@ from ayon_core.pipeline import get_current_project_name, install_host
 from ayon_core.tools.utils import get_ayon_qt_app
 from ayon_core.tools.utils.dialogs import show_message_dialog
 
+from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.deduce_python import (
     deduce_default_python_executable,
     python_setup_venv_with_depends,
@@ -34,7 +35,7 @@ from ayon_comfyui.api.profile_selector.local_profile_dialog import (
 from ayon_comfyui.api.qt_rpc import QRPCManager
 from ayon_comfyui.parse_settings import ComfyLocalSettings
 
-logging.basicConfig(force=True, stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
 
@@ -84,9 +85,7 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     elif profile.is_windows_portable and profile.current_os == "Windows":
         # THEY MISSPELLED EMBEDDED...
         # Traverse folder and look for python.exe in the future.
-        pythonpath = (
-            Path(profile.base_folder).parent / "python_embeded" / "python.exe"
-        )
+        pythonpath = Path(profile.base_folder).parent / "python_embeded" / "python.exe"
 
     # TEST IMPLEMENTATION OF:
     # TODO(@sas): add an option for
@@ -192,9 +191,7 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     if include_content:
         import ayon_comfyui as comfy_plugin
 
-        comfy_plugin_path = (
-            Path(comfy_plugin.__file__).parent / "_comfyui_plugin"
-        )
+        comfy_plugin_path = Path(comfy_plugin.__file__).parent / "_comfyui_plugin"
         # inject settings
         adjust_consts_comfyui_plugin(comfy_plugin_path)
 
@@ -253,9 +250,7 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         time.sleep(hold_time)
         os.remove(path)
 
-    Thread(
-        target=_defer_delete_tmp, args={tmp_path, buffer_time}, daemon=True
-    ).start()
+    Thread(target=_defer_delete_tmp, args={tmp_path, buffer_time}, daemon=True).start()
 
     return proc
 
@@ -276,9 +271,7 @@ def main(*subproc_args):
 
     log.info("got QT app")
 
-    env_workfiles_on_launch = os.getenv(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1"
-    )
+    env_workfiles_on_launch = os.getenv("AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1")
     workfiles_on_launch = env_value_to_bool(
         "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
         value=env_workfiles_on_launch,
