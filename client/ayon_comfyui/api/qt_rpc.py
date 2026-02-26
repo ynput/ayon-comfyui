@@ -97,7 +97,7 @@ class QRPCManager(QObject, QThread_interface):
         self._ws_client_thread = WSClientThread(**self._client_rpc_data.kwargs)
 
         self._stub_client = RPCServerStub(
-            client_hostname, client_port, use_https
+            client_hostname, server_port, use_https
         )
 
         # Define QTimers to process the tasks
