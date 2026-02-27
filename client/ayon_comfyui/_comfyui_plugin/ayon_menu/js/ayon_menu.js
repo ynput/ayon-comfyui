@@ -56,6 +56,34 @@ app.registerExtension({
           }
 
         }
+
+        async function nodeForceExecution(node) {
+          const { prompt_id } = await app.queuePrompt(0, node.id);
+
+          await new Promise((resolve) => {
+            const handler = (event) => {
+              console.log(event)
+              if (
+                event.detail?.exec_info.queue_remaining === 0
+              ) {
+                app.api.removeEventListener("status", handler);
+                resolve();
+              }
+            };
+          
+            app.api.addEventListener("status", handler);
+          });
+        }
+        function nodeRetrieveImages(node) {
+          // API point to view image
+          const baseurl =  `${window.location.protocol}//${window.location.host}/api/view`;
+          // look into if '/' or '\\' in url doesn't give any problems
+          let urls = node.images.map((image) => 
+            `${baseurl}?filename=${image.filename}&subfolder=${image.subfolder}&type=${image.type}`)
+            .flat()
+          return urls
+        }
+
         // TODO: Account for https
         let url = `ws://localhost:${AYON_WEBUI_PORT}/ws/`
         this.RPC = new WSRPC(url);
@@ -76,6 +104,7 @@ app.registerExtension({
           return window.sessionStorage.getItem(workflow_key)
         })
 
+        // Deprecate
         this.RPC.addRoute('imprint', (data) => {
           console.log("adding node...")
           const imprint_node = addNodeAtCenter("AYON Image Save")
@@ -90,6 +119,85 @@ app.registerExtension({
           }
           return true
         })
+
+        this.RPC.addRoute('addPublishNode', (data) => {
+          console.log("adding node...")
+          const save_node = addNodeAtCenter("AYON Image Save")
+          const info_widget = save_node.widgets.find(widget => widget.name == "ayon_info")
+          const recook_widget = save_node.widgets.find(widget => widget.name == "recook")
+          save_node.color = "#233"
+          save_node.bgcolor = "#355"
+          try {
+            // associated instance information should be put on node.
+            info_widget.value = data.instance_json
+            const parsed = JSON.parse(data.instance_json)
+            recook_widget.value = parsed.creator_attributes.force_recook_on_publish
+            let productName = parsed.productName
+            save_node.title = `AYON (${productName})`
+            app.graph.setDirtyCanvas(true, true);
+          } catch (error) {
+            console.log(error)
+            return false
+          }
+          return true
+        })
+
+        this.RPC.addRoute('removePublishNodes', (data) => {
+          const nodeType = "AYON Image Save"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          
+          let to_remove = [];
+          let ayon_remove = [];
+
+          foundNodes.forEach(node => {
+            const info_widget = node.widgets.find(widget => widget.name == "ayon_info")
+            const ayon_info = JSON.parse(info_widget.value)
+            if (data.ids_to_remove.includes(ayon_info.instance_id)) {
+              to_remove.push(node)
+              ayon_remove.push(ayon_info)
+            }
+          });
+
+          let json_removed = JSON.stringify(ayon_remove)
+
+          to_remove.map((node) => {
+            app.graph.remove(node)
+          })
+          
+          return json_removed
+        })
+
+        this.RPC.addRoute('getPublishNodeImages', (data) => {
+          const nodeType = "AYON Image Save";
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          console.log("getting publish node images", data)
+          for (const node of foundNodes) {
+
+            const info_widget = node.widgets.find(widget => widget.name == "ayon_info");
+            const ayon_info = JSON.parse(info_widget.value);
+            // let recook = ayon_info.creator_attributes.force_recook_on_publish;
+
+            const recook_widget = node.widgets.find(widget => widget.name == "recook")
+            const recook = recook_widget.value
+
+            console.log(ayon_info, data.id_for_images)
+
+            if (data.id_for_images == ayon_info.instance_id) {
+              
+              if (recook) {
+                console.log("starting recook")
+                return app.queuePrompt(0, node.id).then(() => {
+                  console.log("done recook")
+                  return JSON.stringify(nodeRetrieveImages(node));
+                });
+              }
+              return JSON.stringify(nodeRetrieveImages(node));
+            }
+  
+            }
+          return JSON.stringify([]);
+        });
+
 
         this.RPC.addRoute('setImprintContext', (data) => {
           console.log("setting context...", data)

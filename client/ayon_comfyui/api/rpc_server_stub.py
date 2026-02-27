@@ -205,7 +205,11 @@ class RPCServerStub:
         # block until load is complete.
         context_json_raw = context_get_fut.result()
         log.info(context_json_raw)
-        return json.loads(context_json_raw) if context_json_raw is not None else {}
+        return (
+            json.loads(context_json_raw)
+            if context_json_raw is not None
+            else {}
+        )
 
     def load_context(self) -> None:
         """Query load context, return only the context."""
@@ -281,7 +285,8 @@ class RPCServerStub:
             instances = [
                 instance
                 for instance in instances
-                if instance.get("instance_id") != instances_to_remove.get("instance_id")
+                if instance.get("instance_id")
+                != instances_to_remove.get("instance_id")
             ]
         elif isinstance(instances_to_remove, list):
             ids_to_rem = [
@@ -308,7 +313,8 @@ class RPCServerStub:
         if isinstance(instances_to_update, dict):
             instances = [
                 instance
-                if instance.get("instance_id") != instances_to_update.get("instance_id")
+                if instance.get("instance_id")
+                != instances_to_update.get("instance_id")
                 else instances_to_update
                 for instance in instances
             ]
@@ -336,3 +342,59 @@ class RPCServerStub:
             )
 
         self._imprint_instances(instances)
+
+    def create_publish_node(self, instance_to_create: dict) -> None:
+        """Pass along a call to create a Ayon Image Save node."""
+        if not self._running:
+            return
+
+        log.info("stub create publish node")
+        json_data = json.dumps(instance_to_create)
+
+        coro = self._thread._client.call(
+            "ayonComfyUI.do_publishnode_create", instance_json=json_data
+        )
+        and_then = None
+
+        context_set_fut = Future()
+        self._schedule(coro, context_set_fut, and_then)
+        # block until load is complete.
+        context_set_fut.result()
+
+    def remove_publish_nodes(self, instances_to_remove: dict | list) -> None:
+        """Pass along a call to remove a Ayon Image Save nodes."""
+        if not self._running:
+            return
+
+        log.info("stub remove publish node")
+
+        if isinstance(instances_to_remove, dict):
+            instances_to_remove = [instances_to_remove]
+
+        json_data = json.dumps(instances_to_remove)
+
+        coro = self._thread._client.call(
+            "ayonComfyUI.do_publishnodes_remove", publish_instances=json_data
+        )
+        and_then = None
+
+        context_set_fut = Future()
+        self._schedule(coro, context_set_fut, and_then)
+        # block until load is complete.
+        context_set_fut.result()
+
+    def get_publish_node_images(self, instance_for_images: dict) -> list[str]:
+        """Returns list of images associated with node."""
+        log.info("stub get publish node images")
+        json_data = json.dumps(instance_for_images)
+        coro = self._thread._client.call(
+            "ayonComfyUI.do_get_publishnode_images",
+            publish_instance=json_data,
+        )
+        and_then = None
+
+        get_image_fut = Future()
+        self._schedule(coro, get_image_fut, and_then)
+        # block until load is complete.
+        result = get_image_fut.result()
+        return json.loads(result)

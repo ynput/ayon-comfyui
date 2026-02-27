@@ -18,7 +18,9 @@ log = logging.getLogger("ayon_comfyui")
 
 
 def filter_exceptions(result: list):
-    return next((r for r in result if not isinstance(r, ClientException)), None)
+    return next(
+        (r for r in result if not isinstance(r, ClientException)), None
+    )
 
 
 def show_tool_by_name(tool_name):
@@ -70,7 +72,9 @@ class AyonLocalHost(Route):
 
         # fire off function and feed back returned result into function
         # TODO(@sas): This function SHOULD be present on the qt thread
-        await self.socket.broadcast("getPublishNodes", dummy_callback_printresult)
+        await self.socket.broadcast(
+            "getPublishNodes", dummy_callback_printresult
+        )
 
     @decorators.proxy
     async def do_retrieve_workfile(self) -> None:
@@ -112,6 +116,7 @@ class AyonLocalHost(Route):
 
         return
 
+    # TODO(@sas): DEPRECATE
     @decorators.proxy
     async def do_imprint(self, imprint_info: str = "No imprint.") -> bool:
         """Creates a node in the browser session.
@@ -142,7 +147,9 @@ class AyonLocalHost(Route):
         return None
 
     @decorators.proxy
-    async def do_context_imprint(self, imprint_info: str = "No imprint.") -> bool:
+    async def do_context_imprint(
+        self, imprint_info: str = "No imprint."
+    ) -> bool:
         """Creates a node in the browser session.
 
         Returns:
@@ -230,6 +237,51 @@ class AyonLocalHost(Route):
             return filter_exceptions(result)
 
         return None
+
+    @decorators.proxy
+    async def do_publishnode_create(self, instance_json: str) -> None:
+        """Helper for creator to create a Ayon Image Save node."""
+        await self.socket.broadcast(
+            "addPublishNode", instance_json=instance_json
+        )
+
+    @decorators.proxy
+    async def do_publishnodes_remove(self, publish_instances: str) -> str:
+        """Remove Ayon Image Save nodes in graph.
+
+        Corresponds to IDs sent.
+
+        Returns:
+            JSON representation of removed nodes.
+        """
+        publish_instances = json.loads(publish_instances)
+        ids_to_remove = [
+            instance["instance_id"] for instance in publish_instances
+        ]
+
+        result = await self.socket.broadcast(
+            "removePublishNodes", ids_to_remove=ids_to_remove
+        )
+
+        if isinstance(result, list) and len(result) > 0:
+            return filter_exceptions(result)
+
+        return []
+
+    @decorators.proxy
+    async def do_get_publishnode_images(self, publish_instance: str) -> str:
+        """Retrieve images from a node."""
+        instance = json.loads(publish_instance)
+        id_ = instance["instance_id"]
+
+        result = await self.socket.broadcast(
+            "getPublishNodeImages", id_for_images=id_
+        )
+
+        if isinstance(result, list) and len(result) > 0:
+            return filter_exceptions(result)
+
+        return "[]"
 
     @decorators.proxy
     async def do_context_retrieve(self) -> dict:
