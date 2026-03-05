@@ -48,6 +48,7 @@ class ServerRPCkwargs:
     """Struct for RPC server kwargs."""
 
     port: int | str
+    use_https: bool
 
     @property
     def kwargs(self):
@@ -90,15 +91,16 @@ class QRPCManager(QObject, QThread_interface):
             use_https=use_https,
         )
 
-        self._server_rpc_data = ServerRPCkwargs(port=server_port)
+        self._server_rpc_data = ServerRPCkwargs(
+            port=server_port, use_https=use_https
+        )
 
         self._server_thread = RPCServerThread(self._server_rpc_data, self)
 
         self._ws_client_thread = WSClientThread(**self._client_rpc_data.kwargs)
 
-        self._stub_client = RPCServerStub(
-            client_hostname, server_port, use_https
-        )
+        # Server runs on localhost always.
+        self._stub_client = RPCServerStub("localhost", server_port, use_https)
 
         # Define QTimers to process the tasks
         loop_timer = QTimer()
@@ -190,7 +192,9 @@ class RPCServerThread(Thread):
         try:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
-            self.rpc_server = RPCServer(self.rpc_kwargs.port, self.qt_thread)
+            self.rpc_server = RPCServer(
+                self.rpc_kwargs.port, self.qt_thread, self.rpc_kwargs.use_https
+            )
             self.rpc_server.setup_server()
             # Run server
             self.rpc_server.run_server(self.rpc_kwargs.port, loop=self.loop)

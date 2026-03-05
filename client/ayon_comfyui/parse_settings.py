@@ -1,42 +1,10 @@
-r"""Deals with project settings.
-
-from ayon_core.settings import get_project_settings, get_studio_settings
-from pprint import pprint
-
-settings = get_studio_settings()
-pprint(settings["comfyui"])
---------------------
-{'local_settings': {'frontend_port': '55056',
-                    'local_setting_list': [{'comfy_base_folder_lin': '',
-                                            'comfy_base_folder_osx': '',
-                                            'comfy_base_folder_win': 'C:\\Users\\sas.vangulik\\Documents\\ComfyUI_windows_portable',
-                                            'comfy_setting_name': 'windows '
-                                                                  'standalone '
-                                                                  'fast fp16 '
-                                                                  'accumulation',
-                                            'launch_profile': {'extra_custom_node_dirs_lin': [],
-                                                               'extra_custom_node_dirs_osx': [],
-                                                               'extra_custom_node_dirs_win': ['C:\\Users\\sas.vangulik\\Documents\\comfy_nodes_ayon'],
-                                                               'launch_args_lin': [],
-                                                               'launch_args_osx': [],
-                                                               'launch_args_win': [{'key': '--windows-standalone-build',
-                                                                                    'value': ''},
-                                                                                   {'key': '--fast',
-                                                                                    'value': 'fp16_accumulation'}]},
-                                            'python_path_lin': '',
-                                            'python_path_osx': '',
-                                            'python_path_use_custom': False,
-                                            'python_path_win': '',
-                                            'dev_omit_packaged_ayon_comfyui_plugin': False,
-                                            'comfy_is_windows_portable': True,
-                                            }],
-                    'server_pulse_port': '55055'}}
-"""
+"""Abstract away and store project settings for ease of use."""
 
 from __future__ import annotations
 
 import sys
 from typing import Any, ClassVar, TypeVar
+from urllib.parse import ParseResult, urlparse
 
 from ayon_core.settings import get_project_settings, get_studio_settings
 
@@ -349,7 +317,7 @@ class ComfyLocalSettings:
         self,
         config: ComfyLocalSettings.ComfyLocalProfile | str,
     ) -> None:
-        """Commit this & config to LocalComfyCommittedSettings.
+        """Commit this & config to ComfyCommittedSettings.
 
         ```
         settings = ComfyLocalSettings("project_name")
@@ -361,7 +329,7 @@ class ComfyLocalSettings:
         if isinstance(config, str):
             config = self.get(config)
 
-        LocalComfyCommittedSettings.commit(self, config)
+        ComfyCommittedSettings.commit(self, config)
 
     @classmethod
     def pull_committed_settings(
@@ -376,11 +344,182 @@ class ComfyLocalSettings:
         settings, profile = ComfyLocalSettings.pull_committed_settings()
         ```
         """
-        return LocalComfyCommittedSettings.pull()
+        return ComfyCommittedSettings.pull()
+
+
+class ComfyRemoteSettings:
+    """Contains global settings for remote connections."""
+
+    class ComfyRemoteProfile:
+        """Parses a single config to then pass on."""
+
+        def __init__(self, profile_dict: dict[str, str]) -> None:
+            """Initialize config helper class."""
+            self._name = profile_dict.get("comfy_setting_name")
+            self._profile_dict: dict[str, str] = profile_dict
+
+        @property
+        def name(self) -> str:
+            """Return profile name."""
+            return self._name
+
+        @property
+        def port_webui(self) -> int:
+            """Return webui connection port."""
+            return self._profile_dict.get("frontend_port")
+
+        @property
+        def port_backend(self) -> int:
+            """Return backend connection port."""
+            return self._profile_dict.get("server_pulse_port")
+
+        @property
+        def comfy_url(self) -> str:
+            """Return URL to open for browser."""
+            return self._profile_dict.get("comfy_web_adress")
+
+        @property
+        def comfy_origin(self) -> str:
+            """Return URL expected to be in Origin header."""
+            parsed = urlparse(self.comfy_url)
+            return f"{parsed.scheme}://{parsed.netloc}"
+
+        @property
+        def is_https(self) -> bool:
+            """Return whether url is https."""
+            parsed = urlparse(self.comfy_url)
+            return parsed.scheme == "https"
+
+        @property
+        def netloc_webui(self) -> str:
+            """Return netloc of webui."""
+            url = urlparse(self.comfy_url)._replace(netloc="localhost")
+            url = ComfyRemoteSettings.url_specify_port(url, self.port_webui)
+            return urlparse(url).netloc
+
+        @property
+        def netloc_backend(self) -> str:
+            """Return netloc of webui."""
+            url = ComfyRemoteSettings.url_specify_port(
+                self.comfy_url, self.port_backend
+            )
+            return urlparse(url).netloc
+
+        @property
+        def open_browser(self) -> bool:
+            """Whether to open browser."""
+            return self._profile_dict.get("open_browser_on_connect")
+
+    def __init__(self, project_name: str | None):
+        """Initialize settings for local launch."""
+        self._settings = {}
+        self._profiles: dict[str, ComfyRemoteSettings.ComfyRemoteProfile] = {}
+        if project_name and project_name is not None:
+            self._settings = (
+                get_project_settings(project_name)
+                .get("comfyui")
+                .get("remote_settings")
+            )
+        else:
+            self._settings = (
+                get_studio_settings().get("comfyui").get("remote_settings")
+            )
+        self._parse_settings()
+
+    def _parse_settings(self) -> None:
+        """Parse out settings into objects."""
+        for setting in self._settings.get("remote_setting_list"):
+            profile = ComfyRemoteSettings.ComfyRemoteProfile(setting)
+            self._profiles[profile.name] = profile
+
+    @property
+    def mkcert_executable(self) -> str:
+        """Return specified mkcert location (differs per os)."""
+        mkcert_settings: dict[str, str] = self._settings.get("mkcert")
+        os_name = sys.platform
+
+        if os_name in {"win", "win32"}:
+            os_name = "win"
+        elif os_name in {"lin", "linux"}:
+            os_name = "lin"
+        elif os_name in {"osx", "darwin"}:
+            os_name = "osx"
+
+        return mkcert_settings.get(f"{os_name}_mkcert_path", "")
+
+    @property
+    def mkcert_uninstall_at_exit(self) -> bool:
+        """Return whether to uninstall mkcert CA after exit."""
+        return self._settings.get("mkcert").get("uninstall_after_session")
+
+    @staticmethod
+    def url_specify_port(parsed_url: ParseResult, port: int) -> str:
+        """Change the port on an URL and return it.
+
+        Returns:
+            Updated url.
+        """
+        netloc = parsed_url.netloc
+        if ":" in netloc:
+            netloc = f"{netloc.split(':')[0]}:{port}"
+        else:
+            netloc += f":{port}"
+        return parsed_url._replace(netloc=netloc)
+
+    @property
+    def profiles(self) -> list[str]:
+        """Return a list of profile names."""
+        return list(self._profiles.keys())
+
+    def __getitem__(self, key: str) -> ComfyRemoteProfile | None:
+        """Return a profile associated with a name."""
+        return self._profiles.get(key)
+
+    def get(
+        self, key: str, default: DEFAULT_T | None = None
+    ) -> ComfyRemoteProfile | DEFAULT_T | None:
+        """Return a profile associated with a name, else default.
+
+        Default is None by default.
+        """
+        return self._profiles.get(key, default)
+
+    def commit(
+        self,
+        config: ComfyRemoteSettings.ComfyRemoterofile | str,
+    ) -> None:
+        """Commit this & config to ComfyCommittedSettings.
+
+        ```
+        settings = ComfyRemoteSettings("project_name")
+        settings.commit("profile name")
+        # ... later, maybe in another thread
+        settings, profile = ComfyRemoteSettings.pull_committed_settings()
+        ```
+        """
+        if isinstance(config, str):
+            config = self.get(config)
+
+        ComfyCommittedSettings.commit(self, config)
+
+    @classmethod
+    def pull_committed_settings(
+        cls,
+    ) -> tuple[ComfyRemoteSettings, ComfyRemoteSettings.ComfyRemoteProfile]:
+        """Return committed settings.
+
+        ```
+        settings = ComfyRemoteSettings("project_name")
+        settings.commit("profile name")
+        # ... later, maybe in another thread
+        settings, profile = ComfyRemoteSettings.pull_committed_settings()
+        ```
+        """
+        return ComfyCommittedSettings.pull()
 
 
 # TODO (@Sas): Decide on whether this should be a private class
-class LocalComfyCommittedSettings:
+class ComfyCommittedSettings:
     """Contains a committed pair of Local settings and chosen config.
 
     This object is for holding state but may not be changed once set.
@@ -393,8 +532,10 @@ class LocalComfyCommittedSettings:
     ```
     """
 
-    _settings: ClassVar[ComfyLocalSettings] = None
-    _config: ClassVar[ComfyLocalSettings.ComfyLocalProfile] = None
+    _settings: ClassVar[ComfyLocalSettings | ComfyRemoteSettings] = None
+    _config: ClassVar[
+        ComfyLocalSettings.ComfyLocalProfile | ComfyRemoteSettings
+    ] = None
 
     @classmethod
     def commit(

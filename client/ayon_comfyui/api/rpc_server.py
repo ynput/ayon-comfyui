@@ -5,13 +5,19 @@ import json
 import logging
 import pathlib
 import sys
+from typing import ClassVar
 
 import aiohttp.web
 from ayon_core.tools.utils import host_tools
 from wsrpc_aiohttp import ClientException, Route, WebSocketAsync, decorators
 
 from ayon_comfyui.api.consts import LOG_LEVEL
+from ayon_comfyui.api.https_helper import (
+    get_session_secret,
+    get_ssl_context_server,
+)
 from ayon_comfyui.api.qtthread_interface import QThread_interface
+from ayon_comfyui.parse_settings import ComfyRemoteSettings
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
@@ -34,6 +40,32 @@ def show_tool_by_name(tool_name):
         kwargs["tab"] = "create"
 
     host_tools.show_tool_by_name(tool_name, **kwargs)
+
+
+def _pull_origin_from_settings() -> str:
+    _, profile = ComfyRemoteSettings.pull_committed_settings()
+    if isinstance(profile, ComfyRemoteSettings.ComfyRemoteProfile):
+        return profile.comfy_origin
+    return "http://localhost:8188"
+
+
+class OriginCheckingWebSocketAsync(WebSocketAsync):
+    """Ideally, check origin of incoming requests."""
+
+    # get from settings / cache
+    ALLOWED_ORIGINS: ClassVar[set[str]] = {
+        _pull_origin_from_settings(),
+        get_session_secret(),  # origin header for client.
+    }
+
+    async def authorize(self) -> bool:  # noqa: D102
+        origin = self.request.headers.get("Origin")
+        if origin not in self.ALLOWED_ORIGINS:
+            raise aiohttp.web.HTTPForbidden(
+                text=f"Origin {origin} not allowed"
+            )
+
+        return True
 
 
 class AyonLocalHost(Route):
@@ -329,26 +361,43 @@ class RPCServer:
     In particular, deal with the JavaScript part of the plugin.
     """
 
-    def __init__(self, port: int = 55056, qthread: QThread_interface = None):
+    def __init__(
+        self,
+        port: int = 55056,
+        qthread: QThread_interface = None,
+        *,
+        https: bool = False,
+    ):
         self._app = None
         self._port = port
         self._setup = False
         self._is_running = False
-
+        # TODO(@sas): get from url
+        self._is_https = https
         AyonLocalHost.register_qrpc_manager(qthread)
 
     def setup_server(self) -> None:
         """Set up server, do not start it yet."""
         self._app = aiohttp.web.Application()
-        self._app.router.add_route("*", "/ws/", WebSocketAsync)
-        WebSocketAsync.add_route("ayonComfyUI", AyonLocalHost)
+        # on https replace with Origin Checking Websocket Async.
+        ws_cls = WebSocketAsync
+        if self._is_https:
+            ws_cls = OriginCheckingWebSocketAsync
+
+        self._app.router.add_route("*", "/ws/", ws_cls)
+
+        ws_cls.add_route("ayonComfyUI", AyonLocalHost)
         self._setup = True
 
     def run_server(self, port: int, loop: asyncio.AbstractEventLoop) -> None:
         """Block thread and run server on localhost."""
         if self.is_set_up:
+            ssl_args = {}
+            if self._is_https:
+                ssl_args = {"ssl_context": get_ssl_context_server()}
+
             self._is_running = True
-            aiohttp.web.run_app(self._app, port=port, loop=loop)
+            aiohttp.web.run_app(self._app, port=port, loop=loop, **ssl_args)
 
     @property
     def is_set_up(self) -> bool:

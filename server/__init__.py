@@ -1,4 +1,4 @@
-"""Server package."""
+"""Server package settings."""
 
 from typing import Type
 

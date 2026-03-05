@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     from ayon_comfyui.api.qtthread_interface import QThread_interface
 import json
+import ssl
 from concurrent.futures import Future
 from threading import Thread
 from typing import ClassVar
@@ -20,9 +21,32 @@ from typing import ClassVar
 from wsrpc_aiohttp import WSRPCClient
 
 from ayon_comfyui.api.consts import LOG_LEVEL
+from ayon_comfyui.api.https_helper import (
+    get_session_secret,
+    get_ssl_context_client,
+)
+from ayon_comfyui.api.util import demangle_method
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
+
+
+class WSRPCClientOrigin(WSRPCClient):
+    """Override connect to add origin header."""
+
+    _ssl_ctx: ClassVar[ssl.SSLContext | None] = None
+
+    async def connect(self) -> None:
+        """Perform connection to the server."""
+        # set origin header
+        self.socket = await self._session.ws_connect(
+            str(self._url),
+            origin=get_session_secret(),
+            ssl_context=self._ssl_ctx,
+        )
+        # unroll to avoid name mangling errors
+        # This is evil.
+        self._create_task(demangle_method(self, "__handle_connection")())
 
 
 # TODO(@sas): Make sure this syncs with server settings for port.
@@ -35,6 +59,7 @@ class RPCServerStub:
     _ready = False
     _running = False
     _url = ""
+    _https = False
 
     def __init__(
         self,
@@ -44,7 +69,7 @@ class RPCServerStub:
     ):
         self._host = hostname
         self._port = int(port)
-        self._https = use_https
+        self.__class__._https = use_https  # noqa : SLF001
         self.__class__._url = (  # noqa : SLF001
             f"ws{'s' if self._https else ''}://{self._host}:{self._port}/ws/"
         )
@@ -52,15 +77,18 @@ class RPCServerStub:
     class RPCServerClientThread(Thread):
         """Manage thread."""
 
-        _client: ClassVar[WSRPCClient] = None
+        _client: ClassVar[WSRPCClientOrigin] = None
         _url = ""
+        _https = False
 
         def run(self):
             asyncio.run(self.async_run())
 
         async def async_run(self) -> NoReturn:
             """Plan to execute functions in queue."""
-            self._client = WSRPCClient(self._url)
+            self._client = WSRPCClientOrigin(self._url)
+            if self._https:
+                self._client._ssl_ctx = get_ssl_context_client()  # noqa: SLF001
             try:
                 await self._client.connect()
             except BaseException as e:  # noqa: BLE001
@@ -112,6 +140,7 @@ class RPCServerStub:
             # Class is not ready yet
             return
         cls._thread._url = cls._url  # noqa:SLF001
+        cls._thread._https = cls._https  # noqa: SLF001
         cls._thread.start()
         cls._running = True
 

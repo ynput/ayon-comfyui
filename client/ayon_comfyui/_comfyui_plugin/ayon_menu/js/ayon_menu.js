@@ -57,23 +57,6 @@ app.registerExtension({
 
         }
 
-        async function nodeForceExecution(node) {
-          const { prompt_id } = await app.queuePrompt(0, node.id);
-
-          await new Promise((resolve) => {
-            const handler = (event) => {
-              console.log(event)
-              if (
-                event.detail?.exec_info.queue_remaining === 0
-              ) {
-                app.api.removeEventListener("status", handler);
-                resolve();
-              }
-            };
-          
-            app.api.addEventListener("status", handler);
-          });
-        }
         function nodeRetrieveImages(node) {
           // API point to view image
           const baseurl =  `${window.location.protocol}//${window.location.host}/api/view`;
@@ -84,8 +67,7 @@ app.registerExtension({
           return urls
         }
 
-        // TODO: Account for https
-        let url = `ws://localhost:${AYON_WEBUI_PORT}/ws/`
+        let url = `${window.location.protocol.replace("http","ws")}//localhost:${AYON_WEBUI_PORT}/ws/`
         this.RPC = new WSRPC(url);
 
         this.RPC.addRoute('getPublishNodes', (data) => {

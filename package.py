@@ -8,7 +8,7 @@ title = "ComfyUI"
 app_host_name = "comfyui"
 
 # Required: Valid semantic version (https://semver.org/)
-version = "0.0.9"
+version = "0.0.12"
 
 # Name of client code directory imported in AYON launcher
 # - do not specify if there is no client code
@@ -27,6 +27,6 @@ ayon_required_addons = {}
 ayon_compatible_addons = {}
 
 # Fetch plugin from following location on package?
-comfyui_plugin_fetch = False
+comfyui_plugin_fetch = True
 # comfyui plugin development location (will be pulled into package on build.)
-comfyui_plugin = R""
+comfyui_plugin = R"C:\Users\sas.vangulik\Documents\comfy_nodes_ayon"
