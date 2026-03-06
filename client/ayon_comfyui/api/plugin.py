@@ -14,7 +14,7 @@ from ayon_comfyui.api.pipeline import list_instances
 from ayon_comfyui.api.qt_rpc import QRPCManager
 
 
-# Adapting from TrayPublisher
+# Adapting from Photoshop
 class ComfyUIAutoCreator(AutoCreator):
     """Generic ComfyUI autocreator to extend."""
 

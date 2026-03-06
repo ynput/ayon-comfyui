@@ -65,30 +65,13 @@ class ComfyPrelaunchHook(PreLaunchHook):
 
         script_path = get_launch_script_path()
         # uses ayon_console to launch a script.
-        new_launch_args = get_ayon_launcher_args(
-            "--use-dev", "run", script_path
-        )
-
-        fname = os.path.expanduser("~\\Desktop\\comfy_log.txt")
-        with open(fname, "w") as file:
-            print(self.launch_context.launch_args, "\n", file=file)
-            print(self.launch_context.kwargs, "\n", file=file)
-            print(self.launch_context.env, "\n", file=file)
-            print(get_launch_script_path(), "\n", file=file)
-            print(new_launch_args, "\n", file=file)
-
-        # uses ayon_console to launch a script.
-        new_launch_args = get_ayon_launcher_args(
-            "--use-dev", "run", script_path
-        )
+        new_launch_args = get_ayon_launcher_args("--use-dev", "run", script_path)
 
         # self.launch_context.redirect_output = False  # LET STDOUT SCREAM!!
 
         self.launch_context.launch_args = new_launch_args
 
-        self.launch_context.kwargs = get_launch_kwargs(
-            self.launch_context.kwargs
-        )
+        self.launch_context.kwargs = get_launch_kwargs(self.launch_context.kwargs)
 
         return
         # Pop executable
@@ -101,9 +84,7 @@ class ComfyPrelaunchHook(PreLaunchHook):
 
         script_path = get_launch_script_path()
 
-        new_launch_args = get_ayon_launcher_args(
-            "run", script_path, executable_path
-        )
+        new_launch_args = get_ayon_launcher_args("run", script_path, executable_path)
         # Add workfile path if exists
         workfile_path = self.data["last_workfile_path"]
         if (
@@ -125,6 +106,4 @@ class ComfyPrelaunchHook(PreLaunchHook):
         if remainders:
             self.launch_context.launch_args.extend(remainders)
 
-        self.launch_context.kwargs = get_launch_kwargs(
-            self.launch_context.kwargs
-        )
+        self.launch_context.kwargs = get_launch_kwargs(self.launch_context.kwargs)

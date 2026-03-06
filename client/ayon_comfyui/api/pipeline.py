@@ -5,8 +5,9 @@ Will be launched as a subprocess.
 
 from __future__ import annotations
 
+import logging
 import os
-from traceback import print_tb
+import sys
 from typing import Any
 
 import pyblish.api
@@ -31,7 +32,11 @@ from ayon_core.pipeline import (
 from ayon_core.settings import get_project_settings
 
 from ayon_comfyui import COMFYUI_ADDON_ROOT
+from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.qt_rpc import QRPCManager
+
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
+log = logging.getLogger("ayon_comfyui")
 
 PLUGINS_DIR = os.path.join(COMFYUI_ADDON_ROOT, "plugins")
 PUBLISH_PATH = os.path.join(PLUGINS_DIR, "publish")
@@ -40,15 +45,6 @@ CREATE_PATH = os.path.join(PLUGINS_DIR, "create")
 # [[maybe_unused]]
 INVENTORY_PATH = os.path.join(PLUGINS_DIR, "inventory")
 WORKFILE_BUILD_PATH = os.path.join(PLUGINS_DIR, "workfile_build")
-
-
-def log_to_file(msg, err: BaseException = None):
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-    with open(fname, "a") as file:
-        errs = [err, type(err)] if err is not None else []
-        print(msg, *errs, file=file, flush=True)
-        if err:
-            print_tb(err.__traceback__, file=file)
 
 
 class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
@@ -97,7 +93,6 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         return self.stub.load_context()
 
     def update_context_data(self, data, changes):
-        log_to_file(data)
         self.stub.imprint_context(data)
 
     def get_current_workfile(self):
@@ -113,7 +108,7 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         if workfile and isinstance(dst_path, str):
             with open(dst_path, mode="w", encoding="utf-8") as f:
                 f.write(workfile)
-                self.__class__._last_path = dst_path
+                self.__class__._last_path = dst_path  # noqa: SLF001
 
     @property
     def stub(self):

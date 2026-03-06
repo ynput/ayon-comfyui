@@ -1,60 +1,28 @@
-"""Runs a client to broadcast to JS"""
+"""Runs a client to broadcast to JS."""
 
 from __future__ import annotations
 
 import asyncio
-import os
+import logging
+import sys
 from collections import deque
 from typing import TYPE_CHECKING, NoReturn
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
+
+    from ayon_comfyui.api.qtthread_interface import QThread_interface
 import json
 from concurrent.futures import Future
 from threading import Thread
-from traceback import print_tb
 from typing import ClassVar
 
 from wsrpc_aiohttp import WSRPCClient
 
-from ayon_comfyui.api.qtthread_interface import QThread_interface
+from ayon_comfyui.api.consts import LOG_LEVEL
 
-
-def log_to_file(msg, err: BaseException = None):
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-    with open(fname, "a") as file:
-        errs = [err, type(err)] if err is not None else []
-        print(msg, *errs, file=file, flush=True)
-        if err:
-            print_tb(err.__traceback__, file=file)
-
-
-# TODO(@sas): Deprecate
-class TemporaryClientClass(Thread):
-    def run(self):
-        asyncio.run(self.async_run())
-
-    async def async_run(self):
-        log_to_file(
-            "plan to attempt broadcast 'getWorkfile'"
-            " to client websocket in 20 s"
-        )
-        await asyncio.sleep(20)
-
-        temp_client = WSRPCClient("ws://localhost:55056/ws/")
-
-        try:
-            await temp_client.connect()
-            result = await temp_client.call("ayonComfyUI.do_retrieve_workfile")
-            log_to_file(result)
-            result = await temp_client.call(
-                "ayonComfyUI.do_imprint",
-                imprint_info="Hi! I'm text that is going to be imprinted into the node.",
-            )
-        except BaseException as err:
-            log_to_file("error", err)
-        finally:
-            await temp_client.close()
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
+log = logging.getLogger("ayon_comfyui")
 
 
 # TODO(@sas): Make sure this syncs with server settings for port.
@@ -66,20 +34,37 @@ class RPCServerStub:
     _thread = None
     _ready = False
     _running = False
+    _url = ""
+
+    def __init__(
+        self,
+        hostname: str,
+        port: int | str,
+        use_https: bool = False,  # noqa: FBT001, FBT002
+    ):
+        self._host = hostname
+        self._port = int(port)
+        self._https = use_https
+        self.__class__._url = (  # noqa : SLF001
+            f"ws{'s' if self._https else ''}://{self._host}:{self._port}/ws/"
+        )
 
     class RPCServerClientThread(Thread):
+        """Manage thread."""
+
         _client: ClassVar[WSRPCClient] = None
+        _url = ""
 
         def run(self):
             asyncio.run(self.async_run())
 
         async def async_run(self) -> NoReturn:
             """Plan to execute functions in queue."""
-            self._client = WSRPCClient("ws://localhost:55056/ws/")
+            self._client = WSRPCClient(self._url)
             try:
                 await self._client.connect()
             except BaseException as e:  # noqa: BLE001
-                log_to_file("Couldn't connect to internal WSRPC server", e)
+                log.debug(f"failure in server stub start {e}")  # noqa: G004
 
             while True:
                 while len(RPCServerStub._awaitables_queue) > 0:
@@ -93,7 +78,7 @@ class RPCServerStub:
                         # an associated function in the qt queue
 
                         result = await coro
-                        log_to_file(result)
+                        log.info(result)
                         if future is not None:
                             future: Future
                             future.set_result(result)
@@ -101,10 +86,9 @@ class RPCServerStub:
                         if callable(and_then):
                             and_then(result)
                     except BaseException as e:  # noqa: PERF203, BLE001
-                        log_to_file(
-                            "Error occured processing function "
-                            "in RPC Server Client Thread",
-                            e,
+                        log.debug(
+                            "Error occured processing function "  # noqa: G004
+                            f"in RPC Server Client Thread: {e}"
                         )
 
                 await asyncio.sleep(0.1)
@@ -127,7 +111,7 @@ class RPCServerStub:
         if not cls._ready:
             # Class is not ready yet
             return
-
+        cls._thread._url = cls._url  # noqa:SLF001
         cls._thread.start()
         cls._running = True
 
@@ -159,7 +143,7 @@ class RPCServerStub:
         if not self._running:
             return None
 
-        log_to_file("query_workfile")
+        log.info("query_workfile")
 
         coro = self._thread._client.call("ayonComfyUI.do_retrieve_workfile")
         and_then = None
@@ -178,7 +162,7 @@ class RPCServerStub:
         if not self._running:
             return
 
-        log_to_file("load_workfile")
+        log.info("load_workfile")
 
         coro = self._thread._client.call(
             "ayonComfyUI.do_load_workfile", workfile_path=path
@@ -195,9 +179,9 @@ class RPCServerStub:
         if not self._running:
             return
 
-        log_to_file(f"imprint_context\n{data}")
+        log.info(f"imprint_context\n{data}")
         json_data = json.dumps(data)
-        log_to_file(json_data)
+        log.info(json_data)
         coro = self._thread._client.call(
             "ayonComfyUI.do_context_imprint", imprint_info=json_data
         )
@@ -212,7 +196,7 @@ class RPCServerStub:
         """Query load entire context operation."""
         if not self._running:
             return None
-        log_to_file("_load_context (full context)")
+        log.info("_load_context (full context)")
         coro = self._thread._client.call("ayonComfyUI.do_context_retrieve")
         and_then = None
 
@@ -220,7 +204,7 @@ class RPCServerStub:
         self._schedule(coro, context_get_fut, and_then)
         # block until load is complete.
         context_json_raw = context_get_fut.result()
-        log_to_file(context_json_raw)
+        log.info(context_json_raw)
         return (
             json.loads(context_json_raw)
             if context_json_raw is not None
@@ -230,7 +214,7 @@ class RPCServerStub:
     def load_context(self) -> None:
         """Query load context, return only the context."""
         context_json_raw = self._load_context()
-        log_to_file("load context")
+        log.info("load context")
         if context_json_raw:
             return context_json_raw["context"]
         return None
@@ -238,7 +222,7 @@ class RPCServerStub:
     def list_instances(self) -> list[dict]:
         """Query load context, return only the instances."""
         context_json_raw = self._load_context()
-        log_to_file("list instances")
+        log.info("list instances")
         if context_json_raw:
             return context_json_raw["instances"]
         return None
@@ -248,7 +232,7 @@ class RPCServerStub:
         if not self._running:
             return
 
-        log_to_file("imprint_instances")
+        log.info("imprint_instances")
         json_data = json.dumps(data)
 
         coro = self._thread._client.call(
@@ -359,19 +343,58 @@ class RPCServerStub:
 
         self._imprint_instances(instances)
 
+    def create_publish_node(self, instance_to_create: dict) -> None:
+        """Pass along a call to create a Ayon Image Save node."""
+        if not self._running:
+            return
 
-def run_test_op():
-    # Attempt to connect to server and issue a command
+        log.info("stub create publish node")
+        json_data = json.dumps(instance_to_create)
 
-    try:
-        cli_thread = TemporaryClientClass()
-        cli_thread.start()
-    except BaseException as e:
-        log_to_file(
-            "failure in stub thread start",
-            e,
+        coro = self._thread._client.call(
+            "ayonComfyUI.do_publishnode_create", instance_json=json_data
         )
+        and_then = None
 
+        context_set_fut = Future()
+        self._schedule(coro, context_set_fut, and_then)
+        # block until load is complete.
+        context_set_fut.result()
 
-# if __name__ == "__main__":
-#     run_test_op()
+    def remove_publish_nodes(self, instances_to_remove: dict | list) -> None:
+        """Pass along a call to remove a Ayon Image Save nodes."""
+        if not self._running:
+            return
+
+        log.info("stub remove publish node")
+
+        if isinstance(instances_to_remove, dict):
+            instances_to_remove = [instances_to_remove]
+
+        json_data = json.dumps(instances_to_remove)
+
+        coro = self._thread._client.call(
+            "ayonComfyUI.do_publishnodes_remove", publish_instances=json_data
+        )
+        and_then = None
+
+        context_set_fut = Future()
+        self._schedule(coro, context_set_fut, and_then)
+        # block until load is complete.
+        context_set_fut.result()
+
+    def get_publish_node_images(self, instance_for_images: dict) -> list[str]:
+        """Returns list of images associated with node."""
+        log.info("stub get publish node images")
+        json_data = json.dumps(instance_for_images)
+        coro = self._thread._client.call(
+            "ayonComfyUI.do_get_publishnode_images",
+            publish_instance=json_data,
+        )
+        and_then = None
+
+        get_image_fut = Future()
+        self._schedule(coro, get_image_fut, and_then)
+        # block until load is complete.
+        result = get_image_fut.result()
+        return json.loads(result)

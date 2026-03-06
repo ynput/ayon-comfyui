@@ -2,29 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-from traceback import print_tb
+import logging
+import pathlib
+import sys
 
 import aiohttp.web
 from ayon_core.tools.utils import host_tools
 from wsrpc_aiohttp import ClientException, Route, WebSocketAsync, decorators
 
+from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.qtthread_interface import QThread_interface
+
+logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
+log = logging.getLogger("ayon_comfyui")
 
 
 def filter_exceptions(result: list):
     return next(
         (r for r in result if not isinstance(r, ClientException)), None
     )
-
-
-def log_to_file(msg, err: BaseException = None):
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-    with open(fname, "a") as file:
-        errs = [err, type(err)] if err is not None else []
-        print(msg, *errs, file=file, flush=True)
-        if err:
-            print_tb(err.__traceback__, file=file)
 
 
 def show_tool_by_name(tool_name):
@@ -90,9 +86,7 @@ class AyonLocalHost(Route):
             Forwarding to Qt is now being handled by the server stub
             since the Route is poorly accessible.
             """
-            fname = os.path.expanduser("~\\Desktop\\workfiles.json")
-            with open(fname, "w", encoding="utf-8") as f:
-                print(arg, file=f)
+            log.info(arg)
 
         # TODO(@sas): Remove dummy functions or reroute to temp file.
         result: list = await self.socket.broadcast("getWorkfile")
@@ -113,8 +107,7 @@ class AyonLocalHost(Route):
 
         workfile_json = ""
 
-        with open(workfile_path) as f:
-            workfile_json = f.read()
+        workfile_json = pathlib.Path(workfile_path).read_text()
 
         result: list = await self.socket.broadcast(
             "loadWorkfile",
@@ -123,6 +116,7 @@ class AyonLocalHost(Route):
 
         return
 
+    # TODO(@sas): DEPRECATE
     @decorators.proxy
     async def do_imprint(self, imprint_info: str = "No imprint.") -> bool:
         """Creates a node in the browser session.
@@ -137,9 +131,7 @@ class AyonLocalHost(Route):
             Forwarding to Qt is now being handled by the server stub
             since the Route is poorly accessible.
             """
-            fname = os.path.expanduser("~\\Desktop\\log_create_node.txt")
-            with open(fname, "w", encoding="utf-8") as f:
-                print(arg, file=f)
+            log.info(arg)
 
         # TODO(@sas): sign this with a session_id that's obtained
         # at launch creator window
@@ -231,11 +223,11 @@ class AyonLocalHost(Route):
 
         existing_ctx = self._ensure_wellformed_context(existing_ctx)
 
-        log_to_file("updating info")
+        log.info("updating info")
         # update context by overwriting
         existing_ctx["instances"] = json.loads(imprint_info)
 
-        log_to_file("imprinting")
+        log.info("imprinting")
         result = await self.socket.broadcast(
             "setImprintContext",
             imprint_info=json.dumps(existing_ctx),
@@ -245,6 +237,51 @@ class AyonLocalHost(Route):
             return filter_exceptions(result)
 
         return None
+
+    @decorators.proxy
+    async def do_publishnode_create(self, instance_json: str) -> None:
+        """Helper for creator to create a Ayon Image Save node."""
+        await self.socket.broadcast(
+            "addPublishNode", instance_json=instance_json
+        )
+
+    @decorators.proxy
+    async def do_publishnodes_remove(self, publish_instances: str) -> str:
+        """Remove Ayon Image Save nodes in graph.
+
+        Corresponds to IDs sent.
+
+        Returns:
+            JSON representation of removed nodes.
+        """
+        publish_instances = json.loads(publish_instances)
+        ids_to_remove = [
+            instance["instance_id"] for instance in publish_instances
+        ]
+
+        result = await self.socket.broadcast(
+            "removePublishNodes", ids_to_remove=ids_to_remove
+        )
+
+        if isinstance(result, list) and len(result) > 0:
+            return filter_exceptions(result)
+
+        return []
+
+    @decorators.proxy
+    async def do_get_publishnode_images(self, publish_instance: str) -> str:
+        """Retrieve images from a node."""
+        instance = json.loads(publish_instance)
+        id_ = instance["instance_id"]
+
+        result = await self.socket.broadcast(
+            "getPublishNodeImages", id_for_images=id_
+        )
+
+        if isinstance(result, list) and len(result) > 0:
+            return filter_exceptions(result)
+
+        return "[]"
 
     @decorators.proxy
     async def do_context_retrieve(self) -> dict:
@@ -257,15 +294,15 @@ class AyonLocalHost(Route):
 
         if isinstance(result, list) and len(result) > 0:
             ctx = filter_exceptions(result)
-            log_to_file(ctx)
+            log.info(ctx)
             ctx = ctx or json.dumps({})
             try:
                 ctx = json.loads(ctx)
             except json.JSONDecodeError as e:
-                log_to_file("Error loading json ctx", e)
+                log.debug(f"Error loading json ctx: {e}")  # noqa: G004
                 ctx = {}
             ctx = self._ensure_wellformed_context(ctx)
-            log_to_file("sending json string back")
+            log.info("sending json string back")
             return json.dumps(ctx)  # safer to send a string
 
         return None
