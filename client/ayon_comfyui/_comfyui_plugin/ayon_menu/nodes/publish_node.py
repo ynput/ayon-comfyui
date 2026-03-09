@@ -121,7 +121,7 @@ class AyonSaveNode(io.ComfyNode):
             img_pil.save(img_path, pnginfo=metadata, compress_level=compress_level)
 
             images_processed.append(
-                ui.SavedResult(filename_out, subfolder, ui.FolderType.output)
+                ui.SavedResult(filename_out, subfolder, io.FolderType.output)
             )
 
         return io.NodeOutput(ui=ui.SavedImages(results=images_processed))
