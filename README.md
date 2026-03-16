@@ -1,6 +1,14 @@
 # ComfyUI addon
 ComfyUI integration for AYON.
 
+For environment, set:
+```json
+{
+"COMFY_IS_REMOTE" : "No",
+}
+```
+To make sure to launch locally in applications.
+
 #### A note on https:
 The planned control flow is as follows:
 
