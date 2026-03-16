@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from secrets import token_hex
 from traceback import print_tb
 from typing import MutableMapping
 
@@ -36,6 +37,11 @@ class AyonSaveNode(io.ComfyNode):
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
+
+    # Ensure unique publish
+    @classmethod
+    def fingerprint_inputs(cls, **kwargs):
+        return token_hex(16)
 
     @classmethod
     def execute(
@@ -116,8 +122,8 @@ class AyonSaveNode(io.ComfyNode):
             img_path = os.path.join(full_output_folder, filename_out)
 
             # ensure path existence.
-            Path(img_path).parent.mkdir(parents=True, exist_ok=True)
 
+            Path(img_path).parent.mkdir(parents=True, exist_ok=True)
             img_pil.save(img_path, pnginfo=metadata, compress_level=compress_level)
 
             images_processed.append(

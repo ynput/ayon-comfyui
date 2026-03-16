@@ -60,7 +60,7 @@ coverage.xml
 
 # Django stuff:
 *.log
-local_settings.py
+# local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
@@ -168,3 +168,9 @@ uv.lock
 
 .vscode
 package
+
+# generated keys
+*.pem
+*.cert
+*.crt
+*.key
