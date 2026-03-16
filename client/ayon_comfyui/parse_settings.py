@@ -123,6 +123,16 @@ class ComfyLocalSettings:
             return self._get_platform_profile_setting_path("comfy_base_folder")
 
         @property
+        def comfy_port(self) -> str:
+            """Gets port where comfyui is supposed to run."""
+            return self._profile_dict.get("comfy_launch_port")
+
+        @property
+        def comfy_local_url(self) -> str:
+            """Gets complete http adress comfy runs on."""
+            return f"http://127.0.0.1:{self.comfy_port}"
+
+        @property
         def using_custom_python(self) -> bool:
             """Return whether custom python path is used."""
             return self._profile_dict.get("python_path_use_custom")
@@ -277,6 +287,7 @@ class ComfyLocalSettings:
 
         self._port_server: int = self._settings["server_pulse_port"]
         self._port_web: int = self._settings["frontend_port"]
+        self._port_http_static: int = self._settings["http_server_port"]
         self._parse_settings()
 
     def _parse_settings(self) -> None:
@@ -294,6 +305,16 @@ class ComfyLocalSettings:
     def port_backend(self) -> int:
         """Return backend connection port."""
         return self._port_server
+
+    @property
+    def port_static_frontend(self) -> int:
+        """Return static frontend port (hosts <iframe> with ComfyUI)."""
+        return self._port_http_static
+
+    @property
+    def address_frontend(self) -> str:
+        """Return static frontend adress."""
+        return f"http://localhost:{self.port_static_frontend}"
 
     @property
     def profiles(self) -> list[str]:
@@ -374,10 +395,22 @@ class ComfyRemoteSettings:
             return self._profile_dict.get("server_pulse_port")
 
         @property
+        def port_static_frontend(self) -> int:
+            """Return port to static frontend."""
+            return self._profile_dict.get("http_server_port")
+
+        @property
+        def address_frontend(self) -> str:
+            """Return static frontend adress."""
+            return f"http://localhost:{self.port_static_frontend}"
+
+        @property
         def comfy_url(self) -> str:
-            """Return URL to open for browser."""
+            """Return URL to embed in browser."""
             return self._profile_dict.get("comfy_web_adress")
 
+        # TODO(@sas): Look into deprecation, since origin checking
+        #             is likely unnessecary.
         @property
         def comfy_origin(self) -> str:
             """Return URL expected to be in Origin header."""
@@ -432,26 +465,6 @@ class ComfyRemoteSettings:
             profile = ComfyRemoteSettings.ComfyRemoteProfile(setting)
             self._profiles[profile.name] = profile
 
-    @property
-    def mkcert_executable(self) -> str:
-        """Return specified mkcert location (differs per os)."""
-        mkcert_settings: dict[str, str] = self._settings.get("mkcert")
-        os_name = sys.platform
-
-        if os_name in {"win", "win32"}:
-            os_name = "win"
-        elif os_name in {"lin", "linux"}:
-            os_name = "lin"
-        elif os_name in {"osx", "darwin"}:
-            os_name = "osx"
-
-        return mkcert_settings.get(f"{os_name}_mkcert_path", "")
-
-    @property
-    def mkcert_uninstall_at_exit(self) -> bool:
-        """Return whether to uninstall mkcert CA after exit."""
-        return self._settings.get("mkcert").get("uninstall_after_session")
-
     @staticmethod
     def url_specify_port(parsed_url: ParseResult, port: int) -> str:
         """Change the port on an URL and return it.
@@ -486,7 +499,7 @@ class ComfyRemoteSettings:
 
     def commit(
         self,
-        config: ComfyRemoteSettings.ComfyRemoterofile | str,
+        config: ComfyRemoteSettings.ComfyRemoteProfile | str,
     ) -> None:
         """Commit this & config to ComfyCommittedSettings.
 

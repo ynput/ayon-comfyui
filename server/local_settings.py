@@ -71,6 +71,15 @@ class ComfyLocalSetting(BaseSettingsModel):
 
     comfy_setting_name: str = SettingsField(default="")
 
+    comfy_launch_port: int = SettingsField(
+        default=8188,
+        title="Port for ComfyUI (default = 8188)",
+        description=(
+            "Comfyui will be launched on http://127.0.0.1:port, "
+            "with http://127.0.0.1:8188 being the default."
+        ),
+    )
+
     comfy_base_folder_win: str = SettingsField(
         "", title="ComfyUI folder on windows."
     )
@@ -121,6 +130,16 @@ class ComfyLocalSettings(BaseSettingsModel):
     """Group together settings."""
 
     # Port settings
+    http_server_port: int = SettingsField(
+        5454,
+        title="Default port for website user interacts with.",
+        description=(
+            "This port is used to launch a wrapper website "
+            "for ComfyUI. This websites hosts an <iframe> the "
+            "'real' ComfyUI will be embedded in."
+        ),
+    )
+
     server_pulse_port: int = SettingsField(
         55055,
         title="Default port to pulse connection to backend",
@@ -129,7 +148,7 @@ class ComfyLocalSettings(BaseSettingsModel):
 
     frontend_port: int = SettingsField(
         55056,
-        title="Default port for frontend RPC",
+        title="Default port for frontend websocket RPC",
         description="Websocket port to communicate with local browser instance",
     )
 

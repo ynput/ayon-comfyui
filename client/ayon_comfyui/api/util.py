@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from functools import wraps
 from typing import Any, Callable
 
@@ -74,3 +75,16 @@ def cache_result(func: Callable) -> Callable:
         return storage_t._cache  # noqa: SLF001
 
     return _cache_func
+
+
+# Not too evil.
+def extract_default_kwargs(func: Callable) -> dict[str, Any]:
+    """Returns a dict with default arguments to a function."""
+    params = inspect.signature(func).parameters
+    kwargs = {}
+    for param in params.values():
+        if param.default == inspect.Parameter.empty:
+            continue
+        kwargs[param.name] = param.default
+
+    return kwargs

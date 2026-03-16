@@ -22,6 +22,7 @@ from ayon_core.pipeline import get_current_project_name, install_host
 from ayon_core.tools.utils import get_ayon_qt_app
 from ayon_core.tools.utils.dialogs import show_message_dialog
 
+from ayon_comfyui.api.connection_util import defer_site_launch_when_available
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.deduce_python import (
     deduce_default_python_executable,
@@ -29,7 +30,6 @@ from ayon_comfyui.api.deduce_python import (
     venv_check_existence,
     venv_get_python,
 )
-from ayon_comfyui.api.https_helper import MkcertContext
 from ayon_comfyui.api.profile_selector import (
     LocalProfileDialog,
     RemoteProfileDialog,
@@ -49,16 +49,19 @@ def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
     """Adjust settings for comfyui plugin."""
     settings, _ = ComfyLocalSettings.pull_committed_settings()
 
-    javascript = f'export const AYON_WEBUI_PORT = "{settings.port_webui}";'
+    # javascript = f'export const AYON_WEBUI_PORT = "{settings.port_webui}";'
     python = f"AYON_BACKEND_PORT = {settings.port_backend}"
 
     py_file = plugin_path / "ayon_menu" / "consts.py"
-    js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
+    # js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
 
     # TODO: We really shouldn't be updating files inside the packaged plugin,
     #  but for now this is the easiest way to get the settings in there
     #  without having to do some sort of IPC or environment variable passing
     #  to comfyUI, which would be more robust but also more work to implement.
+    #
+    #  DONE: inject info about ports through live HTML templating instead
+    #        of JS files.
     #
     # COMMENT FROM(@sas): The design philosophy of ComfyUI is very much against
     #  using environment variables. An important thing to note too, is that
@@ -70,14 +73,11 @@ def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
 
     Path(py_file).write_text(python, encoding="utf-8")
 
-    Path(js_file).write_text(javascript, encoding="utf-8")
+    # Path(js_file).write_text(javascript, encoding="utf-8")
 
 
 def _subproc_launch_ComfyUI() -> subprocess.Popen:
     """Launch local profile."""
-    # We really need to fetch most of this from settings...
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-
     settings, profile = ComfyLocalSettings.pull_committed_settings()
 
     # CHECK IF WINDOWS PORTABLE TO TARGET THE RIGHT PYTHON PATH
@@ -185,7 +185,9 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         pythonpath,
         "-s",
         comfy_main_location,
-        # "--disable-auto-launch",  # Prevents browser from starting
+        "--disable-auto-launch",  # Prevents browser from starting
+        "--port",
+        f"{profile.comfy_port}",  # port needs to be string in arg list
         *profile.launch_args,
     ]
 
@@ -362,8 +364,15 @@ def main_local(*subproc_args):
             client_hostname="localhost",
             client_port=settings.port_backend,
             server_port=settings.port_webui,
+            static_port=settings.port_static_frontend,
+            comfy_url=profile.comfy_local_url,
             use_https=False,
         )
+
+        defer_site_launch_when_available(
+            profile.comfy_local_url, settings.address_frontend
+        )
+
         log.info("Created rpc manager")
         rpcman.start_server()
         log.info("called start_server")
@@ -454,34 +463,39 @@ def main_remote(*subproc_args):
     # Launch ComfyUI if the connection isn't external.
 
     # ComfyUI launch procedure
-    # Somewhere in here, upon establishing the connection with
-    # ws_client, we need to open a browser if desired.
+
     log.info("Creating QRPCmanager")
 
-    # factor this to profile
-    with MkcertContext():
-        try:
-            rpcman = QRPCManager(
-                parent=app,
-                client_hostname=profile.netloc_backend,
-                client_port=profile.port_backend,
-                server_port=profile.port_webui,
-                use_https=profile.is_https,
-            )
-            log.info("Created rpc manager")
-            rpcman.start_server()
-            log.info("called start_server")
-        except BaseException as e:
-            log.debug("Problems starting server")
-            log.debug("\n".join(format_tb(e.__traceback__)))
-        # Launch Qt Thread
-        log.info("launching qt thread")
+    try:
+        rpcman = QRPCManager(
+            parent=app,
+            client_hostname=profile.netloc_backend,
+            client_port=profile.port_backend,
+            server_port=profile.port_webui,
+            static_port=profile.port_static_frontend,
+            comfy_url=profile.comfy_url,
+            use_https=profile.is_https,
+        )
 
-        try:
-            ret = app.exec_()
-        except BaseException as e:
-            log.debug("Problems keeping thread alive")
-            log.debug("\n".join(format_tb(e.__traceback__)))
+        if profile.open_browser:
+            defer_site_launch_when_available(
+                profile.comfy_url, profile.address_frontend
+            )
+
+        log.info("Created rpc manager")
+        rpcman.start_server()
+        log.info("called start_server")
+    except BaseException as e:
+        log.debug("Problems starting server")
+        log.debug("\n".join(format_tb(e.__traceback__)))
+    # Launch Qt Thread
+    log.info("launching qt thread")
+
+    try:
+        ret = app.exec_()
+    except BaseException as e:
+        log.debug("Problems keeping thread alive")
+        log.debug("\n".join(format_tb(e.__traceback__)))
 
     # terminate connection after Qt Thread.
     sys.exit(ret)

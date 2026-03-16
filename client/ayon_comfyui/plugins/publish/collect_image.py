@@ -21,14 +21,6 @@ class CollectImage(pyblish.api.InstancePlugin):
     default_variant = "Main"
 
     def process(self, instance: pyblish.plugin.Instance):
-        # DEBUG: Setting job env: AYON_PROJECT_NAME: testing
-        # DEBUG: Setting job env: AYON_FOLDER_PATH: /sh0010
-        # DEBUG: Setting job env: AYON_TASK_NAME: concept
-        # DEBUG: Setting job env: AYON_USERNAME: sas.vangulik
-        # DEBUG: Setting job env: AYON_HOST_NAME: comfyui
-        # DEBUG: Setting job env: AYON_BUNDLE_NAME: Submarine-2025-11-05-02_dev
-        # DEBUG: Setting job env: AYON_WORKDIR: C:\\Users\\Public\\Documents\\testing\\sh0010\\work\\concept
-
         proj = os.environ.get("AYON_PROJECT_NAME")[:3]
         task = os.environ.get("AYON_TASK_NAME")
         folder = os.environ.get("AYON_FOLDER_PATH").split("/")[-1]
@@ -68,6 +60,12 @@ class CollectImage(pyblish.api.InstancePlugin):
             urlretrieve(image, destination)  # noqa: S310
 
         instance.context.data["currentFile"] = files[0]
+
+        # With publishing just one file, there's a tendency
+        # for Comfy to cache the results in the browser
+
+        if len(files) == 1:
+            files = files[0]
 
         # creating representation
         instance.data["representations"].append(
