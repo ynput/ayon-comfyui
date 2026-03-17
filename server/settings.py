@@ -11,14 +11,7 @@ from .remote_settings import ComfyRemoteSettings
 
 COMFY_DEFAULT_VALUES: dict[str, Any] = {
     "local_settings": {"local_setting_list": []},
-    "remote_settings": {
-        "remote_setting_list": [],
-        "mkcert": {
-            "win_mkcert_path": "",
-            "lin_mkcert_path": "",
-            "osx_mkcert_path": "",
-        },
-    },
+    "remote_settings": {"remote_setting_list": []},
 }
 
 
