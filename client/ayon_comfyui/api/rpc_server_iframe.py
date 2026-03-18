@@ -5,17 +5,20 @@ import logging
 import sys
 from functools import wraps
 from threading import Thread
-from typing import Any, Callable, ClassVar
+from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 import aiohttp.web
 from ayon_core.tools.utils import host_tools
 from wsrpc_aiohttp import Route, WebSocketAsync, decorators
-from wsrpc_aiohttp.websocket.common import WSRPCBase
 
 from ayon_comfyui.api.consts import LOG_LEVEL
-from ayon_comfyui.api.qtthread_interface import QThread_interface
 from ayon_comfyui.api.util import extract_default_kwargs
 from ayon_comfyui.parse_settings import ComfyLocalSettings, ComfyRemoteSettings
+
+if TYPE_CHECKING:
+    from wsrpc_aiohttp.websocket.common import WSRPCBase
+
+    from ayon_comfyui.api.qtthread_interface import QThread_interface
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
@@ -73,6 +76,7 @@ def get_client_from_origin(origin: str) -> WSRPCBase | None:
             "Origin" in client.request.headers
             and client.request.headers.get("Origin") == origin
         ):
+            RPCServerThread.get_thread().flag_valid_client()
             return client
     return None
 
@@ -98,7 +102,7 @@ class AyonLocalHost(Route):
     @decorators.proxy
     async def requestToolByName(self, tool_name: str) -> None:  # noqa: N802
         """Schedule tool in thread."""
-        log.debug(f"origin {self.socket.request.headers}")
+        log.debug(f"origin {self.socket.request.headers}")  # noqa: G004
         if self.qt_thread:
             self.qt_thread.schedule(show_tool_by_name, tool_name)
             return f"{tool_name} scheduled in qt_thread"
@@ -127,10 +131,12 @@ class RPCServerThread(Thread):
         self._is_https = https
         self._loop: asyncio.AbstractEventLoop = None
         self._shutdown_event = None
+        self._had_first_client = False
 
         self._origin = pull_origin_from_settings()
         log.info(self._origin)
         AyonLocalHost.register_qrpc_manager(qthread)
+        self._qt_thread = qthread
         self.__class__._instance = self  # noqa: SLF001
 
         super().__init__()
@@ -143,10 +149,6 @@ class RPCServerThread(Thread):
     def setup_server(self) -> None:
         """Set up server, do not start it yet."""
         self._app = aiohttp.web.Application()
-        # on https replace with Origin Checking Websocket Async.
-        # ws_cls = WebSocketAsync
-
-        # self.__class__._ws_cls = ws_cls
         self._app.router.add_route("*", "/ws/", WebSocketAsync)
 
         WebSocketAsync.add_route("ayonComfyUI", AyonLocalHost)
@@ -172,9 +174,34 @@ class RPCServerThread(Thread):
         )
 
         # Shutdown conditional
-        await self._shutdown_event.wait()
+        # await self._shutdown_event.wait()
+        await self.check_any_origin_client()
+
+        try:
+            # Close all websocket conns
+            await WebSocketAsync.close()
+        except TypeError as e:
+            log.info(f"Error {e} ignored. Already closed Websocket.")  # noqa: G004
+
+        # stopping server and clean up
         await site.stop()
         await runner.cleanup()
+        log.info("RPC webocket thread stopped and cleaned up.")
+
+    async def check_any_origin_client(self) -> None:
+        """If shutdown flag isn't set, check for valid frontend conns."""
+        while not self._shutdown_event.is_set():
+            if (
+                get_client_from_origin(self._origin) is None
+                and self._had_first_client
+            ):
+                self._qt_thread.sig_onfrontendcon_fail.emit()
+                break
+            await asyncio.sleep(0.5)
+
+    def flag_valid_client(self) -> None:
+        """Notify server a verified origin client connection has been made."""
+        self._had_first_client = True
 
     @property
     def is_set_up(self) -> bool:
@@ -195,14 +222,27 @@ class RPCServerThread(Thread):
         self._loop.call_soon_threadsafe(self._shutdown_event.set)
 
 
-def call_on_origin(origin: str = None) -> Callable:
-    """Decorator to send a function to a specific client on the websocket thread.
+def call_on_origin(
+    origin: str | None = None, namespace: str | None = None
+) -> Callable:
+    """Decorator to send a function to a specific client on websocket thread.
 
     Function signature should be like this:
     ```
-    @call_on_origin("http://expected-origin.com")
+    @call_on_origin(
+        origin = "http://expected-origin.com",
+        namespace = "namespace"
+    )
     def name_of_method(*, arg1='default1', arg2='default2') -> T:
         pass
+    ```
+
+    And will result in a:
+    ```
+    future = asyncio.run_coroutine_threadsafe(
+        found_client_for_origin.call(namespace.name_of_method)
+    )
+    return future.result()
     ```
     """  # noqa : DOC201
 
@@ -216,8 +256,8 @@ def call_on_origin(origin: str = None) -> Callable:
             )
 
             client = get_client_from_origin(origin=_origin_)
-            log.info("FOR ORIGIN:" + _origin_)
-            log.info("GOT CLIENT:" + str(client))
+            log.info(f"FOR ORIGIN: {_origin_}")  # noqa :G004
+            log.info(f"GOT CLIENT: {client!s}")  # noqa :G004
             if client is None:
                 return None
 
@@ -227,9 +267,13 @@ def call_on_origin(origin: str = None) -> Callable:
             kwargs = default_kw | kwargs
             func_name = func.__qualname__
 
-            # remove class namespace
+            # Remove class namespace
             if "." in func_name:
                 func_name = func.__qualname__.split(".")[-1]
+
+            # Add specified namespace if appliccable
+            if namespace is not None and namespace:
+                func_name = f"{namespace}.{func_name}"
 
             fut = asyncio.run_coroutine_threadsafe(
                 client.call(func_name, **kwargs), ws_loop

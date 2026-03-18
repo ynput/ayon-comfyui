@@ -10,6 +10,7 @@ from typing import Any, Callable
 import aiohttp
 
 from ayon_comfyui.api.consts import LOG_LEVEL
+from ayon_comfyui.api.qtthread_interface import QThread_interface
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
@@ -28,6 +29,7 @@ class WSClientThread(Thread):
         use_https: bool = False,  # noqa: FBT001, FBT002
         retries: int = 3,
         retry_interval: float = 5.0,
+        qtthread: QThread_interface = None,
     ):
         self._host = hostname
         self._port = port
@@ -49,6 +51,8 @@ class WSClientThread(Thread):
         self.loop = None
         self._shutdown_event = None
 
+        self._qt_thread = qtthread
+
         super().__init__()
 
     def run(self) -> None:
@@ -63,7 +67,7 @@ class WSClientThread(Thread):
 
     async def async_run(self) -> None:
         """Connection, pinging logic."""
-        while True:
+        while not self._shutdown_event.is_set():
             await self.ws_client(wait_forever=self._initial_connect)
             self._initial_connect = False
             if (
@@ -78,6 +82,10 @@ class WSClientThread(Thread):
         # when loop has been broken, run on_broken
         if self._on_broken:
             self._on_broken()
+
+        # tell qt thread heart is broken </3
+        if not self._shutdown_event.is_set():
+            self._qt_thread.sig_onheartbeat_fail.emit()
 
         self._broken = True
 
@@ -109,14 +117,14 @@ class WSClientThread(Thread):
                     pass
 
         if wait_forever:
-            while True:
+            while not self._shutdown_event.is_set():
                 try:
                     await _establish_con()
                     break
                 except aiohttp.ClientConnectorError:
                     log.info("Couldn't connect, trying again in 1 second.")
                     await asyncio.sleep(1)
-        else:
+        elif not self._shutdown_event.is_set():
             try:
                 await _establish_con()
             except aiohttp.ClientConnectorError:

@@ -261,7 +261,7 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     )
 
     # time buffer closing of tempfile, allowing it to be read by comfyUI
-    buffer_time = 5
+    buffer_time = 20
 
     def _defer_delete_tmp(path: str, hold_time: float) -> None:
         time.sleep(hold_time)
@@ -338,9 +338,11 @@ def main_local(*subproc_args):
     # Currently Unused
     log.info(f"Workfiles on launch: {workfiles_on_launch}")  # noqa:G004
 
+    process = None
+
     try:
         # Launch comfyUI
-        _subproc_launch_ComfyUI()
+        process = _subproc_launch_ComfyUI()
     except BaseException as e:
         log.debug("Problems launching ComfyUI")
         log.debug("\n".join(format_tb(e.__traceback__)))
@@ -368,6 +370,8 @@ def main_local(*subproc_args):
             comfy_url=profile.comfy_local_url,
             use_https=False,
         )
+
+        rpcman.attach_comfyui_process(process=process)
 
         defer_site_launch_when_available(
             profile.comfy_local_url, settings.address_frontend
