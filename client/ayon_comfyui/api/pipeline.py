@@ -33,7 +33,7 @@ from ayon_core.settings import get_project_settings
 
 from ayon_comfyui import COMFYUI_ADDON_ROOT
 from ayon_comfyui.api.consts import LOG_LEVEL
-from ayon_comfyui.api.qt_rpc import QRPCManager
+from ayon_comfyui.api.qt_rpc import QRPCManager, RPCStub
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
@@ -111,7 +111,8 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
                 self.__class__._last_path = dst_path  # noqa: SLF001
 
     @property
-    def stub(self):
+    def stub(self) -> RPCStub:
+        """Retrieve stub to interact with client."""
         return QRPCManager.get_instance().stub
 
 

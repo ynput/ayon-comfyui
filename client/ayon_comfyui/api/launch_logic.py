@@ -22,6 +22,7 @@ from ayon_core.pipeline import get_current_project_name, install_host
 from ayon_core.tools.utils import get_ayon_qt_app
 from ayon_core.tools.utils.dialogs import show_message_dialog
 
+from ayon_comfyui.api.connection_util import defer_site_launch_when_available
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.deduce_python import (
     deduce_default_python_executable,
@@ -29,11 +30,12 @@ from ayon_comfyui.api.deduce_python import (
     venv_check_existence,
     venv_get_python,
 )
-from ayon_comfyui.api.profile_selector.local_profile_dialog import (
+from ayon_comfyui.api.profile_selector import (
     LocalProfileDialog,
+    RemoteProfileDialog,
 )
 from ayon_comfyui.api.qt_rpc import QRPCManager
-from ayon_comfyui.parse_settings import ComfyLocalSettings
+from ayon_comfyui.parse_settings import ComfyLocalSettings, ComfyRemoteSettings
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
@@ -47,26 +49,35 @@ def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
     """Adjust settings for comfyui plugin."""
     settings, _ = ComfyLocalSettings.pull_committed_settings()
 
-    javascript = f'export const AYON_WEBUI_PORT = "{settings.port_webui}";'
+    # javascript = f'export const AYON_WEBUI_PORT = "{settings.port_webui}";'
     python = f"AYON_BACKEND_PORT = {settings.port_backend}"
 
     py_file = plugin_path / "ayon_menu" / "consts.py"
-    js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
+    # js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
 
     # TODO: We really shouldn't be updating files inside the packaged plugin,
     #  but for now this is the easiest way to get the settings in there
     #  without having to do some sort of IPC or environment variable passing
     #  to comfyUI, which would be more robust but also more work to implement.
+    #
+    #  DONE: inject info about ports through live HTML templating instead
+    #        of JS files.
+    #
+    # COMMENT FROM(@sas): The design philosophy of ComfyUI is very much against
+    #  using environment variables. An important thing to note too, is that
+    #  while an environment variable is easily gotten in python, it's harder to
+    #  do for JS. We also cannot make an environment variable easily accessible
+    #  to JS through python.
+    #  Writing out a file is a valid form of IPC.
+    #  If we still wish to stray
+
     Path(py_file).write_text(python, encoding="utf-8")
 
-    Path(js_file).write_text(javascript, encoding="utf-8")
+    # Path(js_file).write_text(javascript, encoding="utf-8")
 
 
 def _subproc_launch_ComfyUI() -> subprocess.Popen:
     """Launch local profile."""
-    # We really need to fetch most of this from settings...
-    fname = os.path.expanduser("~\\Desktop\\comfy_launchlogic_log.txt")
-
     settings, profile = ComfyLocalSettings.pull_committed_settings()
 
     # CHECK IF WINDOWS PORTABLE TO TARGET THE RIGHT PYTHON PATH
@@ -85,7 +96,9 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     elif profile.is_windows_portable and profile.current_os == "Windows":
         # THEY MISSPELLED EMBEDDED...
         # Traverse folder and look for python.exe in the future.
-        pythonpath = Path(profile.base_folder).parent / "python_embeded" / "python.exe"
+        pythonpath = (
+            Path(profile.base_folder).parent / "python_embeded" / "python.exe"
+        )
 
     # TEST IMPLEMENTATION OF:
     # TODO(@sas): add an option for
@@ -172,7 +185,9 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         pythonpath,
         "-s",
         comfy_main_location,
-        # "--disable-auto-launch",  # Prevents browser from starting
+        "--disable-auto-launch",  # Prevents browser from starting
+        "--port",
+        f"{profile.comfy_port}",  # port needs to be string in arg list
         *profile.launch_args,
     ]
 
@@ -191,7 +206,9 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     if include_content:
         import ayon_comfyui as comfy_plugin
 
-        comfy_plugin_path = Path(comfy_plugin.__file__).parent / "_comfyui_plugin"
+        comfy_plugin_path = (
+            Path(comfy_plugin.__file__).parent / "_comfyui_plugin"
+        )
         # inject settings
         adjust_consts_comfyui_plugin(comfy_plugin_path)
 
@@ -244,18 +261,20 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     )
 
     # time buffer closing of tempfile, allowing it to be read by comfyUI
-    buffer_time = 5
+    buffer_time = 20
 
     def _defer_delete_tmp(path: str, hold_time: float) -> None:
         time.sleep(hold_time)
         os.remove(path)
 
-    Thread(target=_defer_delete_tmp, args={tmp_path, buffer_time}, daemon=True).start()
+    Thread(
+        target=_defer_delete_tmp, args={tmp_path, buffer_time}, daemon=True
+    ).start()
 
     return proc
 
 
-def main(*subproc_args):
+def main_local(*subproc_args):
     """Local launch."""
     sys.excepthook = safe_excepthook
 
@@ -271,7 +290,9 @@ def main(*subproc_args):
 
     log.info("got QT app")
 
-    env_workfiles_on_launch = os.getenv("AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1")
+    env_workfiles_on_launch = os.getenv(
+        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1"
+    )
     workfiles_on_launch = env_value_to_bool(
         "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
         value=env_workfiles_on_launch,
@@ -317,9 +338,11 @@ def main(*subproc_args):
     # Currently Unused
     log.info(f"Workfiles on launch: {workfiles_on_launch}")  # noqa:G004
 
+    process = None
+
     try:
         # Launch comfyUI
-        _subproc_launch_ComfyUI()
+        process = _subproc_launch_ComfyUI()
     except BaseException as e:
         log.debug("Problems launching ComfyUI")
         log.debug("\n".join(format_tb(e.__traceback__)))
@@ -343,8 +366,17 @@ def main(*subproc_args):
             client_hostname="localhost",
             client_port=settings.port_backend,
             server_port=settings.port_webui,
+            static_port=settings.port_static_frontend,
+            comfy_url=profile.comfy_local_url,
             use_https=False,
         )
+
+        rpcman.attach_comfyui_process(process=process)
+
+        defer_site_launch_when_available(
+            profile.comfy_local_url, settings.address_frontend
+        )
+
         log.info("Created rpc manager")
         rpcman.start_server()
         log.info("called start_server")
@@ -361,4 +393,113 @@ def main(*subproc_args):
         log.debug("\n".join(format_tb(e.__traceback__)))
     # terminate connection after Qt Thread.
 
+    sys.exit(ret)
+
+
+def main_remote(*subproc_args):
+    """Remote Launch."""
+    sys.excepthook = safe_excepthook
+
+    from ayon_comfyui.api import ComfyUIHost
+
+    host = ComfyUIHost()
+    install_host(host)
+
+    log.info("Installed host")
+
+    app = get_ayon_qt_app()
+    app.setQuitOnLastWindowClosed(False)
+
+    log.info("got QT app")
+
+    env_workfiles_on_launch = os.getenv(
+        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1"
+    )
+    workfiles_on_launch = env_value_to_bool(
+        "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
+        value=env_workfiles_on_launch,
+        default=True,
+    )
+
+    try:
+        project_name = get_current_project_name() or None
+
+        settings = ComfyRemoteSettings(project_name=project_name)
+
+        profile_selector = RemoteProfileDialog()
+        # ensure project specific settings
+        profile_selector.populate_list(settings)
+
+        # block and get profile first.
+        # Profile will also commit results to
+        profile_selector.exec()
+
+        profile = profile_selector.profile
+    except BaseException as e:
+        log.debug(
+            "".join(
+                [
+                    "error during profile dialog ",
+                    e,
+                    "\n",
+                    "\n".join(format_tb(e.__traceback__)),
+                ]
+            )
+        )
+
+    if not profile:
+        show_message_dialog(
+            title="No profile selected!",
+            message="You have not selected a profile.\nClosing...",
+            level="warning",
+        )
+        sys.exit(0)
+
+    # Currently Unused
+    log.info(f"Workfiles on launch: {workfiles_on_launch}")  # noqa:G004
+
+    if workfiles_on_launch:
+        pass
+        # Crashes.
+        # rpc.show_tool_by_name("workfiles", save=False)
+        # log.info("Showed workfiles")
+
+    # Launch ComfyUI if the connection isn't external.
+
+    # ComfyUI launch procedure
+
+    log.info("Creating QRPCmanager")
+
+    try:
+        rpcman = QRPCManager(
+            parent=app,
+            client_hostname=profile.netloc_backend,
+            client_port=profile.port_backend,
+            server_port=profile.port_webui,
+            static_port=profile.port_static_frontend,
+            comfy_url=profile.comfy_url,
+            use_https=profile.is_https,
+        )
+
+        if profile.open_browser:
+            defer_site_launch_when_available(
+                profile.comfy_url, profile.address_frontend
+            )
+
+        log.info("Created rpc manager")
+        rpcman.start_server()
+        log.info("called start_server")
+    except BaseException as e:
+        log.debug("Problems starting server")
+        log.debug("\n".join(format_tb(e.__traceback__)))
+    # Launch Qt Thread
+    log.info("launching qt thread")
+
+    try:
+        ret = app.exec_()
+    except BaseException as e:
+        log.debug("Problems keeping thread alive")
+        log.debug("\n".join(format_tb(e.__traceback__)))
+
+    # terminate connection after Qt Thread.
     sys.exit(ret)

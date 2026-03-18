@@ -4,7 +4,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ayon_comfyui.api.rpc_server_stub import RPCServerStub
+    from ayon_comfyui.api.rpc_server_stub_iframe import RPCStub
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.pipeline import list_instances
@@ -19,8 +19,6 @@ class ImageCreator(Creator):
 
     On create, spawn a node that is to be associated with
     this publish.
-
-    TODO(@sas): Create sufficient entrypoints on stub
     """
 
     identifier = "image"
@@ -42,7 +40,7 @@ class ImageCreator(Creator):
         data: dict[str, Any],
         pre_create_data: dict[str, bool | str],
     ) -> None:
-        stub: RPCServerStub = QRPCManager.get_instance().stub
+        stub: RPCStub = QRPCManager.get_instance().stub
 
         keep_metadata: bool = pre_create_data.get("keep_metadata")
         prefix: str = pre_create_data.get("file_prefix")
@@ -129,14 +127,14 @@ class ImageCreator(Creator):
     def update_instances(  # noqa: D102, PLR6301
         self, update_list: list[tuple[CreatedInstance, Any]]
     ) -> None:
-        stub: RPCServerStub = QRPCManager.get_instance().stub
+        stub: RPCStub = QRPCManager.get_instance().stub
         updated = [
             instance.data_to_store() for instance, _changes in update_list
         ]
         stub.update_instance(updated)
 
     def remove_instances(self, instances: list[CreatedInstance]):
-        stub: RPCServerStub = QRPCManager.get_instance().stub
+        stub: RPCStub = QRPCManager.get_instance().stub
         stub.remove_publish_nodes([i.data_to_store() for i in instances])
         stub.remove_instance(instances)
 

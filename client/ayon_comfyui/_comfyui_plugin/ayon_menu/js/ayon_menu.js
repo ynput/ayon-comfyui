@@ -1,15 +1,74 @@
 import { app } from "../../scripts/app.js";
 import "../../../../extensions/ayon_menu/lib/wsrpc.js";
-import {AYON_WEBUI_PORT} from "../../../../extensions/ayon_menu/lib/consts.js"
+import {RPCServer} from "../../../../extensions/ayon_menu/lib/rpc_server.js"
 
 app.registerExtension({
     name: "comfy_ayon_menu",
     async setup() {
         console.log("AYON")
-        //let port = window.location.port
-        //let host = window.location.hostname
-        //let url = (window.location.protocol==="https):"?"wss://":"ws://")+ host +":55055" + '/ws/';
-        // RPC connection should actually be made with a localhost WSRPC port.
+
+        this.map_images = new Map()
+        this.expecting_id = null
+        this.resolved_id = null
+
+        function get_this() {
+          const exts = app.extensions;
+          return exts.find((el) => el.name == "comfy_ayon_menu")
+        }
+
+        function reset_expectations(expecting = null) {
+          const local_this = get_this()
+          local_this.expecting_id = expecting
+          local_this.resolved_id = null
+        }
+
+        function predictate_is_resolved(){
+          const local_this = get_this()
+          return local_this.expecting_id == local_this.resolved_id
+        }
+
+        app.api.addEventListener("executed", (e) => {
+          console.log("EXECUTED EVENT:", e.detail);
+          const local_this = get_this()
+          // map node id (e.g. '29') to array of output images.
+          local_this.map_images[e.detail.node] = e.detail.output?.images;
+          local_this.resolved_id = e.detail.node
+          console.log(local_this)
+        })
+
+        function waitForFlag(getFlagFn, interval = 100) {
+          return new Promise((resolve) => {
+              const timer = setInterval(() => {
+                  try {
+                      if (getFlagFn()) {
+                          clearInterval(timer);
+                          resolve();
+                      }
+                  } catch (err) {
+                      clearInterval(timer);
+                      throw err; // Stop if condition function throws
+                  }
+              }, interval);
+          });
+        }
+
+
+        async function getNodeImages(node,recook) {
+          const local_this = get_this();
+          
+          if (!recook){
+            return local_this.map_images[node.id]
+          }
+
+          const proompt = await app.graphToPrompt(node.graph)
+          reset_expectations(node.id)
+          await app.api.queuePrompt(0,proompt);
+          await waitForFlag(() => predictate_is_resolved())
+          reset_expectations()
+
+          return local_this.map_images[node.id]
+        }
+
         function addNodeAtCenter(type) {
           // Uses device pixel ratio to account for visible area at 100%
           const node = LiteGraph.createNode(type);
@@ -28,7 +87,35 @@ app.registerExtension({
                   va[1] + va[3] / (2 * dpr) - (h / 2)
               ];
           }
+          
+          app.graph.setDirtyCanvas(true, true);
+          return node;
+        }
+
+        function getViewportCenter() {
+          const canvas = app.canvas;
+          const rect = canvas.canvas.getBoundingClientRect();
+
+          const center = canvas.convertEventToCanvasOffset({
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2
+          });
         
+          return center;
+        }
+
+        function addNodeAtCenter(type) {
+          const node = LiteGraph.createNode(type);
+          app.graph.add(node);
+
+          const [cx, cy] = getViewportCenter();
+
+          node.pos = [
+            cx - node.size[0] / 2,
+            cy - node.size[1] / 2
+          ];
+
+          app.graph.afterChange(); 
           app.graph.setDirtyCanvas(true, true);
           return node;
         }
@@ -57,45 +144,56 @@ app.registerExtension({
 
         }
 
-        async function nodeForceExecution(node) {
-          const { prompt_id } = await app.queuePrompt(0, node.id);
-
-          await new Promise((resolve) => {
-            const handler = (event) => {
-              console.log(event)
-              if (
-                event.detail?.exec_info.queue_remaining === 0
-              ) {
-                app.api.removeEventListener("status", handler);
-                resolve();
-              }
-            };
-          
-            app.api.addEventListener("status", handler);
-          });
-        }
-        function nodeRetrieveImages(node) {
+        async function nodeRetrieveImages(node, recook) {
           // API point to view image
           const baseurl =  `${window.location.protocol}//${window.location.host}/api/view`;
           // look into if '/' or '\\' in url doesn't give any problems
-          let urls = node.images.map((image) => 
+          console.log("getNodeImages")
+          const images = await getNodeImages(node, recook)
+
+          let urls = images.map((image) => 
             `${baseurl}?filename=${image.filename}&subfolder=${image.subfolder}&type=${image.type}`)
             .flat()
           return urls
         }
 
-        // TODO: Account for https
-        let url = `ws://localhost:${AYON_WEBUI_PORT}/ws/`
-        this.RPC = new WSRPC(url);
+        // DO NOT THE WSRPC HERE, WE DO IFRAME THROUGH PROXY.JS
+        // Retrieve host URL from consts. Will always be http
+        this.IFRAMERPC = new RPCServer(window.parent, "http://localhost:5454")
 
-        this.RPC.addRoute('getPublishNodes', (data) => {
+        this.PROC_QUEUE = new Array()
+
+        console.log(this.PROC_QUEUE)
+
+        this.IFRAMERPC.register("alert", (data) => {
+          console.log("from parent iframe:", data.text);
+          alert(data.text)
+        });
+
+        function retrieve_latest_procqueue() {
+          const exts = app.extensions;
+          const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+          if (ext.PROC_QUEUE.length > 0)
+            return ext.PROC_QUEUE.pop()
+          return null
+        }
+
+        this.IFRAMERPC.register("pop_process", (data) => {
+          let result = retrieve_latest_procqueue()
+          if (result !== null)
+            console.log("pop_process",result)
+          return result
+        })
+
+        this.IFRAMERPC.register('getPublishNodes', (data) => {
           const nodeType = "AYON Image Save"
 
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           return JSON.stringify(foundNodes)
         })
 
-        this.RPC.addRoute('getWorkfile', (data) => {
+
+        this.IFRAMERPC.register('getWorkfile', (data) => {
           // Fetch clientId from session storage,
           // because workflows are saved as workflow:<id>
           let client = window.sessionStorage.getItem("clientId")
@@ -104,23 +202,7 @@ app.registerExtension({
           return window.sessionStorage.getItem(workflow_key)
         })
 
-        // Deprecate
-        this.RPC.addRoute('imprint', (data) => {
-          console.log("adding node...")
-          const imprint_node = addNodeAtCenter("AYON Image Save")
-          const info_widget = imprint_node.widgets.find(widget => widget.name == "ayon_info")
-          console.log(imprint_node, info_widget)
-          try {
-            info_widget.value = data.imprint_info
-            app.graph.setDirtyCanvas(true, true);
-          } catch (error) {
-            console.log(error)
-            return false
-          }
-          return true
-        })
-
-        this.RPC.addRoute('addPublishNode', (data) => {
+        this.IFRAMERPC.register('addPublishNode', (data) => {
           console.log("adding node...")
           const save_node = addNodeAtCenter("AYON Image Save")
           const info_widget = save_node.widgets.find(widget => widget.name == "ayon_info")
@@ -128,7 +210,7 @@ app.registerExtension({
           save_node.color = "#233"
           save_node.bgcolor = "#355"
           try {
-            // associated instance information should be put on node.
+                        // associated instance information should be put on node.
             info_widget.value = data.instance_json
             const parsed = JSON.parse(data.instance_json)
             recook_widget.value = parsed.creator_attributes.force_recook_on_publish
@@ -142,7 +224,8 @@ app.registerExtension({
           return true
         })
 
-        this.RPC.addRoute('removePublishNodes', (data) => {
+
+        this.IFRAMERPC.register('removePublishNodes', (data) => {
           const nodeType = "AYON Image Save"
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           
@@ -167,7 +250,7 @@ app.registerExtension({
           return json_removed
         })
 
-        this.RPC.addRoute('getPublishNodeImages', (data) => {
+        this.IFRAMERPC.register('getPublishNodeImages', async (data) => {
           const nodeType = "AYON Image Save";
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           console.log("getting publish node images", data)
@@ -183,23 +266,17 @@ app.registerExtension({
             console.log(ayon_info, data.id_for_images)
 
             if (data.id_for_images == ayon_info.instance_id) {
-              
-              if (recook) {
-                console.log("starting recook")
-                return app.queuePrompt(0, node.id).then(() => {
-                  console.log("done recook")
-                  return JSON.stringify(nodeRetrieveImages(node));
-                });
-              }
-              return JSON.stringify(nodeRetrieveImages(node));
+              console.log("Retrieving images")
+              let imgs = await nodeRetrieveImages(node, recook);
+              console.log(imgs);
+              return JSON.stringify(imgs);
             }
   
             }
-          return JSON.stringify([]);
+          return JSON.stringify([]); // none found
         });
 
-
-        this.RPC.addRoute('setImprintContext', (data) => {
+        this.IFRAMERPC.register('setImprintContext', (data) => {
           console.log("setting context...", data)
           const imprint_node = ensureAyonContextNode()
           console.log(imprint_node)
@@ -215,7 +292,8 @@ app.registerExtension({
           return true
         })
 
-        this.RPC.addRoute('getImprintContext', (data) => {
+
+        this.IFRAMERPC.register('getImprintContext', (data) => {
           console.log("getting context...", data)
           const imprint_node = ensureAyonContextNode()
           console.log(imprint_node)
@@ -229,7 +307,7 @@ app.registerExtension({
           }
         })
 
-        this.RPC.addRoute('loadWorkfile', (data) => {
+        this.IFRAMERPC.register('loadWorkfile', (data) => {
           console.log("loading from passed in Workfile")
           const workfile_parse = JSON.parse(data.workfile_json)
           try {
@@ -241,7 +319,9 @@ app.registerExtension({
           return true
         })
 
-        this.RPC.connect();
+
+
+        //this.RPC.connect();
     },
     commands: [
     { 
@@ -253,11 +333,12 @@ app.registerExtension({
         const ext = exts.find((el) => el.name == "comfy_ayon_menu")
 
         // console.log(app.extensions);
-        ext.RPC.call('ayonComfyUI.pingAyonMenu', {"message" :`Ping from web`}).then(function (data) {
-        console.log('pong: ', data);
-        }, function (error) {
-          alert(error);
-        });
+        ext.PROC_QUEUE.push({function: 'ayonComfyUI.pingAyonMenu',args: {"message" :`Ping from web`}})
+        // ext.RPC.call('ayonComfyUI.pingAyonMenu', {"message" :`Ping from web`}).then(function (data) {
+        // console.log('pong: ', data);
+        // }, function (error) {
+        //   alert(error);
+        // });
       } 
     },
 
@@ -270,11 +351,7 @@ app.registerExtension({
         const ext = exts.find((el) => el.name == "comfy_ayon_menu")
 
         console.log(app.extensions);
-        ext.RPC.call('ayonComfyUI.requestToolByName', {"tool_name" : "workfiles"}).then(function (data) {
-        console.log('pong: ', data);
-        }, function (error) {
-          alert(error);
-        });
+        ext.PROC_QUEUE.push({function: 'ayonComfyUI.requestToolByName',args: {"tool_name" : "workfiles"}})
       } 
     },
 
@@ -287,11 +364,19 @@ app.registerExtension({
         const ext = exts.find((el) => el.name == "comfy_ayon_menu")
 
         console.log(app.extensions);
-        ext.RPC.call('ayonComfyUI.requestToolByName', {"tool_name" : "create"}).then(function (data) {
-        console.log('pong: ', data);
-        }, function (error) {
-          alert(error);
-        });
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "create"}})
+      } 
+    },
+    { 
+      id: "showPublisher", 
+      label: "Publisher", 
+      function: () => {
+        // find plugin in array
+        const exts = app.extensions;
+        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+
+        console.log(app.extensions);
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "publisher"}})
       } 
     },
 
@@ -315,7 +400,7 @@ app.registerExtension({
   menuCommands: [
     { 
       path: ["AYON"],
-      commands: ["myCommand","showWorkfiles","showCreator","logGraph","logApp"] 
+      commands: ["showPublisher","showCreator","showWorkfiles","logGraph","logApp"] 
     },
   ]
 })
