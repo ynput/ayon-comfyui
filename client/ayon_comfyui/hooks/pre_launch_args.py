@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import platform
 import subprocess
 from typing import ClassVar, Optional
 
 from ayon_applications import LaunchTypes, PreLaunchHook
-from ayon_comfyui.addon import get_launch_script_path
+from ayon_comfyui import get_launch_script_path
 from ayon_core.lib import (
     get_ayon_launcher_args,
+    is_dev_mode_enabled,
     is_using_ayon_console,
 )
 
@@ -64,46 +64,13 @@ class ComfyPrelaunchHook(PreLaunchHook):
         self.log.warning(msg=str(self.launch_context.env))
 
         script_path = get_launch_script_path()
-        # uses ayon_console to launch a script.
-        new_launch_args = get_ayon_launcher_args("--use-dev", "run", script_path)
+        # uses ayon_console to launch a script, respecting dev mode.
+        dev_args = ["--use-dev"] if is_dev_mode_enabled() else []
 
-        # self.launch_context.redirect_output = False  # LET STDOUT SCREAM!!
+        new_launch_args = get_ayon_launcher_args(*dev_args, "run", script_path)
 
         self.launch_context.launch_args = new_launch_args
 
-        self.launch_context.kwargs = get_launch_kwargs(self.launch_context.kwargs)
-
-        return
-        # Pop executable
-        executable_path = self.launch_context.launch_args.pop(0)
-
-        # Pop rest of launch arguments - There should not be other arguments!
-        remainders = []
-        while self.launch_context.launch_args:
-            remainders.append(self.launch_context.launch_args.pop(0))
-
-        script_path = get_launch_script_path()
-
-        new_launch_args = get_ayon_launcher_args("run", script_path, executable_path)
-        # Add workfile path if exists
-        workfile_path = self.data["last_workfile_path"]
-        if (
-            self.data.get("start_last_workfile")
-            and workfile_path
-            and os.path.exists(workfile_path)
-        ):
-            new_launch_args.append(workfile_path)
-
-        workfile_startup = self.data.get("workfile_startup", False)
-        # set the env variable AYON_COMFYUI_WORKFILES_ON_LAUNCH to bool str
-        self.launch_context.env["AYON_COMFYUI_WORKFILES_ON_LAUNCH"] = str(
-            workfile_startup
-        ).lower()
-
-        # Append as whole list as these arguments should not be separated
-        self.launch_context.launch_args.append(new_launch_args)
-
-        if remainders:
-            self.launch_context.launch_args.extend(remainders)
-
-        self.launch_context.kwargs = get_launch_kwargs(self.launch_context.kwargs)
+        self.launch_context.kwargs = get_launch_kwargs(
+            self.launch_context.kwargs
+        )

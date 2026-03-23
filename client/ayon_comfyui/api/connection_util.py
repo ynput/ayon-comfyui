@@ -31,10 +31,61 @@ async def wait_for_site_availability(url: str) -> None:
             await asyncio.sleep(1)
 
 
+async def wait_for_site_availability_timeout(
+    url: str, timeout: float = 5
+) -> None:
+    """Asynchronously wait for a website to open. with timeout."""
+
+    async def timeout_(timeout: float) -> None:
+        await asyncio.sleep(timeout)
+
+    task_timeout = asyncio.create_task(timeout_(timeout))
+
+    async with aiohttp.ClientSession() as session:
+        while not task_timeout.done():
+            try:
+                async with session.get(url) as r:
+                    if r.status == 200:  # noqa: PLR2004
+                        # cancel timeout task if still running
+                        task_timeout.cancel()
+                        return True
+
+            except aiohttp.ClientConnectorError:
+                pass
+
+            await asyncio.sleep(0.2)
+    return False
+
+
+def poll_site_availability_timeout(url: str, timeout: float = 5) -> bool:
+    """Get whether a site is available.
+
+    Sync version of `wait_for_site_availability_timeout`
+
+    Returns:
+        True/False whether was able to connect.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop.run_until_complete(
+        wait_for_site_availability_timeout(url, timeout)
+    )
+
+
 async def get_site_headers(url: str) -> CIMultiDictProxy:
     """Return headers associated with a site."""
     async with aiohttp.ClientSession() as session, session.head(url) as r:
         return r.headers
+
+
+def poll_site_headers(url: str) -> CIMultiDictProxy:
+    """Return headers associated with a site.
+
+    Sync version of `get_site_headers`
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop.run_until_complete(get_site_headers(url))
 
 
 def defer_site_launch_when_available(

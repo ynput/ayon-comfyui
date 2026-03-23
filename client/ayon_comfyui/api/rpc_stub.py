@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from ayon_comfyui.api.consts import LOG_LEVEL
-from ayon_comfyui.api.rpc_server_iframe import (
+from ayon_comfyui.api.rpc_server import (
     call_on_origin,
     get_client_from_origin,
     pull_origin_from_settings,

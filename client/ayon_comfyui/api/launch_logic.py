@@ -15,12 +15,15 @@ import traceback
 from pathlib import Path
 from textwrap import dedent
 from threading import Thread
-from traceback import format_tb
+from typing import TYPE_CHECKING
 
 from ayon_core.lib import env_value_to_bool
 from ayon_core.pipeline import get_current_project_name, install_host
 from ayon_core.tools.utils import get_ayon_qt_app
 from ayon_core.tools.utils.dialogs import show_message_dialog
+
+if TYPE_CHECKING:
+    from qtpy.QtWidgets import QApplication
 
 from ayon_comfyui.api.connection_util import defer_site_launch_when_available
 from ayon_comfyui.api.consts import LOG_LEVEL
@@ -31,8 +34,8 @@ from ayon_comfyui.api.deduce_python import (
     venv_get_python,
 )
 from ayon_comfyui.api.profile_selector import (
-    LocalProfileDialog,
-    RemoteProfileDialog,
+    ProfileDialog,
+    ProfileTypeEnum,
 )
 from ayon_comfyui.api.qt_rpc import QRPCManager
 from ayon_comfyui.parse_settings import ComfyLocalSettings, ComfyRemoteSettings
@@ -274,8 +277,8 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     return proc
 
 
-def main_local(*subproc_args):
-    """Local launch."""
+def main(*args):
+    """Main designed to accomodate both local and remote launch profiles."""
     sys.excepthook = safe_excepthook
 
     from ayon_comfyui.api import ComfyUIHost
@@ -291,8 +294,10 @@ def main_local(*subproc_args):
     log.info("got QT app")
 
     env_workfiles_on_launch = os.getenv(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1"
+        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "0"
     )
+
+    # TODO(@sas): maybe insert a callback on connect WS to frontend
     workfiles_on_launch = env_value_to_bool(
         "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
         value=env_workfiles_on_launch,
@@ -302,61 +307,61 @@ def main_local(*subproc_args):
     try:
         project_name = get_current_project_name() or None
 
-        settings = ComfyLocalSettings(project_name=project_name)
+        profile_selector = ProfileDialog()
+        # initialize local/remote settings
+        profile_selector.populate_list(project_name)
 
-        profile_selector = LocalProfileDialog()
-        # ensure project specific settings
-        profile_selector.populate_list(settings)
-
-        # block and get profile first.
-        # Profile will also commit results to
         profile_selector.exec()
+    except BaseException:  # noqa: BLE001
+        log.debug("Error during profile dialog", exc_info=True)
 
-        profile = profile_selector.profile
-    except BaseException as e:
-        log.debug(
-            "".join(
-                [
-                    "error during profile dialog ",
-                    e,
-                    "\n",
-                    "\n".join(format_tb(e.__traceback__)),
-                ]
-            )
-        )
-
-    # sys.excepthook = safe_excepthook
-
-    if not profile:
+    if (res := profile_selector.dialog_result) == ProfileTypeEnum.UNDECIDED:
         show_message_dialog(
             title="No profile selected!",
             message="You have not selected a profile.\nClosing...",
             level="warning",
         )
         sys.exit(0)
+    elif res == ProfileTypeEnum.LOCAL:
+        settings, profile = (
+            profile_selector.settings_local.pull_committed_settings()
+        )
+        launch_local(app, settings, profile)
+    elif res == ProfileTypeEnum.REMOTE:
+        settings, profile = (
+            profile_selector.settings_remote.pull_committed_settings()
+        )
+        launch_remote(app, settings, profile)
 
-    # Currently Unused
-    log.info(f"Workfiles on launch: {workfiles_on_launch}")  # noqa:G004
+    # Launch Qt Thread
+    log.info("Launching qt thread")
 
+    try:
+        ret = app.exec_()
+    except BaseException:  # noqa: BLE001
+        log.debug("Problems keeping thread alive", exc_info=True)
+
+    # terminate connection after Qt Thread.
+    # This can hang, use os._exit to kill it. We already cleaned up properly
+    # in qrpcman
+
+    # sys.exit(ret)
+    os._exit(ret)
+
+
+def launch_local(
+    app: QApplication,
+    settings: ComfyLocalSettings,
+    profile: ComfyLocalSettings.ComfyLocalProfile,
+) -> None:
+    """Launch ComfyUI as a subprocess."""
     process = None
 
     try:
         # Launch comfyUI
         process = _subproc_launch_ComfyUI()
-    except BaseException as e:
-        log.debug("Problems launching ComfyUI")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-    # Somehow wrap a connection here.
-
-    if workfiles_on_launch:
-        pass
-        # Crashes.
-        # rpc.show_tool_by_name("workfiles", save=False)
-        # log.info("Showed workfiles")
-
-    # Launch ComfyUI if the connection isn't external.
-
-    # ComfyUI launch procedure
+    except BaseException:  # noqa: BLE001
+        log.debug("Problems launching ComfyUI:", exc_info=True)
 
     log.info("Creating QRPCmanager")
 
@@ -380,94 +385,16 @@ def main_local(*subproc_args):
         log.info("Created rpc manager")
         rpcman.start_server()
         log.info("called start_server")
-    except BaseException as e:
-        log.debug("Problems starting server")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-    # Launch Qt Thread
-    log.info("launching qt thread")
-
-    try:
-        ret = app.exec_()
-    except BaseException as e:
-        log.debug("Problems keeping thread alive")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-    # terminate connection after Qt Thread.
-
-    sys.exit(ret)
+    except BaseException:  # noqa: BLE001
+        log.debug("Problems starting server:", exc_info=True)
 
 
-def main_remote(*subproc_args):
-    """Remote Launch."""
-    sys.excepthook = safe_excepthook
-
-    from ayon_comfyui.api import ComfyUIHost
-
-    host = ComfyUIHost()
-    install_host(host)
-
-    log.info("Installed host")
-
-    app = get_ayon_qt_app()
-    app.setQuitOnLastWindowClosed(False)
-
-    log.info("got QT app")
-
-    env_workfiles_on_launch = os.getenv(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1"
-    )
-    workfiles_on_launch = env_value_to_bool(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
-        value=env_workfiles_on_launch,
-        default=True,
-    )
-
-    try:
-        project_name = get_current_project_name() or None
-
-        settings = ComfyRemoteSettings(project_name=project_name)
-
-        profile_selector = RemoteProfileDialog()
-        # ensure project specific settings
-        profile_selector.populate_list(settings)
-
-        # block and get profile first.
-        # Profile will also commit results to
-        profile_selector.exec()
-
-        profile = profile_selector.profile
-    except BaseException as e:
-        log.debug(
-            "".join(
-                [
-                    "error during profile dialog ",
-                    e,
-                    "\n",
-                    "\n".join(format_tb(e.__traceback__)),
-                ]
-            )
-        )
-
-    if not profile:
-        show_message_dialog(
-            title="No profile selected!",
-            message="You have not selected a profile.\nClosing...",
-            level="warning",
-        )
-        sys.exit(0)
-
-    # Currently Unused
-    log.info(f"Workfiles on launch: {workfiles_on_launch}")  # noqa:G004
-
-    if workfiles_on_launch:
-        pass
-        # Crashes.
-        # rpc.show_tool_by_name("workfiles", save=False)
-        # log.info("Showed workfiles")
-
-    # Launch ComfyUI if the connection isn't external.
-
-    # ComfyUI launch procedure
-
+def launch_remote(
+    app: QApplication,
+    settings: ComfyRemoteSettings,  # noqa: ARG001
+    profile: ComfyRemoteSettings.ComfyRemoteProfile,
+) -> None:
+    """Launch browser."""
     log.info("Creating QRPCmanager")
 
     try:
@@ -488,18 +415,6 @@ def main_remote(*subproc_args):
 
         log.info("Created rpc manager")
         rpcman.start_server()
-        log.info("called start_server")
-    except BaseException as e:
-        log.debug("Problems starting server")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-    # Launch Qt Thread
-    log.info("launching qt thread")
-
-    try:
-        ret = app.exec_()
-    except BaseException as e:
-        log.debug("Problems keeping thread alive")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-
-    # terminate connection after Qt Thread.
-    sys.exit(ret)
+        log.info("Called start_server")
+    except BaseException:  # noqa: BLE001
+        log.debug("Problems starting server", exc_info=True)

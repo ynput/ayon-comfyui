@@ -4,7 +4,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ayon_comfyui.api.rpc_server_stub_iframe import RPCStub
+    from ayon_comfyui.api.rpc_stub import RPCStub
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.pipeline import list_instances
