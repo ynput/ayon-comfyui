@@ -1,13 +1,12 @@
 # ComfyUI addon
 ComfyUI integration for AYON.
 
-For environment, set:
-```json
-{
-"COMFY_IS_REMOTE" : "No",
-}
-```
-To make sure to launch locally in applications.
+#### A note on bridging ComfyUI workflows / Workfiles
+
+As of now, tested with ComfyUI 0.18.4.
+Pre 0.17.2, the interface used to be much simpler.<br>
+We account for that in the JS side of the ComfyUI plugin,
+so that a larger number of versions are still usable.
 
 #### A note on https:
 The planned control flow is as follows:

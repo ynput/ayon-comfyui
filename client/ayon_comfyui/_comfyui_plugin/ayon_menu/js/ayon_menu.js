@@ -27,6 +27,49 @@ app.registerExtension({
           return local_this.expecting_id == local_this.resolved_id
         }
 
+        // v2 adapter for newer comfyui
+        function get_workfiles_v2(){
+          const clientId = window.sessionStorage.getItem("clientId");
+          const path_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
+          if (!path_str) {
+            return null;
+          }
+
+          const path = JSON.parse(path_str).path;
+
+          if (!path) {
+            return null;
+          }
+
+          const draftindex_str = window.localStorage.getItem("Comfy.Workflow.DraftIndex.v2:personal");
+          if (!draftindex_str) {
+            return null;
+          }
+
+          const draftindex = JSON.parse(draftindex_str);
+          const keys = Object.keys(draftindex.entries);
+
+          const personal_key = keys.filter((key) => {
+            if (draftindex.entries[key].path == path) {
+              return true;
+            }
+          })[0]
+
+          if (personal_key === undefined){
+            return null;
+          }
+
+          const data_str = window.localStorage.getItem(`Comfy.Workflow.Draft.v2:personal:${personal_key}`);
+          
+          if (!data_str) {
+            return null;
+          }
+          // workfiles data as a string
+          const data = JSON.parse(data_str).data
+
+          return data
+        }
+
         app.api.addEventListener("executed", (e) => {
           console.log("EXECUTED EVENT:", e.detail);
           const local_this = get_this()
@@ -196,10 +239,15 @@ app.registerExtension({
         this.IFRAMERPC.register('getWorkfile', (data) => {
           // Fetch clientId from session storage,
           // because workflows are saved as workflow:<id>
-          let client = window.sessionStorage.getItem("clientId")
-          let workflow_key = `workflow:${client}`
-          console.log("workfile requested", window.sessionStorage.getItem(workflow_key))
-          return window.sessionStorage.getItem(workflow_key)
+          const client = window.sessionStorage.getItem("clientId")
+          const workflow_key = `workflow:${client}`
+          let workfile = window.sessionStorage.getItem(workflow_key)
+          if (workfile == null){
+            // overwrite workfile in case of new API for this. Gets current tab.
+            workfile = get_workfiles_v2()
+          }
+          console.log("workfile requested", workfile)
+          return workfile
         })
 
         this.IFRAMERPC.register('addPublishNode', (data) => {
