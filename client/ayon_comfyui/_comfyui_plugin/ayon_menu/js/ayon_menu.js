@@ -95,6 +95,45 @@ app.registerExtension({
           });
         }
 
+        async function execute_single_node(node) {
+          const proompt = await app.graphToPrompt(node.graph);
+          const id = `${node.id}`;
+          const output_obj = {}
+          output_obj[id] = proompt.output[id]
+          
+          const prompt_t = {
+            output: output_obj  
+          };
+          console.log(prompt_t)
+          await app.api.queuePrompt(0,prompt_t);
+        }
+
+        async function execute_node_subgraph(node_out) {
+          const proompt = await app.graphToPrompt(node_out.graph);
+        
+          const subgraph = {};
+          const stack = [node_out.id];
+        
+          while (stack.length) {
+            const id = stack.pop();
+            if (subgraph[id]) continue;
+          
+            const node = proompt.output[id];
+            if (!node) continue;
+          
+            subgraph[id] = node;
+          
+            for (const input of Object.values(node.inputs || {})) {
+              if (Array.isArray(input)) {
+                stack.push(input[0]);
+              }
+            }
+          }
+          console.log(subgraph)
+          return await app.api.queuePrompt(0, {
+            output: subgraph
+          });
+        }
 
         async function getNodeImages(node,recook) {
           const local_this = get_this();
@@ -103,9 +142,8 @@ app.registerExtension({
             return local_this.map_images[node.id]
           }
 
-          const proompt = await app.graphToPrompt(node.graph)
           reset_expectations(node.id)
-          await app.api.queuePrompt(0,proompt);
+          await execute_node_subgraph(node)
           await waitForFlag(() => predictate_is_resolved())
           reset_expectations()
 
