@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from functools import wraps
-from typing import Any, Callable
+from typing import Any, Callable, Coroutine
 
 
 # REALLY EVIL
@@ -88,3 +89,19 @@ def extract_default_kwargs(func: Callable) -> dict[str, Any]:
         kwargs[param.name] = param.default
 
     return kwargs
+
+
+def syncify(coro: Coroutine) -> Callable:
+    """Transform async function into a synchronous function.
+
+    Returns:
+        Blocking version of async function.
+    """
+
+    @wraps(coro)
+    def _inner_(*args: list[Any], **kwargs: dict[str, Any]) -> Any:  # noqa: ANN401
+        _loop_ = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop_)
+        return _loop_.run_until_complete(coro(*args, **kwargs))
+
+    return _inner_
