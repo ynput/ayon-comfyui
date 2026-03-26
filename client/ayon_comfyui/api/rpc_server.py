@@ -29,7 +29,6 @@ def show_tool_by_name(tool_name: str) -> None:
     kwargs = {}
     if tool_name == "loader":
         kwargs["use_context"] = True
-        kwargs["on_top"] = True
 
     if tool_name == "create":
         tool_name = "publisher"
@@ -41,16 +40,8 @@ def show_tool_by_name(tool_name: str) -> None:
     host_tools.show_tool_by_name(tool_name, **kwargs)
 
 
-# TODO(@sas): This will all be on localhost.
-#             The origin will be set to the page hosted through api/iframe/Static
-# def _pull_origin_from_settings() -> str:
-#     _, profile = ComfyRemoteSettings.pull_committed_settings()
-#     if isinstance(profile, ComfyRemoteSettings.ComfyRemoteProfile):
-#         return profile.comfy_origin
-#     return "http://localhost:8188"
-
-
 def pull_origin_from_settings() -> str:
+    """Return expected RPC origin adress from settings."""
     settings, profile = ComfyRemoteSettings.pull_committed_settings()
     if isinstance(profile, ComfyRemoteSettings.ComfyRemoteProfile):
         return profile.address_frontend

@@ -76,3 +76,20 @@ class CollectImage(pyblish.api.InstancePlugin):
                 "stagingDir": staging_dir,
             }
         )
+
+        # Maybe use PIL to generate a tiled image
+
+        thumbnail_img = files
+        if isinstance(thumbnail_img, list):
+            thumbnail_img = thumbnail_img[0]
+
+        # Thumbnail
+        thumbnail = {
+            "name": "thumbnail",
+            "ext": ext[1:],
+            "files": thumbnail_img,
+            "stagingDir": staging_dir,
+            "tags": ["thumbnail"],
+        }
+
+        instance.data["representations"].append(thumbnail)

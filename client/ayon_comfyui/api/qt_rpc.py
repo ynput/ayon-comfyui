@@ -78,6 +78,7 @@ class QRPCManager(QObject, QThread_interface):
 
         # Stub just exists by itself.
         self._stub = RPCStub()
+        self._comfy_url = comfy_url
 
         # Define QTimers to process the tasks
         loop_timer = QTimer()
@@ -243,3 +244,8 @@ class QRPCManager(QObject, QThread_interface):
     def stub(self) -> RPCStub:
         """Return stored stub."""
         return self._stub
+
+    @property
+    def comfy_url(self) -> str:
+        """Return UI url (frontend)."""
+        return self._comfy_url

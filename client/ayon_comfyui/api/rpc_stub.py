@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 import json
 from pathlib import Path
 
+from ayon_core.pipeline import get_current_context
+
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.rpc_server import (
     call_on_origin,
@@ -156,6 +158,54 @@ class RPCClientStub:
 
         return None
 
+    def do_containers_imprint(self, imprint_info: str = "[]") -> bool:
+        """Updates (replaces) "containers" field of context node.
+
+        Returns:
+            True/False based on whether operation was succesful
+        """
+        # Massage info to fit into a scheme
+        # {
+        #   "context" : {**context_imprint_info},
+        #   "instances": [
+        #       {
+        #           "id" : ...,
+        #           "images": ...,
+        #       },
+        #   ],
+        #   "containers": [
+        #       {
+        #        "id": ...,
+        #        "name": ...,
+        #       },
+        #   ],
+        # }
+
+        # retrieve and set the context.
+        existing_context = self.getImprintContext()
+
+        # ensure valid context
+        if existing_context is not None and existing_context:
+            existing_context = json.loads(existing_context)
+        else:
+            existing_context = {}
+
+        existing_context = self._ensure_wellformed_context(existing_context)
+
+        log.info("updating info")
+        # update context by overwriting
+        existing_context["containers"] = json.loads(imprint_info)
+
+        log.info("imprinting containers")
+        result = self.setImprintContext(
+            imprint_info=json.dumps(existing_context),
+        )
+
+        if result:
+            return result
+
+        return None
+
     @call_on_origin()
     def addPublishNode(self, *, instance_json: str):  # noqa: N802, ANN201
         """Call addPublishNode."""
@@ -186,6 +236,33 @@ class RPCClientStub:
 
         Returns a string json representation of a list of image locations
         on network.
+        """
+
+    @call_on_origin()
+    def addLoadImageNode(self, *, container_json: str) -> None:  # noqa: N802
+        """Call addLoadImageNode.
+
+        container_json has to contain a single image container dict serialized
+        as json. This will be imprinted on the node.
+        Make sure to upload the image before uploading.
+        """
+
+    @call_on_origin()
+    def removeLoadImageNodes(self, *, ids_to_remove: str) -> None:  # noqa: N802
+        """Call removeLoadImageNodes.
+
+        ids_to_remove has to contain a json list of container uuids associated
+        with containers to remove.
+
+        Returns a string json representation of containers that were removed.
+        """
+
+    @call_on_origin()
+    def updateLoadImageNodes(self, *, container_json: str) -> None:  # noqa: N802
+        """Call updateLoadImageNodes.
+
+        Uses the container_json container_uuid
+        to match nodes present in the scene.
         """
 
     def do_get_publishnode_images(self, publish_instance: str) -> str:
@@ -240,10 +317,13 @@ class RPCClientStub:
         if context.get("instances") is None:
             context["instances"] = []
 
+        if context.get("containers") is None:
+            context["containers"] = []
+
         return context
 
 
-class RPCStub:
+class RPCStub:  # noqa : PLR0904
     """Wrapper to expose client functionality.
 
     Exposes client calls in a sane way to the plugin.
@@ -282,6 +362,14 @@ class RPCStub:
         log.info("_load_context (full context)")
         context_json_raw = self.client_stub.do_context_retrieve()
 
+        # Fallback if context doesn't exist, imprint it.
+        # Sometimes, an attempt is made to load the context before
+        # imprinting it. (e.g. Loader plugin)
+        if not context_json_raw:
+            context = get_current_context()
+            self.imprint_context(context)
+            context_json_raw = self.client_stub.do_context_retrieve()
+
         log.info(context_json_raw)
         return (
             json.loads(context_json_raw)
@@ -313,12 +401,31 @@ class RPCStub:
             return context_json_raw["instances"]
         return None
 
+    def list_containers(self) -> list[MutableMapping] | None:
+        """Query load context.
+
+        Returns:
+            list[dict]; 'containers' part of imprintent context
+        """
+        context_json_raw = self._load_context()
+        log.info("list containers")
+        if context_json_raw:
+            return context_json_raw["containers"]
+        return None
+
     def _imprint_instances(self, data: list) -> None:
         """Hard update instance field of context node."""
         log.info("imprint_instances")
         json_data = json.dumps(data)
 
         self.client_stub.do_instances_imprint(imprint_info=json_data)
+
+    def _imprint_containers(self, data: list) -> None:
+        """Hard update containers field of context node."""
+        log.info("imprint_containers")
+        json_data = json.dumps(data)
+
+        self.client_stub.do_containers_imprint(imprint_info=json_data)
 
     @staticmethod
     def instances_check_duplicate(instances: list[dict]) -> list[dict]:
@@ -334,6 +441,23 @@ class RPCStub:
             if id_ not in encountered:
                 encountered.append(id_)
                 clean.append(instance)
+
+        return clean
+
+    @staticmethod
+    def containers_check_duplicate(containers: list[dict]) -> list[dict]:
+        """Utility method to check duplicates in instances.
+
+        Returns:
+            list of duplicate free instances.
+        """
+        encountered = []
+        clean = []
+        for container in containers:
+            id_ = container.get("container_uuid")
+            if id_ not in encountered:
+                encountered.append(id_)
+                clean.append(container)
 
         return clean
 
@@ -423,6 +547,97 @@ class RPCStub:
 
         self._imprint_instances(instances)
 
+    def add_containers(self, containers_to_add: dict | list[dict]) -> None:
+        """Add instances ensuring no duplicates."""
+        containers = self.list_containers()
+
+        if containers is None:
+            containers = []
+
+        if isinstance(containers_to_add, dict):
+            containers.append(containers_to_add)
+        elif isinstance(containers_to_add, list):
+            containers.extend(containers_to_add)
+
+        containers = self.containers_check_duplicate(containers)
+
+        self._imprint_containers(containers)
+
+    def remove_containers(
+        self, containers_to_remove: list[dict] | dict
+    ) -> None:
+        """Remove instance(s)."""
+        containers = self.list_containers()
+
+        if containers is None:
+            # nothing to remove
+            return
+
+        if isinstance(containers_to_remove, dict):
+            containers = [
+                instance
+                for instance in containers
+                if instance.get("container_uuid")
+                != containers_to_remove.get("container_uuid")
+            ]
+        elif isinstance(containers_to_remove, list):
+            ids_to_rem = [
+                container.get("container_uuid")
+                for container in containers_to_remove
+            ]
+            containers = [
+                instance
+                for instance in containers
+                if instance.get("container_uuid") not in ids_to_rem
+            ]
+
+        self._imprint_containers(containers)
+
+    def update_containers(
+        self, containers_to_update: list[dict] | dict
+    ) -> None:
+        """Update instance(s) on hash collision, if hash not present, add."""
+        containers = self.list_containers()
+
+        if containers is None:
+            # all instances will have to be added
+            # if nothing is present on update.
+            self.add_containers(containers_to_update)
+            return
+
+        if isinstance(containers_to_update, dict):
+            containers = [
+                container
+                if container.get("container_uuid")
+                != containers_to_update.get("container_uuid")
+                else containers_to_update
+                for container in containers
+            ]
+            if containers_to_update.get("container_uuid") not in [
+                container.get("container_uuid") for container in containers
+            ]:
+                containers.append(containers_to_update)
+        elif isinstance(containers_to_update, list):
+            ids_to_update = {
+                container.get("container_uuid"): container
+                for container in containers_to_update
+            }
+            containers = [
+                ids_to_update.get(instance.get("container_uuid"), instance)
+                for instance in containers
+            ]
+            ids = {container.get("container_uuid") for container in containers}
+            # add the ones that were left behind
+            containers.extend(
+                [
+                    container
+                    for container in containers_to_update
+                    if container.get("container_uuid") not in ids
+                ]
+            )
+
+        self._imprint_containers(containers)
+
     def create_publish_node(self, instance_to_create: dict) -> None:
         """Pass along a call to create a Ayon Image Save node."""
         log.info("stub create publish node")
@@ -444,6 +659,36 @@ class RPCStub:
         json_ids_to_remove = json.dumps(ids_to_remove)
 
         self.client_stub.removePublishNodes(ids_to_remove=json_ids_to_remove)
+
+    def create_loadimage_node(self, container_to_create: dict) -> None:
+        """Pass along a call to create a Ayon Load Image node."""
+        log.info("stub create load image node")
+        json_data = json.dumps(container_to_create)
+
+        self.client_stub.addLoadImageNode(container_json=json_data)
+
+    def update_loadimage_node(self, container_to_update: dict) -> None:
+        """Pass along call to update Ayon Load Image node."""
+        log.info("stub update load image node")
+        json_data = json.dumps(container_to_update)
+        self.client_stub.updateLoadImageNodes(container_json=json_data)
+
+    def remove_loadimage_nodes(
+        self, containers_to_remove: dict | list
+    ) -> None:
+        """Pass along a call to remove Ayon Load Image nodes."""
+        log.info("stub remove load image node")
+
+        if isinstance(containers_to_remove, dict):
+            containers_to_remove = [containers_to_remove]
+
+        ids_to_remove = [
+            container["container_uuid"] for container in containers_to_remove
+        ]
+
+        json_ids_to_remove = json.dumps(ids_to_remove)
+
+        self.client_stub.removeLoadImageNodes(ids_to_remove=json_ids_to_remove)
 
     def get_publish_node_images(self, instance_for_images: dict) -> list[str]:
         """Returns list of images associated with node."""

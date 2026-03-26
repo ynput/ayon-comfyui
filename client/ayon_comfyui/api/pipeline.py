@@ -19,6 +19,7 @@ from ayon_core.host import (
     IWorkfileHost,
 )
 from ayon_core.pipeline import (
+    AYON_CONTAINER_ID,
     deregister_creator_plugin_path,
     deregister_inventory_action_path,
     deregister_loader_plugin_path,
@@ -45,6 +46,8 @@ CREATE_PATH = os.path.join(PLUGINS_DIR, "create")
 # [[maybe_unused]]
 INVENTORY_PATH = os.path.join(PLUGINS_DIR, "inventory")
 WORKFILE_BUILD_PATH = os.path.join(PLUGINS_DIR, "workfile_build")
+
+from uuid import uuid4
 
 
 class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
@@ -87,7 +90,7 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         pyblish.api.register_plugin_path(PUBLISH_PATH)
 
     def get_containers(self):
-        return self.stub.list_instances()
+        return self.stub.list_containers()
 
     def get_context_data(self):
         return self.stub.load_context()
@@ -138,3 +141,61 @@ def list_instances() -> list[dict[str, Any]]:
     instances = stub.list_instances()
 
     return instances or []
+
+
+def containerise(  # noqa: PLR0913, PLR0917
+    name: str,
+    namespace: str,
+    context: dict,
+    image_upload_info: dict | list[dict],
+    loader: str | None = None,
+    suffix: str | None = "_CON",
+) -> dict:
+    """Imprint layer with metadata.
+
+    Containerisation enables a tracking of version, author and origin
+    for loaded assets.
+
+    Arguments:
+        name (str): Name of resulting assembly
+        namespace (str): Namespace under which to host container
+        context (dict): Asset information
+        image_upload_info (dict, list[dict]): Uploaded image information,
+                                  gotten back from /upload/image endpoint
+        loader (str, optional): Name of loader used to produce this container.
+        suffix (str, optional): Suffix of container, defaults to `_CON`.
+
+    Returns:
+        container (str): Name of container assembly
+    """
+    # TODO(@sas): Retrieve filename and store in container dict.
+
+    container_name = name + suffix
+
+    if isinstance(image_upload_info, dict):
+        image_upload_info = [image_upload_info]
+
+    data = {
+        "schema": "openpype:container-2.0",
+        "id": AYON_CONTAINER_ID,
+        "name": name,
+        "namespace": namespace,
+        "loader": str(loader),
+        "image_upload_info": image_upload_info,
+        "representation": context["representation"]["id"],
+        "container_uuid": str(uuid4()),
+        "container_name": container_name,
+    }
+    stub = QRPCManager.get_instance().stub
+
+    # TODO(@sas): Expand stub logic to keep track of containers seperately,
+    #             for my own sanity. That way, we can track representation
+    #             instead of instance_id, and we might also want to enforce
+    #             some uuid to keep track of every instance we make, since
+    #             I can forsee people wanting to import the same image twice.
+    #             It seems that regular implementations seperate this through
+    #             ls() and list_instances(), I guess. We will cleanly seperate
+    #             them.
+
+    stub.add_containers(data)
+    return data

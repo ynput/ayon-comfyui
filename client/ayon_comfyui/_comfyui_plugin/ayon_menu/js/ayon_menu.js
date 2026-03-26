@@ -4,6 +4,39 @@ import {RPCServer} from "../../../../extensions/ayon_menu/lib/rpc_server.js"
 
 app.registerExtension({
     name: "comfy_ayon_menu",
+    async afterConfigureGraph(graphData) {
+
+        async function execute_single_node(node) {
+          const proompt = await app.graphToPrompt(node.graph);
+          const id = `${node.id}`;
+          const output_obj = {}
+          output_obj[id] = proompt.output[id]
+          
+          const prompt_t = {
+            output: output_obj  
+          };
+          
+          console.log(prompt_t)
+          await app.api.queuePrompt(0,prompt_t);
+        }
+
+        async function generate_thumbnails_loadImage_nodes(){
+          const nodeType = "AYON Load Image"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          console.log(foundNodes)
+          foundNodes.forEach((node) => {
+            console.log(node)
+            execute_single_node(node);
+          })
+        }
+
+        console.log("AYON: Graph loaded.");
+        // generate thumbnails for AYON Load Images
+        requestAnimationFrame(() =>{
+          console.log("animation frame retrieved, cooking Load Image thumbnails")
+          generate_thumbnails_loadImage_nodes()
+      })
+    },
     async setup() {
         console.log("AYON")
 
@@ -150,7 +183,7 @@ app.registerExtension({
           return local_this.map_images[node.id]
         }
 
-        function addNodeAtCenter(type) {
+        function addNodeAtCenter_v1(type) {
           // Uses device pixel ratio to account for visible area at 100%
           const node = LiteGraph.createNode(type);
           app.graph.add(node);
@@ -362,6 +395,67 @@ app.registerExtension({
           return JSON.stringify([]); // none found
         });
 
+        this.IFRAMERPC.register('addLoadImageNode', (data) => {
+          const nodeType = "AYON Load Image"
+          const loadimg_node = addNodeAtCenter(nodeType)
+          const info_widget = loadimg_node.widgets.find(widget => widget.name == "ayon_container_info")
+          info_widget.value = data.container_json
+
+          const parsed = JSON.parse(data.container_json)
+          let productName = parsed.name
+          loadimg_node.title = `AYON Container (${productName})`
+          loadimg_node.color = "#233"
+          loadimg_node.bgcolor = "#355"
+          app.graph.setDirtyCanvas(true, true);
+          execute_single_node(loadimg_node); // make sure image shows up
+          return true
+        });
+
+        this.IFRAMERPC.register('removeLoadImageNodes', (data) => {
+          const nodeType = "AYON Load Image"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          
+          let to_remove = [];
+          let ayon_remove = [];
+
+          foundNodes.forEach(node => {
+            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
+            const ayon_info = JSON.parse(info_widget.value)
+            if (data.ids_to_remove.includes(ayon_info.container_uuid)) {
+              to_remove.push(node)
+              ayon_remove.push(ayon_info)
+            }
+          });
+
+          let json_removed = JSON.stringify(ayon_remove)
+
+          to_remove.map((node) => {
+            app.graph.remove(node)
+          })
+          
+          return json_removed
+        })
+
+        this.IFRAMERPC.register('updateLoadImageNode', async (data) => {
+          const nodeType = "AYON Load Image"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+
+          const ayon_info_update = JSON.parse(data.container_json)
+
+          foundNodes.forEach(async (node) => {
+            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
+            const ayon_info = JSON.parse(info_widget.value)
+            if (ayon_info_update.container_uuid == ayon_info.container_uuid) {
+              info_widget.value = data.container_json
+              execute_single_node(node); // make sure image shows up
+              return true
+            }
+          });
+          return true
+        });
+
+        
+
         this.IFRAMERPC.register('setImprintContext', (data) => {
           console.log("setting context...", data)
           const imprint_node = ensureAyonContextNode()
@@ -405,8 +499,7 @@ app.registerExtension({
           return true
         })
 
-
-
+      
         //this.RPC.connect();
     },
     commands: [
@@ -465,6 +558,18 @@ app.registerExtension({
         ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "publisher"}})
       } 
     },
+    { 
+      id: "showLoader", 
+      label: "Loader", 
+      function: () => {
+        // find plugin in array
+        const exts = app.extensions;
+        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+
+        console.log(app.extensions);
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "loader"}})
+      } 
+    },
 
     { 
       id: "logGraph", 
@@ -486,7 +591,7 @@ app.registerExtension({
   menuCommands: [
     { 
       path: ["AYON"],
-      commands: ["showPublisher","showCreator","showWorkfiles","logGraph","logApp"] 
+      commands: ["showPublisher","showCreator","showWorkfiles","showLoader","logGraph","logApp"] 
     },
   ]
 })
