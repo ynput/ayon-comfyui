@@ -266,12 +266,14 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     # time buffer closing of tempfile, allowing it to be read by comfyUI
     buffer_time = 20
 
-    def _defer_delete_tmp(path: str, hold_time: float) -> None:
+    def _defer_delete_tmp(*, path: str = "", hold_time: float = 10.0) -> None:
         time.sleep(hold_time)
         os.remove(path)
 
     Thread(
-        target=_defer_delete_tmp, args={tmp_path, buffer_time}, daemon=True
+        target=_defer_delete_tmp,
+        kwargs={"path": tmp_path, "hold_time": buffer_time},
+        daemon=True,
     ).start()
 
     return proc

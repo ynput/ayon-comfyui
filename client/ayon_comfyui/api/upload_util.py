@@ -84,7 +84,6 @@ async def upload_image(
             data.add_field("type", type)  # input by default
 
             if Path("AYON") in Path(subfolder).parents:
-                # AYON folder is already present.
                 subfolder_path = Path(subfolder)
             else:
                 subfolder_path = (

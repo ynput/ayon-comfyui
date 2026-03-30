@@ -8,7 +8,7 @@ title = "ComfyUI"
 app_host_name = "comfyui"
 
 # Required: Valid semantic version (https://semver.org/)
-version = "0.0.17"
+version = "0.0.18"
 
 # Name of client code directory imported in AYON launcher
 # - do not specify if there is no client code

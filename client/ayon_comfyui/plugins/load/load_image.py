@@ -78,10 +78,14 @@ class ImageLoader(ComfyUILoader):
             filepaths, self.comfy_url, subfolder=old_subfolder
         )
 
-        container["context"] = context
+        container["representation"] = context["representation"]["id"]
         container["image_upload_info"] = image_upload_info
 
         self.stub.update_containers(container)
+
+    def switch(self, container: dict, context: dict) -> None:
+        """Provide interface for switching calls."""
+        self.update(container=container, context=context)
 
     def expand_files_if_sequence(self, context: dict) -> list[str]:
         """Return all images in sequence if appliccable."""

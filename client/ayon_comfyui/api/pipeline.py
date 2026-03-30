@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Generator
 from typing import Any
 
 import pyblish.api
@@ -90,7 +91,7 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         pyblish.api.register_plugin_path(PUBLISH_PATH)
 
     def get_containers(self):
-        return self.stub.list_containers()
+        return ls()
 
     def get_context_data(self):
         return self.stub.load_context()
@@ -199,3 +200,32 @@ def containerise(  # noqa: PLR0913, PLR0917
 
     stub.add_containers(data)
     return data
+
+
+def ls() -> Generator[dict[str, str], None, None]:
+    """Yields valid containers.
+
+    Equivalent to ayon core api.ls().
+    """
+    try:
+        rpcman = QRPCManager.get_instance()
+        containers: list[dict[str, str]] = rpcman.stub.list_containers()
+    except BaseException:  # noqa: BLE001
+        return
+
+    if not containers:
+        return
+
+    for container in containers:
+        # Validate ID
+        if not (con_id := container.get("id")) or "container" not in con_id:
+            continue
+
+        container["objectName"] = container.get("name")
+        # Explicitly set namespace so that name shows up in UI
+        container["namespace"] = (
+            container.get("name")
+            if container["namespace"] is None
+            else container["namespace"]
+        )
+        yield container

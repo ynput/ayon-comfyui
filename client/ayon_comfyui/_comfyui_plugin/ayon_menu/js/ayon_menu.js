@@ -572,18 +572,15 @@ app.registerExtension({
     },
 
     { 
-      id: "logGraph", 
-      label: "log graph to console", 
+      id: "showInventory", 
+      label: "Scene Inventory", 
       function: () => {
-        console.log(app.graph.serialize())
-        console.log(app.graph)
-      } 
-    },
-    { 
-      id: "logApp", 
-      label: "log app object to console", 
-      function: () => {
-        console.log(app)
+        // find plugin in array
+        const exts = app.extensions;
+        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+
+        console.log(app.extensions);
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "sceneinventory"}})
       } 
     },
   ],
@@ -591,7 +588,7 @@ app.registerExtension({
   menuCommands: [
     { 
       path: ["AYON"],
-      commands: ["showPublisher","showCreator","showWorkfiles","showLoader","logGraph","logApp"] 
+      commands: ["showPublisher","showCreator","showWorkfiles","showLoader","showInventory"] 
     },
   ]
 })

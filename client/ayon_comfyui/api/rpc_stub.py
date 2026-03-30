@@ -258,8 +258,8 @@ class RPCClientStub:
         """
 
     @call_on_origin()
-    def updateLoadImageNodes(self, *, container_json: str) -> None:  # noqa: N802
-        """Call updateLoadImageNodes.
+    def updateLoadImageNode(self, *, container_json: str) -> None:  # noqa: N802
+        """Call updateLoadImageNode.
 
         Uses the container_json container_uuid
         to match nodes present in the scene.
@@ -422,7 +422,6 @@ class RPCStub:  # noqa : PLR0904
 
     def _imprint_containers(self, data: list) -> None:
         """Hard update containers field of context node."""
-        log.info("imprint_containers")
         json_data = json.dumps(data)
 
         self.client_stub.do_containers_imprint(imprint_info=json_data)
@@ -637,6 +636,11 @@ class RPCStub:  # noqa : PLR0904
             )
 
         self._imprint_containers(containers)
+
+        # Update all nodes.
+        for container in containers:
+            container_json = json.dumps(container)
+            self.client_stub.updateLoadImageNode(container_json=container_json)
 
     def create_publish_node(self, instance_to_create: dict) -> None:
         """Pass along a call to create a Ayon Image Save node."""
