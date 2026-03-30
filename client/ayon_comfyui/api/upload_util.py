@@ -83,9 +83,14 @@ async def upload_image(
 
             data.add_field("type", type)  # input by default
 
-            subfolder_path = (
-                (Path("AYON") / subfolder) if subfolder else Path("AYON")
-            )
+            if Path("AYON") in folder.parents:
+                # AYON folder is already present.
+                subfolder_path = Path(subfolder)
+            else:
+                subfolder_path = (
+                    (Path("AYON") / subfolder) if subfolder else Path("AYON")
+                )
+
             data.add_field("subfolder", str(subfolder_path))
 
             async with session.post(post_url, data=data) as resp:
