@@ -62,7 +62,7 @@ class RPCClientStub:
         """Call getWorkfile."""
 
     @call_on_origin()
-    def loadWorkfile(self, *, workfile_json: str):  # noqa: N802, ANN201
+    def loadWorkfile(self, *, workfile_json: str, workfile_name: str):  # noqa: N802, ANN201
         """Call loadWorkfile."""
 
     def do_load_workfile(self, workfile_path: str | None = None) -> None:
@@ -70,8 +70,12 @@ class RPCClientStub:
         if not workfile_path:
             return
 
-        workfile_json = Path(workfile_path).read_text(encoding="utf-8")
-        self.loadWorkfile(workfile_json=workfile_json)
+        workfile_json = (workfile := Path(workfile_path)).read_text(
+            encoding="utf-8"
+        )
+        self.loadWorkfile(
+            workfile_json=workfile_json, workfile_name=workfile.name
+        )
 
     @call_on_origin()
     def getImprintContext(self) -> str:  # noqa: N802

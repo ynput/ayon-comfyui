@@ -491,7 +491,12 @@ app.registerExtension({
           console.log("loading from passed in Workfile")
           const workfile_parse = JSON.parse(data.workfile_json)
           try {
-            app.loadGraphData(workfile_parse)
+            if (data.workfile_name) {
+              app.loadGraphData(workfile_parse, true, true, data.workfile_name)
+            } else {
+              app.loadGraphData(workfile_parse)
+            }
+              
           } catch (error) {
             console.log(error)
             return false
