@@ -162,6 +162,13 @@ class ComfyLocalSettings:
             )
 
         @property
+        def extra_model_dirs(self) -> list[str]:
+            """Return paths to extra models."""
+            return self._get_launch_profile_setting_path(
+                "extra_custom_model_dirs"
+            )
+
+        @property
         def launch_args(self) -> list[str]:
             """Return launch arguments for profile.
 

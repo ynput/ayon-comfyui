@@ -227,6 +227,24 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
 
     yaml += "".join(paths)
 
+    # custom models
+    if profile.extra_model_dirs:
+        models_map: dict[str, list[str]] = {}
+        for model_path in profile.extra_model_dirs:
+            for model_subdir in Path(model_path).iterdir():
+                if not model_subdir.is_dir():
+                    continue
+
+                if model_paths := models_map.get(model_subdir.name):
+                    model_paths.append(model_subdir.as_posix())
+                else:
+                    models_map[model_subdir.name] = [model_subdir.as_posix()]
+
+        for model_type, model_paths in models_map.items():
+            yaml += f"\n    {model_type}: |"
+            for model_path in model_paths:
+                yaml += f"\n{path_indent}{model_path}"
+
     proc = None
     # Generate temporary file,
     # dont delete tempfile otherwise comfy gets confused

@@ -32,6 +32,21 @@ class ComfyLocalProfile(BaseSettingsModel):
         title="Custom node directories MacOsx",
         description="Add MacOsx directories that ComfyUI may search through.",
     )
+    extra_custom_model_dirs_win: list[str] = SettingsField(
+        default_factory=list,
+        title="Custom model directories windows",
+        description="Add windows directories that ComfyUI may search through.",
+    )
+    extra_custom_model_dirs_lin: list[str] = SettingsField(
+        default_factory=list,
+        title="Custom model directories linux",
+        description="Add linux directories that ComfyUI may search through.",
+    )
+    extra_custom_model_dirs_osx: list[str] = SettingsField(
+        default_factory=list,
+        title="Custom model directories MacOsx",
+        description="Add MacOsx directories that ComfyUI may search through.",
+    )
 
     comfy_is_windows_portable: bool = SettingsField(
         default=True,
