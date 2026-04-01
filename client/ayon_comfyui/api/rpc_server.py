@@ -13,7 +13,7 @@ from wsrpc_aiohttp import Route, WebSocketAsync, decorators
 
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.util import extract_default_kwargs
-from ayon_comfyui.parse_settings import ComfyLocalSettings, ComfyRemoteSettings
+from ayon_comfyui.settings_util import ComfyLocalSettings, ComfyRemoteSettings
 
 if TYPE_CHECKING:
     from wsrpc_aiohttp.websocket.common import WSRPCBase

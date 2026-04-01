@@ -38,7 +38,10 @@ from ayon_comfyui.api.profile_selector import (
     ProfileTypeEnum,
 )
 from ayon_comfyui.api.qt_rpc import QRPCManager
-from ayon_comfyui.parse_settings import ComfyLocalSettings, ComfyRemoteSettings
+from ayon_comfyui.settings_util import (
+    ComfyLocalSettings,
+    ComfyRemoteSettings,
+)
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
