@@ -12,6 +12,7 @@ from ayon_comfyui.api.connection_util import (
     poll_site_availability_timeout,
     poll_site_headers,
 )
+from ayon_comfyui.settings_directory import ComfyUICustomDirectories
 
 DEFAULT_T = TypeVar("DEFAULT_T")
 
@@ -27,11 +28,25 @@ class ComfyLocalSettings:
 
         def __init__(self, profile_dict: dict[str, str]) -> None:
             """Initialize config helper class."""
-            self._name = profile_dict.get("comfy_setting_name")
+            self._name = profile_dict.get("name")
             os_map = {"win32": "win", "linux": "lin", "darwin": "osx"}
             self._os = os_map.get(sys.platform, "lin")
 
             self._profile_dict: dict[str, str] = profile_dict
+
+            custom_dir_list: list[dict] = (
+                self._get_launch_profile_bare_setting("extra_dirs")
+            )
+
+            self._custom_directories = [
+                ComfyUICustomDirectories(dir_dict, self._os)
+                for dir_dict in custom_dir_list
+            ]
+
+            if not self.omit_packaged_plugin:
+                self._custom_directories.append(
+                    ComfyUICustomDirectories.create_default_customnodes_profile()
+                )
 
         def _get_platform_profile_setting(
             self, base_key: str
@@ -70,6 +85,19 @@ class ComfyLocalSettings:
                 "launch_profile"
             )
             return launch_profile.get(f"{base_key}_{self._os}")
+
+        def _get_launch_profile_bare_setting(
+            self, base_key: str
+        ) -> str | dict | list | None:
+            """Used in properties to fetch the right value.
+
+            Returns:
+            Value expected from key
+            """
+            launch_profile: dict[str, str] = self._profile_dict.get(
+                "launch_profile"
+            )
+            return launch_profile.get(base_key)
 
         def _get_launch_profile_setting_path(
             self, base_key: str
@@ -155,10 +183,10 @@ class ComfyLocalSettings:
             return None
 
         @property
-        def extra_node_dirs(self) -> list[str]:
-            """Return paths to extra nodes."""
-            return self._get_launch_profile_setting_path(
-                "extra_custom_node_dirs"
+        def get_customfolders_yaml(self) -> str:
+            """Return indented YAML component of custom folders."""
+            return ComfyUICustomDirectories.generate_yaml(
+                self._custom_directories
             )
 
         @property
@@ -214,6 +242,17 @@ class ComfyLocalSettings:
             old_os = self._os
             self._os = os_name
 
+            profiles_os = [
+                ComfyUICustomDirectories(
+                    custom_dir._directory_settings,  # noqa : SLF001
+                    os_name,
+                )
+                for custom_dir in self._custom_directories
+            ]
+            profiles_dict = ComfyUICustomDirectories.collect_as_dict(
+                profiles_os
+            )
+
             # Run tests
             errors = []
             logs = []
@@ -231,7 +270,10 @@ class ComfyLocalSettings:
                     f"{self.name} | {os_name}: is missing custom "
                     "python path with 'use custom python' specified"
                 )
-            if not self.extra_node_dirs and self.omit_packaged_plugin:
+            if (
+                profiles_dict.get("custom_nodes") is None
+                and self.omit_packaged_plugin
+            ):
                 logs.append(
                     f"{self.name} | {os_name}: is missing extra node"
                     " directory in dev mode. Ayon plugin may be missing."
@@ -381,7 +423,7 @@ class ComfyRemoteSettings:
 
         def __init__(self, profile_dict: dict[str, str]) -> None:
             """Initialize config helper class."""
-            self._name = profile_dict.get("comfy_setting_name")
+            self._name = profile_dict.get("name")
             self._profile_dict: dict[str, str] = profile_dict
 
             self._is_valid = None
@@ -529,11 +571,9 @@ class ComfyRemoteSettings:
         def netloc_backend(self) -> str:
             """Return netloc of webui."""
             url_comfy = urlparse(self.comfy_url)
-            print(url_comfy, self.port_backend)
             url = ComfyRemoteSettings.url_specify_port(
                 url_comfy, self.port_backend
             )
-            print(url)
             return urlparse(url).netloc
 
         @property
