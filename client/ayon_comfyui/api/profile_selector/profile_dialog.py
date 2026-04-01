@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from ayon_core.style import load_stylesheet
 from ayon_core.tools.publisher.widgets import get_pixmap
 
-from ayon_comfyui.parse_settings import ComfyLocalSettings, ComfyRemoteSettings
+from ayon_comfyui.settings_util import ComfyLocalSettings, ComfyRemoteSettings
 
 ComfyLocalProfile = ComfyLocalSettings.ComfyLocalProfile
 

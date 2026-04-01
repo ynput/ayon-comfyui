@@ -12,7 +12,9 @@ from ayon_comfyui.api.connection_util import (
     poll_site_availability_timeout,
     poll_site_headers,
 )
-from ayon_comfyui.settings_directory import ComfyUICustomDirectories
+from ayon_comfyui.settings_util import ComfyUICustomDirectories
+
+from .template_helper import template_wrap
 
 DEFAULT_T = TypeVar("DEFAULT_T")
 
@@ -41,6 +43,11 @@ class ComfyLocalSettings:
             self._custom_directories = [
                 ComfyUICustomDirectories(dir_dict, self._os)
                 for dir_dict in custom_dir_list
+            ]
+
+            # filter for enabled entries
+            self._custom_directories = [
+                dir_ for dir_ in self._custom_directories if dir_.is_enabled
             ]
 
             if not self.omit_packaged_plugin:
@@ -151,6 +158,7 @@ class ComfyLocalSettings:
             return self._name
 
         @property
+        @template_wrap
         def base_folder(self) -> str:
             """Gets base folder where ComfyUI is stored."""
             return self._get_platform_profile_setting_path("comfy_base_folder")
@@ -176,6 +184,7 @@ class ComfyLocalSettings:
             return self._profile_dict.get("python_use_managed_venv")
 
         @property
+        @template_wrap
         def custom_python_path(self) -> str | None:
             """Return path to python if a custom."""
             if self.using_custom_python:
@@ -690,7 +699,8 @@ class ComfyCommittedSettings:
 
     _settings: ClassVar[ComfyLocalSettings | ComfyRemoteSettings] = None
     _config: ClassVar[
-        ComfyLocalSettings.ComfyLocalProfile | ComfyRemoteSettings
+        ComfyLocalSettings.ComfyLocalProfile
+        | ComfyRemoteSettings.ComfyRemoteProfile
     ] = None
 
     @classmethod

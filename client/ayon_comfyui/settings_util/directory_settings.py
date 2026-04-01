@@ -7,6 +7,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from .template_helper import template_wrap
+
 VALID_DIRS = {
     "custom_nodes",
     "checkpoints",
@@ -57,6 +59,13 @@ class ComfyUICustomDirectories:
         self._is_auto: bool = "auto" in self._dir_type
         self._is_nocheck: bool = "nocheck" in self._dir_type
 
+        self._enabled: bool = directory_settings.get("is_enabled", True)
+
+    @property
+    def is_enabled(self) -> bool:
+        """Return whether Custom Directories entry is enabled."""
+        return self._enabled
+
     @property
     def dir_profile_name(self) -> str:
         """Return name of this folder profile subsection."""
@@ -85,6 +94,7 @@ class ComfyUICustomDirectories:
         return self._os_specific_directories
 
     @property
+    @template_wrap
     def _os_specific_directories(self) -> list[str]:
         """Return directory list for current held OS state."""
         return [

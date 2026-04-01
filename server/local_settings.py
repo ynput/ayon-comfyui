@@ -79,6 +79,14 @@ class LocalProfileDirMapping(BaseSettingsModel):
         ),
     )
 
+    is_enabled: bool = SettingsField(
+        default=True,
+        title="Enabled:",
+        description=(
+            "Enable/Disable a config from being processed without removing it."
+        ),
+    )
+
     dirs_win: list[str] = SettingsField(
         default_factory=list,
         title="Custom directories windows",
