@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from ayon_server.settings import BaseSettingsModel, SettingsField
+from ayon_server.settings.validators import ensure_unique_names
+from pydantic import validator
 
 
 class ComfyRemoteSetting(BaseSettingsModel):
     """Comfy Remote Executable & Launch profiles settings."""
 
-    comfy_setting_name: str = SettingsField(default="", title="Entry Name")
+    name: str = SettingsField(default="", title="Entry Name")
 
     server_pulse_port: int = SettingsField(
         55055,
@@ -60,3 +62,8 @@ class ComfyRemoteSettings(BaseSettingsModel):
     remote_setting_list: list[ComfyRemoteSetting] = SettingsField(
         default_factory=list, title="Remote configuration entry"
     )
+
+    @validator("remote_setting_list")
+    def validate_unique_names_remotesettings(cls, value):
+        ensure_unique_names(value)
+        return value

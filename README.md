@@ -1,12 +1,16 @@
 # ComfyUI addon
 ComfyUI integration for AYON.
 
-#### A note on bridging ComfyUI workflows / Workfiles
+#### Migrating settings to ayon_comfyui 0.19 from earlier.
+Tooling is included in `additional_tooling/migrate_json.py`<br>
+Save your data from AYON with the low level settings editor, e.g. <br>
+in Studio Settings / Project settings -> Addons -> ComfyUI (right click) -> `Low-level editor` -> Copy
 
-As of now, tested with ComfyUI 0.18.4.
-Pre 0.17.2, the interface used to be much simpler.<br>
-We account for that in the JS side of the ComfyUI plugin,
-so that a larger number of versions are still usable.
+Then save the contents to a json file.
+
+Then run `python additional_tooling/migration_json.py "path/to/json/ayon_comfyui_settings.json"`<br>
+The console will then fix it for you, and display: `Migrated settings here: path/to/json/ayon_comfyui_settings_migrated.json`,<br>
+which you can then copy into the low level editor once more.
 
 #### A note on https:
 The planned control flow is as follows:
