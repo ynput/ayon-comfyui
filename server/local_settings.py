@@ -30,6 +30,10 @@ from pydantic import validator
 
 DIR_TYPES_ENUM = [
     {"label": "Automatic (Based on subdirectory name)", "value": "auto"},
+    {
+        "label": "Automatic (No validity checking, all subdirectories)",
+        "value": "auto_nocheck",
+    },
     {"label": "Custom Nodes", "value": "custom_nodes"},
     {"label": "Checkpoints", "value": "checkpoints"},
     {"label": "Diffusion Models", "value": "diffusion_models"},

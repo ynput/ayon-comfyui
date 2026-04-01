@@ -54,7 +54,8 @@ class ComfyUICustomDirectories:
 
         self._dir_profile_name: str = directory_settings["name"]
         self._dir_type: str = directory_settings["dir_type"]
-        self._is_auto: bool = self._dir_type == "auto"
+        self._is_auto: bool = "auto" in self._dir_type
+        self._is_nocheck: bool = "nocheck" in self._dir_type
 
     @property
     def dir_profile_name(self) -> str:
@@ -70,6 +71,11 @@ class ComfyUICustomDirectories:
     def is_auto(self) -> bool:
         """Return whether profile is auto."""
         return self._is_auto
+
+    @property
+    def is_auto_nocheck(self) -> bool:
+        """Return whether profile is auto."""
+        return self._is_auto and self._is_nocheck
 
     @property
     def auto_dirs(self) -> list[str]:
@@ -107,16 +113,42 @@ class ComfyUICustomDirectories:
             ]
         return collect_dict
 
+    def _traverse_auto_novalidcheck(self) -> dict[str, str]:
+        """Returns a dictionary with any subdirectories.
+
+        Doesn't matter if valid.
+        """
+        collect_dict = defaultdict(list)
+        valid_dirs = [
+            dir_
+            for dir_ in self._os_specific_directories
+            if Path(dir_).exists() and Path(dir_).is_dir()
+        ]
+
+        for directory in valid_dirs:
+            valid_subdirs = {
+                subdir.name: subdir.as_posix()
+                for subdir in Path(directory).iterdir()
+                if subdir.is_dir()
+            }
+            [
+                collect_dict[key].append(value)
+                for key, value in valid_subdirs.items()
+            ]
+        return collect_dict
+
     @property
     def as_dict(self) -> dict[str, list[str]]:
         """Returns contents as dictionary."""
+        if self.is_auto_nocheck:
+            return self._traverse_auto_novalidcheck()
         if self._is_auto:
             return self._traverse_auto()
         return {self._dir_type: self._os_specific_directories}
 
     @property
     def is_valid(self) -> bool:
-        """Return true if all directories exist."""
+        """Return true if all directories exist, and are direcories."""
         dirlist = []
         [dirlist.extend(dirs) for dirs in self.as_dict.values()]
         if not dirlist:
