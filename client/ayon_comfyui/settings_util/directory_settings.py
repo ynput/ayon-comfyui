@@ -59,7 +59,7 @@ class ComfyUICustomDirectories:
         self._is_auto: bool = "auto" in self._dir_type
         self._is_nocheck: bool = "nocheck" in self._dir_type
 
-        self._enabled: bool = directory_settings.get("is_enabled", True)
+        self._enabled: bool = directory_settings.get("enabled", True)
 
     @property
     def is_enabled(self) -> bool:

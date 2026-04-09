@@ -20,7 +20,7 @@ app.registerExtension({
           await app.api.queuePrompt(0,prompt_t);
         }
 
-        async function generate_thumbnails_loadImage_nodes(){
+        async function generate_thumbnails_loadimage_nodes(){
           const nodeType = "AYON Load Image"
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           console.log(foundNodes)
@@ -30,11 +30,22 @@ app.registerExtension({
           })
         }
 
+        async function generate_thumbnails_loadvideo_nodes(){
+          const nodeType = "AYON Load Video"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          console.log(foundNodes)
+          foundNodes.forEach((node) => {
+            console.log(node)
+            execute_single_node(node);
+          })
+        }
+
         console.log("AYON: Graph loaded.");
-        // generate thumbnails for AYON Load Images
+        // generate thumbnails for AYON Load Images / AYON Load Videos
         requestAnimationFrame(() =>{
           console.log("animation frame retrieved, cooking Load Image thumbnails")
-          generate_thumbnails_loadImage_nodes()
+          generate_thumbnails_loadimage_nodes()
+          generate_thumbnails_loadvideo_nodes()
       })
     },
     async setup() {
@@ -263,10 +274,10 @@ app.registerExtension({
           const baseurl =  `${window.location.protocol}//${window.location.host}/api/view`;
           // look into if '/' or '\\' in url doesn't give any problems
           console.log("getNodeImages")
-          const images = await getNodeImages(node, recook)
-
+          // Flatten in case of "animated" output. This outputs a list of arrays.
+          const images = (await getNodeImages(node, recook)).flat()
           let urls = images.map((image) => 
-            `${baseurl}?filename=${image.filename}&subfolder=${image.subfolder}&type=${image.type}`)
+            `${baseurl}?filename=${image.filename}&subfolder=${image.subfolder.replace("\\","/")}&type=${image.type}`)
             .flat()
           return urls
         }
@@ -300,7 +311,7 @@ app.registerExtension({
         })
 
         this.IFRAMERPC.register('getPublishNodes', (data) => {
-          const nodeType = "AYON Image Save"
+          const nodeType = data.node_type
 
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           return JSON.stringify(foundNodes)
@@ -323,7 +334,8 @@ app.registerExtension({
 
         this.IFRAMERPC.register('addPublishNode', (data) => {
           console.log("adding node...")
-          const save_node = addNodeAtCenter("AYON Image Save")
+          const nodeType = data.node_type
+          const save_node = addNodeAtCenter(nodeType)
           const info_widget = save_node.widgets.find(widget => widget.name == "ayon_info")
           const recook_widget = save_node.widgets.find(widget => widget.name == "recook")
           save_node.color = "#233"
@@ -345,7 +357,7 @@ app.registerExtension({
 
 
         this.IFRAMERPC.register('removePublishNodes', (data) => {
-          const nodeType = "AYON Image Save"
+          const nodeType = data.node_type
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           
           let to_remove = [];
@@ -370,7 +382,7 @@ app.registerExtension({
         })
 
         this.IFRAMERPC.register('getPublishNodeImages', async (data) => {
-          const nodeType = "AYON Image Save";
+          const nodeType = data.node_type;
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           console.log("getting publish node images", data)
           for (const node of foundNodes) {
@@ -395,8 +407,8 @@ app.registerExtension({
           return JSON.stringify([]); // none found
         });
 
-        this.IFRAMERPC.register('addLoadImageNode', (data) => {
-          const nodeType = "AYON Load Image"
+        this.IFRAMERPC.register('addLoadProductNode', (data) => {
+          const nodeType = data.node_type
           const loadimg_node = addNodeAtCenter(nodeType)
           const info_widget = loadimg_node.widgets.find(widget => widget.name == "ayon_container_info")
           info_widget.value = data.container_json
@@ -411,8 +423,8 @@ app.registerExtension({
           return true
         });
 
-        this.IFRAMERPC.register('removeLoadImageNodes', (data) => {
-          const nodeType = "AYON Load Image"
+        this.IFRAMERPC.register('removeLoadProductNodes', (data) => {
+          const nodeType = data.node_type
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           
           let to_remove = [];
@@ -436,8 +448,8 @@ app.registerExtension({
           return json_removed
         })
 
-        this.IFRAMERPC.register('updateLoadImageNode', async (data) => {
-          const nodeType = "AYON Load Image"
+        this.IFRAMERPC.register('updateLoadProductNode', async (data) => {
+          const nodeType = data.node_type
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
 
           const ayon_info_update = JSON.parse(data.container_json)

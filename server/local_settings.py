@@ -60,6 +60,8 @@ DIR_TYPES_ENUM = [
 class LocalProfileDirMapping(BaseSettingsModel):
     """Stores directories for extra config generation."""
 
+    enabled: bool = SettingsField(True)  # noqa: FBT003
+
     name: str = SettingsField(
         "",
         title="Name",
@@ -76,14 +78,6 @@ class LocalProfileDirMapping(BaseSettingsModel):
             "expects to be present there. 'Automatic' looks in the "
             "subdirectory for valid ComfyUI directories using the expected "
             "names that ComfyUI/folderpaths.py can expect."
-        ),
-    )
-
-    is_enabled: bool = SettingsField(
-        default=True,
-        title="Enabled:",
-        description=(
-            "Enable/Disable a config from being processed without removing it."
         ),
     )
 
@@ -122,7 +116,7 @@ class ComfyLocalProfile(BaseSettingsModel):
         description=(
             "On windows, if the designated folder is a windows portable build "
             "the plugin will look for python in python_embeded and add the "
-            "--windows-portable flag to launch arguments.",
+            "--windows-portable flag to launch arguments."
         ),
     )
 

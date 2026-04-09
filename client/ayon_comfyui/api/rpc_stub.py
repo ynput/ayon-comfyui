@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,6 +24,21 @@ from ayon_comfyui.api.rpc_server import (
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
+
+
+# Enum type for types of publish nodes.
+class PublishType(Enum):
+    """Correspond to custom AYON node IDs."""
+
+    IMAGE = "AYON Image Save"
+    VIDEO = "AYON Video Save"
+
+
+class LoadType(Enum):
+    """Corresponds to custom AYON image loader nodes."""
+
+    IMAGE = "AYON Load Image"
+    VIDEO = "AYON Load Video"
 
 
 # STUB TO CONTAIN CLIENT CONNECTION GOTTEN FROM SERVER
@@ -52,7 +68,7 @@ class RPCClientStub:
         return get_client_from_origin(self.origin)
 
     @call_on_origin()
-    def getPublishNodes(self):  # noqa: N802, ANN201
+    def getPublishNodes(self, node_type: str):  # noqa: N802, ANN201
         """Call getPublishNodes."""
 
     # def do_update_publishnodes(self) -> None: # Never used
@@ -211,18 +227,22 @@ class RPCClientStub:
         return None
 
     @call_on_origin()
-    def addPublishNode(self, *, instance_json: str):  # noqa: N802, ANN201
+    def addPublishNode(self, *, instance_json: str, node_type: str):  # noqa: N802, ANN201
         """Call addPublishNode."""
 
-    async def do_publishnode_create(self, instance_json: str) -> None:
-        """Helper for creator to create a Ayon Image Save node.
+    async def do_publishnode_create(
+        self, instance_json: str, node_type: PublishType = PublishType.IMAGE
+    ) -> None:
+        """Helper for creator to create a Ayon [Type] Save node.
 
         TODO(@sas): just call addPublishnode directly.
         """
-        self.addPublishNode(instance_json=instance_json)
+        self.addPublishNode(
+            instance_json=instance_json, node_type=node_type.value
+        )
 
     @call_on_origin()
-    def removePublishNodes(self, *, ids_to_remove: str) -> str:  # noqa: N802
+    def removePublishNodes(self, *, ids_to_remove: str, node_type: str) -> str:  # noqa: N802
         """Call removePublishNodes.
 
         ids_to_remove has to contain a json list of instance ids associated
@@ -232,7 +252,9 @@ class RPCClientStub:
         """
 
     @call_on_origin()
-    def getPublishNodeImages(self, *, id_for_images: str) -> str:  # noqa: N802
+    def getPublishNodeImages(  # noqa: N802
+        self, *, id_for_images: str, node_type: str
+    ) -> str:
         """Call getPublishNodeImages.
 
         id_for_images has to contain a single instance ids associated with
@@ -243,8 +265,10 @@ class RPCClientStub:
         """
 
     @call_on_origin()
-    def addLoadImageNode(self, *, container_json: str) -> None:  # noqa: N802
-        """Call addLoadImageNode.
+    def addLoadProductNode(  # noqa: N802
+        self, *, container_json: str, node_type: str
+    ) -> None:
+        """Call addLoadProductNode.
 
         container_json has to contain a single image container dict serialized
         as json. This will be imprinted on the node.
@@ -252,8 +276,10 @@ class RPCClientStub:
         """
 
     @call_on_origin()
-    def removeLoadImageNodes(self, *, ids_to_remove: str) -> None:  # noqa: N802
-        """Call removeLoadImageNodes.
+    def removeLoadProductNodes(  # noqa: N802
+        self, *, ids_to_remove: str, node_type: str
+    ) -> None:
+        """Call removeLoadProductNodes.
 
         ids_to_remove has to contain a json list of container uuids associated
         with containers to remove.
@@ -262,23 +288,29 @@ class RPCClientStub:
         """
 
     @call_on_origin()
-    def updateLoadImageNode(self, *, container_json: str) -> None:  # noqa: N802
-        """Call updateLoadImageNode.
+    def updateLoadProductNode(  # noqa: N802
+        self, *, container_json: str, node_type: str
+    ) -> None:
+        """Call updateLoadProductNode.
 
         Uses the container_json container_uuid
         to match nodes present in the scene.
         """
 
-    def do_get_publishnode_images(self, publish_instance: str) -> str:
-        """Retrieve images from a node.
+    def do_get_publishnode_images(
+        self, publish_instance: str, node_type: PublishType = PublishType.IMAGE
+    ) -> str:
+        """Retrieve images field from a node.
 
         Returns:
-            string JSON list representation of links to images.
+            string JSON list representation of links to output product type.
         """
         instance = json.loads(publish_instance)
         id_ = instance["instance_id"]
 
-        result = self.getPublishNodeImages(id_for_images=id_)
+        result = self.getPublishNodeImages(
+            id_for_images=id_, node_type=node_type.value
+        )
 
         if result:
             return result
@@ -646,14 +678,24 @@ class RPCStub:  # noqa : PLR0904
             container_json = json.dumps(container)
             self.client_stub.updateLoadImageNode(container_json=container_json)
 
-    def create_publish_node(self, instance_to_create: dict) -> None:
+    def create_publish_node(
+        self,
+        instance_to_create: dict,
+        publish_type: PublishType = PublishType.IMAGE,
+    ) -> None:
         """Pass along a call to create a Ayon Image Save node."""
         log.info("stub create publish node")
         json_data = json.dumps(instance_to_create)
 
-        self.client_stub.addPublishNode(instance_json=json_data)
+        self.client_stub.addPublishNode(
+            instance_json=json_data, node_type=publish_type.value
+        )
 
-    def remove_publish_nodes(self, instances_to_remove: dict | list) -> None:
+    def remove_publish_nodes(
+        self,
+        instances_to_remove: dict | list,
+        publish_type: PublishType = PublishType.IMAGE,
+    ) -> None:
         """Pass along a call to remove a Ayon Image Save nodes."""
         log.info("stub remove publish node")
 
@@ -666,27 +708,41 @@ class RPCStub:  # noqa : PLR0904
 
         json_ids_to_remove = json.dumps(ids_to_remove)
 
-        self.client_stub.removePublishNodes(ids_to_remove=json_ids_to_remove)
+        self.client_stub.removePublishNodes(
+            ids_to_remove=json_ids_to_remove, node_type=publish_type.value
+        )
 
-    def create_loadimage_node(self, container_to_create: dict) -> None:
-        """Pass along a call to create a Ayon Load Image node."""
-        log.info("stub create load image node")
+    def create_load_node(
+        self, container_to_create: dict, node_type: LoadType = LoadType.IMAGE
+    ) -> None:
+        """Pass along a call to create a Ayon Load [Type] node."""
+        log.info("stub create load node:")
+        log.info(node_type.value)
         json_data = json.dumps(container_to_create)
 
-        self.client_stub.addLoadImageNode(container_json=json_data)
+        self.client_stub.addLoadProductNode(
+            container_json=json_data, node_type=node_type.value
+        )
 
-    def update_loadimage_node(self, container_to_update: dict) -> None:
-        """Pass along call to update Ayon Load Image node."""
-        log.info("stub update load image node")
-        json_data = json.dumps(container_to_update)
-        self.client_stub.updateLoadImageNodes(container_json=json_data)
-
-    def remove_loadimage_nodes(
-        self, containers_to_remove: dict | list
+    def update_load_node(
+        self, container_to_update: dict, node_type: LoadType = LoadType.IMAGE
     ) -> None:
-        """Pass along a call to remove Ayon Load Image nodes."""
-        log.info("stub remove load image node")
+        """Pass along call to update Ayon Load [Type] node."""
+        log.info("stub update load node")
+        log.info(node_type.value)
+        json_data = json.dumps(container_to_update)
+        self.client_stub.updateLoadProductNode(
+            container_json=json_data, node_type=node_type.value
+        )
 
+    def remove_load_nodes(
+        self,
+        containers_to_remove: dict | list,
+        node_type: LoadType = LoadType.IMAGE,
+    ) -> None:
+        """Pass along a call to remove Ayon Load [Type] nodes."""
+        log.info("stub remove load node")
+        log.info(node_type.value)
         if isinstance(containers_to_remove, dict):
             containers_to_remove = [containers_to_remove]
 
@@ -696,13 +752,21 @@ class RPCStub:  # noqa : PLR0904
 
         json_ids_to_remove = json.dumps(ids_to_remove)
 
-        self.client_stub.removeLoadImageNodes(ids_to_remove=json_ids_to_remove)
+        self.client_stub.removeLoadProductNodes(
+            ids_to_remove=json_ids_to_remove, node_type=node_type.value
+        )
 
-    def get_publish_node_images(self, instance_for_images: dict) -> list[str]:
-        """Returns list of images associated with node."""
+    def get_publish_node_images(
+        self,
+        instance_for_images: dict,
+        publish_type: PublishType = PublishType.IMAGE,
+    ) -> list[str]:
+        """Returns list of products associated with node."""
         log.info("stub get publish node images")
         id_ = instance_for_images["instance_id"]
-        result = self.client_stub.getPublishNodeImages(id_for_images=id_)
+        result = self.client_stub.getPublishNodeImages(
+            id_for_images=id_, node_type=publish_type.value
+        )
         try:
             return json.loads(result)
         except json.JSONDecodeError:

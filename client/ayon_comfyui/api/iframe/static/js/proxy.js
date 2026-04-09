@@ -30,16 +30,16 @@ window.onload = async (e) => {
     return await IFRAME_RPC.call('getPublishNodeImages', data)
   })
 
-  RPC.addRoute('addLoadImageNode', async (data) => {
-    return await IFRAME_RPC.call('addLoadImageNode', data)
+  RPC.addRoute('addLoadProductNode', async (data) => {
+    return await IFRAME_RPC.call('addLoadProductNode', data)
   })
 
-  RPC.addRoute('removeLoadImageNodes', async (data) => {
-    return await IFRAME_RPC.call('removeLoadImageNodes', data)
+  RPC.addRoute('removeLoadProductNodes', async (data) => {
+    return await IFRAME_RPC.call('removeLoadProductNodes', data)
   })
 
-  RPC.addRoute('updateLoadImageNode', async (data) => {
-    return await IFRAME_RPC.call('updateLoadImageNode', data)
+  RPC.addRoute('updateLoadProductNode', async (data) => {
+    return await IFRAME_RPC.call('updateLoadProductNode', data)
   })
 
   RPC.addRoute('setImprintContext', async (data) => {

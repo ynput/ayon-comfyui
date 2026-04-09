@@ -8,17 +8,18 @@ from typing import ClassVar
 import clique
 from ayon_comfyui.api.pipeline import containerise
 from ayon_comfyui.api.plugin import ComfyUILoader
+from ayon_comfyui.api.rpc_stub import LoadType
 from ayon_comfyui.api.upload_util import upload_input_images
 
 
-class ImageLoader(ComfyUILoader):
+class VideoLoader(ComfyUILoader):
     """Load images."""
 
-    product_types: ClassVar[set[str]] = {"image", "render"}
-    representations: ClassVar[set[str]] = {"*"}
-    label = "Load image(s) into current graph."
+    product_types: ClassVar[set[str]] = {"video"}
+    representations: ClassVar[set[str]] = {"mp4", "mov", "webm"}
+    label = "Load video into current graph."
     icon = "image"
-    order = -10
+    order = -10.1
 
     def load(
         self,
@@ -36,16 +37,14 @@ class ImageLoader(ComfyUILoader):
             options (dict, optional): Additional settings dictionary
         """
         # Retrieve filepath
-        filepaths = self.expand_files_if_sequence(context)
+        filepaths = self.filepath_from_context(context=context)
         self.log.debug(filepaths)
         folder = f"{namespace}_{name}" if namespace else name
-        # Upload image to ComfyUI.
-        # TODO(@sas): Maybe fire this off in a thread,
-        #             and infer the upload info.
-        image_upload_info = upload_input_images(
-            filepaths, self.comfy_url, subfolder=folder
-        )
+        # Upload video to ComfyUI.
 
+        image_upload_info = upload_input_images(
+            [filepaths], self.comfy_url, subfolder=folder
+        )
         # containerizing also adds to context.
         container: dict = containerise(
             name=name,
@@ -55,23 +54,20 @@ class ImageLoader(ComfyUILoader):
             loader=self.__class__.__name__,
         )
 
-        # Create the image loader node with the data on it.
-        self.stub.create_load_node(container)
+        # Create the video loader node with the data on it.
+        self.stub.create_load_node(container, LoadType.VIDEO)
 
     def remove(self, container: dict) -> None:
         """Remove container from context and scene."""
         self.stub.remove_containers(container)
-        self.stub.remove_load_nodes(container)
+        self.stub.remove_load_nodes(container, LoadType.VIDEO)
 
     def update(self, container: dict, context: dict) -> None:
         """Update container with new uploded file."""
         # Retrieve filepaths
         # filepath = self.filepath_from_context(context=context)
-        filepaths = self.expand_files_if_sequence(context)
-        # Upload image to ComfyUI.
-        # TODO(@sas): Maybe fire this off in a thread,
-        #             and infer the upload info.
-
+        filepaths = [self.filepath_from_context(context=context)]
+        # Upload video to ComfyUI.
         old_subfolder = next(iter(container["image_upload_info"]))["subfolder"]
 
         image_upload_info = upload_input_images(
@@ -87,6 +83,7 @@ class ImageLoader(ComfyUILoader):
         """Provide interface for switching calls."""
         self.update(container=container, context=context)
 
+    # Maybe deprecate. should be singular.
     def expand_files_if_sequence(self, context: dict) -> list[str]:
         """Return all images in sequence if appliccable."""
         filepath = self.filepath_from_context(context=context)

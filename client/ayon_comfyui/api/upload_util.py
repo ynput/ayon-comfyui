@@ -17,7 +17,7 @@ async def upload_image(
     type: str = "input",
     subfolder: str = "",
 ) -> MutableMapping | None:
-    """Posts an image to /upload/image endpoint.
+    """Posts an image/video to /upload/image endpoint.
 
     Returns:
         JSON object response if succesful, otherwise None
@@ -59,6 +59,10 @@ async def upload_image(
         # Less common / legacy
         ".pcx": "image/x-pcx",
         ".tga": "image/x-targa",
+        # Video
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
     }
 
     MIME_type = MIME_map.get(image_path.suffix)  # noqa : N806
