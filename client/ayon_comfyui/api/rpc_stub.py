@@ -65,17 +65,17 @@ class RPCClientStub:
     def loadWorkfile(self, *, workfile_json: str, workfile_name: str):  # noqa: N802, ANN201
         """Call loadWorkfile."""
 
-    def do_load_workfile(self, workfile_path: str | None = None) -> bool:
+    def do_load_workfile(self, workfile_path: str | None = None) -> None:
         """Load contents of workfile into ComfyUI session."""
         if not workfile_path:
-            return False
+            return
 
         workfile_json = (workfile := Path(workfile_path)).read_text(
             encoding="utf-8"
         )
-        return bool(self.loadWorkfile(
+        self.loadWorkfile(
             workfile_json=workfile_json, workfile_name=workfile.name
-        ))
+        )
 
     @call_on_origin()
     def getImprintContext(self) -> str:  # noqa: N802
@@ -345,11 +345,10 @@ class RPCStub:  # noqa : PLR0904
         log.info("query_workfile")
         return self.client_stub.getWorkfile()
 
-    def load_workfile(self, path: str) -> bool:
+    def load_workfile(self, path: str) -> None:
         """Query load workfile operation."""
         log.info("load_workfile")
-        return self.client_stub.do_load_workfile(path)
-
+        self.client_stub.do_load_workfile(path)
 
     def imprint_context(self, data: dict) -> None:
         """Query imprint contect operation."""
