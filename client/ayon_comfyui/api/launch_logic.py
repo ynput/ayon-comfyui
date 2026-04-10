@@ -38,6 +38,7 @@ from ayon_comfyui.api.profile_selector import (
     ProfileTypeEnum,
 )
 from ayon_comfyui.api.qt_rpc import QRPCManager
+from ayon_comfyui.api.result import safe_partial
 from ayon_comfyui.api.rpc_server import get_client_from_origin
 from ayon_comfyui.settings_util import (
     ComfyLocalSettings,
@@ -362,26 +363,21 @@ def launch_local(
             log.info(f"Scheduling launch workfile load: {workfile_path}")
 
             def _load_workfile_when_ready() -> None:
-                for _ in range(120):
-                    try:
-                        if get_client_from_origin(origin) is None:
-                            time.sleep(0.5)
-                            continue
-
-                        if rpcman.stub.load_workfile(workfile_path):
-                            log.info(
-                                f"Loaded startup workfile: {workfile_path}"
-                            )
-                            return
-                    except BaseException:
-                        log.debug(
-                            "Failed loading startup workfile", exc_info=True
-                        )
+                while not get_client_from_origin(origin):
                     time.sleep(0.5)
 
-                log.warning(
-                    "Timed out waiting for ComfyUI frontend client to load workfile"
-                )
+                safe_load = safe_partial(rpcman.stub.load_workfile, workfile_path)
+
+                retries = 30
+                while (retries > 0):
+                    result = safe_load()
+                    if result.is_ok and result.value:
+                        log.info(f"Loaded startup workfile: {workfile_path}")
+                        return
+                    retries -= 1
+                    time.sleep(0.5)
+                    log.info(f"Failed loading workfile... Retries left: {retries}")
+                log.warning("Timed out loading startup workfile")
 
             Thread(target=_load_workfile_when_ready, daemon=True).start()
     except BaseException:  # noqa: BLE001
