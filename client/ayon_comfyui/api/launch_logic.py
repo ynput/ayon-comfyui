@@ -265,17 +265,6 @@ def main(*args):
 
     log.info("got QT app")
 
-    env_workfiles_on_launch = os.getenv(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "0"
-    )
-
-    # TODO(@sas): maybe insert a callback on connect WS to frontend
-    workfiles_on_launch = env_value_to_bool(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
-        value=env_workfiles_on_launch,
-        default=True,
-    )
-
     try:
         project_name = get_current_project_name() or None
 
