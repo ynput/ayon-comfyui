@@ -13,7 +13,7 @@ from ayon_comfyui.api.upload_util import upload_input_images
 
 
 class VideoLoader(ComfyUILoader):
-    """Load images."""
+    """Load video."""
 
     product_types: ClassVar[set[str]] = {"video"}
     representations: ClassVar[set[str]] = {"mp4", "mov", "webm"}

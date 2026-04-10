@@ -1,6 +1,8 @@
 # ComfyUI addon
 ComfyUI integration for AYON.
 
+Setup Guide: [Read about setting up the plugin here!](<./documentation/setup_guide.md)
+
 #### Migrating settings to ayon_comfyui 0.19+ from earlier.
 Tooling is included in `additional_tooling/migrate_json.py`<br>
 Save your data from AYON with the low level settings editor, e.g. <br>
