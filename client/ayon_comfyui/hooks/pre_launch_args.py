@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import platform
 import subprocess
-from pathlib import Path
 from typing import ClassVar, Optional
 
 from ayon_applications import LaunchTypes, PreLaunchHook
@@ -63,6 +62,7 @@ class ComfyPrelaunchHook(PreLaunchHook):
         self.log.warning(msg=str(self.launch_context.launch_args))
         self.log.warning(msg=str(self.launch_context.kwargs))
         self.log.warning(msg=str(self.launch_context.env))
+
         script_path = get_launch_script_path()
         # uses ayon_console to launch a script, respecting dev mode.
         dev_args = ["--use-dev"] if is_dev_mode_enabled() else []
