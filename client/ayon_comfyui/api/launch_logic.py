@@ -335,10 +335,6 @@ def launch_local(
         log.debug("Problems launching ComfyUI:", exc_info=True)
 
     log.info("Creating QRPCmanager")
-
-    # find a way to get workfile path here directly, instead of passing envvar from pre_launch_args hook
-    workfile_path = os.getenv("AYON_COMFYUI_WORKFILE_PATH") or ""
-
     try:
         rpcman = QRPCManager(
             parent=app,
@@ -360,7 +356,8 @@ def launch_local(
         rpcman.start_server()
         log.info("called start_server")
 
-        if workfile_path and Path(workfile_path).exists():
+        workfile_path = os.getenv("AYON_LAST_WORKFILE")
+        if workfile_path and env_value_to_bool("AVALON_OPEN_LAST_WORKFILE"):
             origin = settings.address_frontend
             log.info(f"Scheduling launch workfile load: {workfile_path}")
 

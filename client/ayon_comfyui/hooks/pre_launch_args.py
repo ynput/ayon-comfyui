@@ -63,17 +63,6 @@ class ComfyPrelaunchHook(PreLaunchHook):
         self.log.warning(msg=str(self.launch_context.launch_args))
         self.log.warning(msg=str(self.launch_context.kwargs))
         self.log.warning(msg=str(self.launch_context.env))
-
-        workfile_path = self.data.get("workfile_path")
-        if not workfile_path and self.data.get("start_last_workfile", True):
-            workfile_path = self.data.get("last_workfile_path")
-
-        if workfile_path and Path(workfile_path).exists():
-            self.launch_context.env["AYON_COMFYUI_WORKFILE_PATH"] = (
-                workfile_path
-            )
-            self.log.info(f"Will open workfile on launch: {workfile_path}")
-
         script_path = get_launch_script_path()
         # uses ayon_console to launch a script, respecting dev mode.
         dev_args = ["--use-dev"] if is_dev_mode_enabled() else []
