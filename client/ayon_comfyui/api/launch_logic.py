@@ -359,15 +359,9 @@ def launch_local(
                 safe_load = safe_partial(rpcman.stub.load_workfile, workfile_path)
 
                 retries = 30
-                while (retries > 0):
-                    result = safe_load()
-                    if result.is_ok and result.value:
-                        log.info(f"Loaded startup workfile: {workfile_path}")
-                        return
+                while safe_load().is_err and retries > 0:
                     retries -= 1
                     time.sleep(0.5)
-                    log.info(f"Failed loading workfile... Retries left: {retries}")
-                log.warning("Timed out loading startup workfile")
 
             Thread(target=_load_workfile_when_ready, daemon=True).start()
     except BaseException:  # noqa: BLE001
