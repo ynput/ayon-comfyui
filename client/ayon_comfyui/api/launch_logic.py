@@ -336,6 +336,7 @@ def launch_local(
         log.debug("Problems launching ComfyUI:", exc_info=True)
 
     log.info("Creating QRPCmanager")
+
     try:
         rpcman = QRPCManager(
             parent=app,
