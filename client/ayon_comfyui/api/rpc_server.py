@@ -270,18 +270,12 @@ def call_on_origin(
                 client.call(func_name, **kwargs), ws_loop
             )
             # From testing, it's beneficial to explicitly wait for return.
-            # Use a timeout so callers that retry (e.g. startup workfile load)
-            # are not blocked forever if the iframe hasn't registered its
-            # RPC handlers yet (ComfyUI extension setup still in progress).
+            # Set timeout to prevent any operation decorated with @call_from_origin
+            # from permanently blocking
             try:
-                result = fut.result(timeout=10.0)
-            except Exception:
-                log.debug(
-                    f"RPC call '{func_name}' timed out waiting for iframe response"  # noqa: G004
-                )
-                result = None
-
-            return result  # noqa: RET504
+                return fut.result(timeout=10.0)
+            except BaseException:
+                raise
 
         return _inner_wrapper
 
