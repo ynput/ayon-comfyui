@@ -38,6 +38,8 @@ from ayon_comfyui.api.profile_selector import (
     ProfileTypeEnum,
 )
 from ayon_comfyui.api.qt_rpc import QRPCManager
+from ayon_comfyui.api.result import safe_partial
+from ayon_comfyui.api.rpc_server import get_client_from_origin
 from ayon_comfyui.settings_util import (
     ComfyLocalSettings,
     ComfyRemoteSettings,
@@ -263,17 +265,6 @@ def main(*args):
 
     log.info("got QT app")
 
-    env_workfiles_on_launch = os.getenv(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "0"
-    )
-
-    # TODO(@sas): maybe insert a callback on connect WS to frontend
-    workfiles_on_launch = env_value_to_bool(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
-        value=env_workfiles_on_launch,
-        default=True,
-    )
-
     try:
         project_name = get_current_project_name() or None
 
@@ -355,6 +346,24 @@ def launch_local(
         log.info("Created rpc manager")
         rpcman.start_server()
         log.info("called start_server")
+
+        workfile_path = os.getenv("AYON_LAST_WORKFILE")
+        if workfile_path and env_value_to_bool("AVALON_OPEN_LAST_WORKFILE"):
+            origin = settings.address_frontend
+            log.info(f"Scheduling launch workfile load: {workfile_path}")
+
+            def _load_workfile_when_ready() -> None:
+                while not get_client_from_origin(origin):
+                    time.sleep(0.5)
+
+                safe_load = safe_partial(rpcman.stub.load_workfile, workfile_path)
+
+                retries = 30
+                while safe_load().is_err and retries > 0:
+                    retries -= 1
+                    time.sleep(0.5)
+
+            Thread(target=_load_workfile_when_ready, daemon=True).start()
     except BaseException:  # noqa: BLE001
         log.debug("Problems starting server:", exc_info=True)
 

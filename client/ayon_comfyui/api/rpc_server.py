@@ -270,8 +270,12 @@ def call_on_origin(
                 client.call(func_name, **kwargs), ws_loop
             )
             # From testing, it's beneficial to explicitly wait for return.
-            result = fut.result()
-            return result  # noqa: RET504
+            # Set timeout to prevent any operation decorated with @call_from_origin
+            # from permanently blocking
+            try:
+                return fut.result(timeout=10.0)
+            except BaseException:
+                raise
 
         return _inner_wrapper
 
