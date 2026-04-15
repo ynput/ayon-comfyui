@@ -25,7 +25,7 @@ class ImageCreator(Creator):
     label = "AI Image"
     product_type = "image"
     product_base_type = "image"
-    description = "Slop it up, baby!"
+    description = "Image generated using ComfyUI"
 
     default_variant = "Main"
     default_img_name = "ayon"
@@ -181,7 +181,7 @@ class ImageCreator(Creator):
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator for ComfyUI images.
+        return """Creator plugin for publishing ComfyUI images.
 
-        Slop it up, baby! You can do it. Just prompt better.
+        Accepts batched images. These will all be loaded together too.
         """

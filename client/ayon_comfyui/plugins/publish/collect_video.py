@@ -69,9 +69,7 @@ class CollectVideo(pyblish.api.InstancePlugin):
 
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = get_instance_staging_dir(instance)
-        self.log.info(f"Outputting video to {staging_dir}")
-
-        # http://127.0.0.1:8188/api/view?filename=Big_Slop_0001.png&subfolder=AYON/Big_Slop_imageMain&type=output
+        self.log.info("Outputting video to %s", staging_dir)
 
         video_link = next(iter(image_urls))
         if video_link is None:

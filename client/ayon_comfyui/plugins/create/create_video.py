@@ -26,7 +26,7 @@ class VideoCreator(Creator):
     label = "AI Video"
     product_type = "video"
     product_base_type = "video"
-    description = "Slop it up, baby! Now in motion."
+    description = "Video generated using ComfyUI"
 
     default_variant = "Main"
     default_vid_name = "ayon"
@@ -195,11 +195,10 @@ class VideoCreator(Creator):
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator for ComfyUI videos.
+        return """Creator plugin for publishing ComfyUI videos.
 
         Use the "Create Video" builtin node to construct a video first.
-        WebM is heavily experimental, but you can do it if you want to,
-        I supose.
+        WebM is a bit experimental but supports audio using OPUS.
 
-        Slop it up, baby! You can do it. Just prompt better.
+        Audio is automatically resampled to conform to OPUS' standard.
         """
