@@ -8,7 +8,7 @@ import folder_paths
 import node_helpers
 import numpy as np
 import torch
-from comfy_api.latest import InputImpl, io, ui
+from comfy_api.latest import InputImpl, Types, io, ui
 from PIL import Image, ImageOps, ImageSequence
 
 
@@ -238,3 +238,52 @@ class AyonLoadVideoNode(io.ComfyNode):
                 return f"Image doesn't exits at {subpath}"
 
         return True
+
+
+class AyonLoad3DModelNode(io.ComfyNode):
+    """Container node loading a specified 3D model."""
+
+    @staticmethod
+    def define_inputs() -> list[io.Input]:
+        return [
+            io.String.Input("ayon_container_info", "AYON context"),
+        ]
+
+    @staticmethod
+    def define_outputs() -> list[io.Output]:
+        return [
+            io.File3DAny.Output("model", display_name="model"),
+        ]
+
+    @classmethod
+    def define_schema(cls):
+        """Setup node definition."""
+        return io.Schema(
+            node_id="AYON Load 3D Model",
+            display_name="AYON Load 3D Model",
+            category="AYON",
+            inputs=AyonLoad3DModelNode.define_inputs(),
+            outputs=AyonLoad3DModelNode.define_outputs(),
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, ayon_container_info: str, **kwargs) -> io.NodeOutput:
+        # supports: '.gltf', '.glb', '.obj', '.fbx',
+        #           '.stl', '.spz', '.splat',
+        #           '.ply', '.ksplat'
+        container = json.loads(ayon_container_info)
+        upload_info = next(iter(container["image_upload_info"]))
+        if not upload_info:
+            return
+
+        model_file = os.path.join(
+            folder_paths.get_input_directory(),
+            upload_info["subfolder"],
+            upload_info["name"],
+        )
+
+        ext = next(iter(model_file.rsplit(".", 1)), "")
+
+        file_3d = Types.File3D(model_file, ext)
+        return io.NodeOutput(file_3d)

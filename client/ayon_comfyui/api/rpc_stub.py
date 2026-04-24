@@ -26,12 +26,13 @@ logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
 
-# Enum type for types of publish nodes.
+# Enum types for types of publish/load nodes.
 class PublishType(Enum):
     """Correspond to custom AYON node IDs."""
 
     IMAGE = "AYON Image Save"
     VIDEO = "AYON Video Save"
+    MODEL3D = "AYON 3D Model Save"
 
 
 class LoadType(Enum):
@@ -39,6 +40,7 @@ class LoadType(Enum):
 
     IMAGE = "AYON Load Image"
     VIDEO = "AYON Load Video"
+    MODEL3D = "AYON Load 3D Model"
 
 
 # STUB TO CONTAIN CLIENT CONNECTION GOTTEN FROM SERVER
@@ -54,7 +56,7 @@ class RPCClientStub:
     # TODO(@sas): retrieve from url settings
     origin: str = "http://localhost:5454"
 
-    def __init__(self):
+    def __init__(self):  # noqa: D107
         self.__class__.origin = pull_origin_from_settings()
 
     @property

@@ -40,12 +40,23 @@ app.registerExtension({
           })
         }
 
+        async function generate_thumbnails_load3dmodel_nodes(){
+          const nodeType = "AYON 3D Model Save"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          console.log(foundNodes)
+          foundNodes.forEach((node) => {
+            console.log(node)
+            execute_single_node(node);
+          })
+        }
+
         console.log("AYON: Graph loaded.");
         // generate thumbnails for AYON Load Images / AYON Load Videos
         requestAnimationFrame(() =>{
           console.log("animation frame retrieved, cooking Load Image thumbnails")
           generate_thumbnails_loadimage_nodes()
           generate_thumbnails_loadvideo_nodes()
+          generate_thumbnails_load3dmodel_nodes() // Don't know if this will actually make UI thumbnails, but it will at least load stuff in memory
       })
     },
     async setup() {
