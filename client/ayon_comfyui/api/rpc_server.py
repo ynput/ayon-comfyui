@@ -214,7 +214,10 @@ class RPCServerThread(Thread):
 
 
 def call_on_origin(
-    origin: str | None = None, namespace: str | None = None
+    origin: str | None = None,
+    namespace: str | None = None,
+    *,
+    wait_forever: bool = False,
 ) -> Callable:
     """Decorator to send a function to a specific client on websocket thread.
 
@@ -262,20 +265,17 @@ def call_on_origin(
             if "." in func_name:
                 func_name = func.__qualname__.split(".")[-1]
 
-            # Add specified namespace if appliccable
+            # Add specified namespace if applicable
             if namespace is not None and namespace:
                 func_name = f"{namespace}.{func_name}"
 
             fut = asyncio.run_coroutine_threadsafe(
                 client.call(func_name, **kwargs), ws_loop
             )
-            # From testing, it's beneficial to explicitly wait for return.
-            # Set timeout to prevent any operation decorated with @call_from_origin
-            # from permanently blocking
-            try:
-                return fut.result(timeout=10.0)
-            except BaseException:
-                raise
+            # Set default timeout to prevent any operation
+            # decorated with @call_from_origin from permanently blocking
+            timeout = 10.0 if not wait_forever else None
+            return fut.result(timeout=timeout)
 
         return _inner_wrapper
 

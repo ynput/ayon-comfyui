@@ -56,7 +56,7 @@ class RPCClientStub:
     # TODO(@sas): retrieve from url settings
     origin: str = "http://localhost:5454"
 
-    def __init__(self):  # noqa: D107
+    def __init__(self):
         self.__class__.origin = pull_origin_from_settings()
 
     @property
@@ -253,7 +253,7 @@ class RPCClientStub:
         Returns a string json representation of instances that were removed.
         """
 
-    @call_on_origin()
+    @call_on_origin(wait_forever=True)
     def getPublishNodeImages(  # noqa: N802
         self, *, id_for_images: str, node_type: str
     ) -> str:
@@ -264,6 +264,8 @@ class RPCClientStub:
 
         Returns a string json representation of a list of image locations
         on network.
+
+        Waits until graph has finished cooking.
         """
 
     @call_on_origin()
