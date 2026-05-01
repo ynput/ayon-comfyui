@@ -84,13 +84,21 @@ app.registerExtension({
 
         // v2 adapter for newer comfyui
         function get_workfiles_v2(){
+          // Attempt OpenPaths first.
           const clientId = window.sessionStorage.getItem("clientId");
-          const path_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
-          if (!path_str) {
-            return null;
+          const openpath_str = window.sessionStorage.getItem(`Comfy.Workflow.OpenPaths:${clientId}`)
+          let path_str = null
+          if (openpath_str !== null) {
+            const openpath_parse = JSON.parse(openpath_str)
+            path_str = openpath_parse.paths[openpath_parse.activeIndex]
+          } else {
+            path_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
+            if (!path_str) {
+              return null;
+            }
+            path_str = JSON.parse(path_str).path;
           }
-
-          const path = JSON.parse(path_str).path;
+          const path = path_str
 
           if (!path) {
             return null;
@@ -608,8 +616,127 @@ app.registerExtension({
         const ext = exts.find((el) => el.name == "comfy_ayon_menu")
 
         console.log(app.extensions);
-        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "sceneinventory"}})
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "sceneinventory",}})
       } 
+    },
+
+    {
+      id: "saveLocal",
+      label: "Ayon Save Workfile",
+      function: () => {
+        function showToast(text, duration = 2000) {
+          const el = document.createElement("div");
+          el.textContent = text;
+              
+          Object.assign(el.style, {
+              position: "fixed",
+              top: "10px",
+              left: "10px",
+              background: "#249b9b",
+              color: "white",
+              padding: "8px 12px",
+              borderRadius: "6px",
+              zIndex: 9999,
+              fontSize: "14px",
+              fontFamily: "sans-serif",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
+              opacity: "1",
+              transition: "opacity 0.3s ease"
+          });
+        
+          // attach to ComfyUI root instead of body if possible
+          (app.canvasElRef?.parentElement || document.body).appendChild(el);
+        
+          setTimeout(() => {
+              el.style.opacity = "0";
+              setTimeout(() => el.remove(), 300);
+          }, duration);
+        }
+
+        // v2 adapter for newer comfyui
+        function get_workfiles_save() {
+          // Attempt OpenPaths first.
+          const clientId = window.sessionStorage.getItem("clientId");
+          const openpath_str = window.sessionStorage.getItem(`Comfy.Workflow.OpenPaths:${clientId}`)
+          let path_str = null
+          if (openpath_str !== null) {
+            const openpath_parse = JSON.parse(openpath_str)
+            path_str = openpath_parse.paths[openpath_parse.activeIndex]
+          } else {
+            path_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
+            if (!path_str) {
+              return null;
+            }
+            path_str = JSON.parse(path_str).path;
+          }
+          const path = path_str
+
+          if (!path) {
+            return null;
+          }
+
+          const draftindex_str = window.localStorage.getItem("Comfy.Workflow.DraftIndex.v2:personal");
+          if (!draftindex_str) {
+            return null;
+          }
+
+          const draftindex = JSON.parse(draftindex_str);
+          const keys = Object.keys(draftindex.entries);
+
+          const personal_key = keys.filter((key) => {
+            if (draftindex.entries[key].path == path) {
+              return true;
+            }
+          })[0]
+
+          if (personal_key === undefined){
+            return null;
+          }
+
+          const data_str = window.localStorage.getItem(`Comfy.Workflow.Draft.v2:personal:${personal_key}`);
+          
+          if (!data_str) {
+            return null;
+          }
+          // workfiles data as a string
+          const data = JSON.parse(data_str).data
+
+          return data
+        }
+        
+        console.log("called save local")
+        // Attempt OpenPaths first, to get current tab.  
+        const clientId = window.sessionStorage.getItem("clientId");
+        const openpath_str = window.sessionStorage.getItem(`Comfy.Workflow.OpenPaths:${clientId}`)
+        let path_str = null
+        if (openpath_str !== null) {
+          const openpath_parse = JSON.parse(openpath_str)
+          path_str = openpath_parse.paths[openpath_parse.activeIndex]
+        } else {
+          const activepath_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
+          path_str = JSON.parse(activepath_str).path;
+          if (!path_str) {
+            return null;
+          }
+        }
+        const path = path_str
+
+        const formatted_path = path.replace(".json","").replace("workflows/","")
+      
+
+        // find plugin in array
+        const exts = app.extensions;
+        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+
+        const workfile = get_workfiles_save()
+
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestSaveByName', args: {"file_name" : `${formatted_path}`, "workfile_contents": `${workfile}`}})
+
+        showToast("Ayon Saved!")
+        
+      }
+
+
     },
   ],
   // Add commands to menu

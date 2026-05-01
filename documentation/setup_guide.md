@@ -164,6 +164,27 @@ As you can see here, a `Custom Nodes` entry is added to a path containing the `a
 `client/ayon_comfyui/_comfyui_plugin`, so that it can be worked on seperately.
 </details>
 
+### 5. Setting up a shortcut for saving a workfile to the right destination instead of "within" ComfyUI:
+
+#### Note: This only works in version 0.18.x and up.
+
+Sometimes, we just want to press Ctrl-S and save a file. However, the expected behavior of that shortcut in ComfyUI is a bit different than what we normally expect.
+
+<details>
+<summary>Setting up workfile overriding save shortcut.</summary>
+
+In order to set up a screenshot that does actually write to the right place, we included a hook to do so.<br>
+Go to settings, keybinding, and bind a shortcut to **Ayon Save Workfile**.<br>
+Note that this **Does Not** save the file as it would in ComfyUI natively, so the little "unsaved white dot"
+still appears on your tabs.
+
+Note that if this shortcut fails to find the associated file with the current open tab, it will open workfiles.
+
+<img src="./images/shortcuts.png" width="800" height="auto"><br>
+Here, I bound it to Shift - S, but you can unbind Ctrl-S and bind Ctrl-S to this if you want to.
+
+</details>
+
 ---
 
 I hope you found this guide helpful. If there's anything missing, make an issue or a PR. Thanks!
