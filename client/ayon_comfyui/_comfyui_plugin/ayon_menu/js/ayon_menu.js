@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import "../../../../extensions/ayon_menu/lib/wsrpc.js";
 import {RPCServer} from "../../../../extensions/ayon_menu/lib/rpc_server.js"
+import {AYON_ORIGIN_ADRESS} from "../../../../extensions/ayon_menu/lib/consts.js"
 
 app.registerExtension({
     name: "comfy_ayon_menu",
@@ -303,7 +304,7 @@ app.registerExtension({
 
         // DO NOT THE WSRPC HERE, WE DO IFRAME THROUGH PROXY.JS
         // Retrieve host URL from consts. Will always be http
-        this.IFRAMERPC = new RPCServer(window.parent, "http://localhost:5454")
+        this.IFRAMERPC = new RPCServer(window.parent, AYON_ORIGIN_ADRESS)
 
         this.PROC_QUEUE = new Array()
 

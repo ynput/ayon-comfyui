@@ -56,15 +56,21 @@ def safe_excepthook(*args):  # noqa: ANN201, ANN002, D103
 def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
     """Adjust settings for comfyui plugin."""
     settings, _ = ComfyLocalSettings.pull_committed_settings()
-    python = f"AYON_BACKEND_PORT = {settings.port_backend}"
+    python = f"AYON_BACKEND_PORT = {settings.port_backend}\n"
+    js = f'export const AYON_ORIGIN_ADRESS = "{settings.address_frontend}";'
     py_file = plugin_path / "ayon_menu" / "consts.py"
+    js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
 
     # update python consts plugin with port to use.
     # IPC using the proc Popen is not very wise,
     # since we can't reliably get a hold of the entire process tree
-    # We communicate with the JS side by templating HTML,
+
+    # Since communicating the adress to JS isn't possible before establishing a
+    # connection with IFrame RPC,
+    # we still have to send over the actual adress to the plugin.
 
     Path(py_file).write_text(python, encoding="utf-8")
+    Path(js_file).write_text(js, encoding="utf-8")
 
 
 def _subproc_launch_ComfyUI() -> subprocess.Popen:
@@ -356,7 +362,9 @@ def launch_local(
                 while not get_client_from_origin(origin):
                     time.sleep(0.5)
 
-                safe_load = safe_partial(rpcman.stub.load_workfile, workfile_path)
+                safe_load = safe_partial(
+                    rpcman.stub.load_workfile, workfile_path
+                )
 
                 retries = 30
                 while safe_load().is_err and retries > 0:

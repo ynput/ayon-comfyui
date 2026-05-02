@@ -1,0 +1,1 @@
+export const AYON_ORIGIN_ADRESS = "http://localhost:5454";
