@@ -137,6 +137,8 @@ class ImageCreator(Creator):
         stub: RPCStub = QRPCManager.get_instance().stub
         stub.remove_publish_nodes([i.data_to_store() for i in instances])
         stub.remove_instance(instances)
+        for instance in instances:
+            self._remove_instance_from_context(instance)
 
     def get_pre_create_attr_defs(self):
         # NOTE: I do not know if it's possible to
