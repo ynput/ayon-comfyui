@@ -360,7 +360,7 @@ app.registerExtension({
           save_node.color = "#233"
           save_node.bgcolor = "#355"
           try {
-                        // associated instance information should be put on node.
+            // associated instance information should be put on node.
             info_widget.value = data.instance_json
             const parsed = JSON.parse(data.instance_json)
             recook_widget.value = parsed.creator_attributes.force_recook_on_publish
@@ -469,8 +469,15 @@ app.registerExtension({
 
         this.IFRAMERPC.register('updateLoadProductNode', async (data) => {
           const nodeType = data.node_type
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          let foundNodes = null
 
+          
+          if (nodeType == "ALL") {
+            const nodes = ["AYON Load Image", "AYON Load Video", "AYON Load 3D Model"]
+            foundNodes = app.graph.nodes.filter((node) => nodes.includes(node.type));
+          } else {
+            foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          }
           const ayon_info_update = JSON.parse(data.container_json)
 
           foundNodes.forEach(async (node) => {

@@ -41,6 +41,7 @@ class LoadType(Enum):
     IMAGE = "AYON Load Image"
     VIDEO = "AYON Load Video"
     MODEL3D = "AYON Load 3D Model"
+    ALL = "ALL"
 
 
 # STUB TO CONTAIN CLIENT CONNECTION GOTTEN FROM SERVER
@@ -293,12 +294,14 @@ class RPCClientStub:
 
     @call_on_origin()
     def updateLoadProductNode(  # noqa: N802
-        self, *, container_json: str, node_type: str
+        self, *, container_json: str, node_type: str = "ALL"
     ) -> None:
         """Call updateLoadProductNode.
 
         Uses the container_json container_uuid
         to match nodes present in the scene.
+
+        Sentinel value ALL will match for all types of container nodes.
         """
 
     def do_get_publishnode_images(
@@ -680,7 +683,9 @@ class RPCStub:  # noqa : PLR0904
         # Update all nodes.
         for container in containers:
             container_json = json.dumps(container)
-            self.client_stub.updateLoadImageNode(container_json=container_json)
+            self.client_stub.updateLoadProductNode(
+                container_json=container_json
+            )
 
     def create_publish_node(
         self,
