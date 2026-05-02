@@ -177,7 +177,7 @@ def containerise(  # noqa: PLR0913, PLR0917
         image_upload_info = [image_upload_info]
 
     data = {
-        "schema": "openpype:container-2.0",
+        "schema": "ayon:container-3.0",
         "id": AYON_CONTAINER_ID,
         "name": name,
         "namespace": namespace,
