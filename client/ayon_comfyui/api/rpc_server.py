@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from functools import wraps
+from pathlib import Path
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 import aiohttp.web
+from ayon_api import get_representations
 from ayon_core.tools.utils import host_tools
 from wsrpc_aiohttp import Route, WebSocketAsync, decorators
 
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.util import extract_default_kwargs
-from ayon_comfyui.parse_settings import ComfyLocalSettings, ComfyRemoteSettings
+from ayon_comfyui.settings_util import ComfyLocalSettings, ComfyRemoteSettings
 
 if TYPE_CHECKING:
     from wsrpc_aiohttp.websocket.common import WSRPCBase
@@ -29,7 +32,6 @@ def show_tool_by_name(tool_name: str) -> None:
     kwargs = {}
     if tool_name == "loader":
         kwargs["use_context"] = True
-        kwargs["on_top"] = True
 
     if tool_name == "create":
         tool_name = "publisher"
@@ -41,16 +43,55 @@ def show_tool_by_name(tool_name: str) -> None:
     host_tools.show_tool_by_name(tool_name, **kwargs)
 
 
-# TODO(@sas): This will all be on localhost.
-#             The origin will be set to the page hosted through api/iframe/Static
-# def _pull_origin_from_settings() -> str:
-#     _, profile = ComfyRemoteSettings.pull_committed_settings()
-#     if isinstance(profile, ComfyRemoteSettings.ComfyRemoteProfile):
-#         return profile.comfy_origin
-#     return "http://localhost:8188"
+# TODO(@sas): look for a better way to do this.
+#             ayon_api.get_representations is very slow.
+def _get_workfile_path_from_name(workfile_name: str) -> Path:
+    """Return found workfile path in representations, else None."""
+    paths = {
+        Path(x["attrib"]["path"]).stem: Path(x["attrib"]["path"])
+        for x in get_representations(
+            project_name="testing", representation_names=["json"]
+        )
+        if "workfile" in x["attrib"]["path"]
+    }
+    return paths.get(workfile_name)
+
+
+def _get_workfile_path_from_name_env(workfile_name: str) -> Path | None:
+    """Return found workfile path from AYON workdir folder, else None.
+
+    Raises:
+        FileNotFoundError: if workdir is not found
+    """
+    workdir = os.environ.get("AYON_WORKDIR")
+    if workdir is None:
+        raise FileNotFoundError("Workdir not found.")  # noqa: EM101
+
+    filepaths = (
+        Path(workdir) / file
+        for file in os.listdir(workdir)
+        if not os.path.isdir(os.path.join(workdir, file))
+        and Path(file).suffix == ".json"
+    )
+    path_dict = {p.stem: p for p in filepaths}
+    return path_dict.get(workfile_name)
+
+
+def overwrite_workfile(workfile_name: str, workfile_contents: str) -> None:
+    """Overwrite workfile if it exists.
+
+    Show workfiles menu if no path was matched.
+    """
+    path = _get_workfile_path_from_name_env(workfile_name=workfile_name)
+    if path:
+        path.write_text(data=workfile_contents, encoding="utf-8")
+        return
+    # As a backup, show workfiles.
+    show_tool_by_name("workfiles")
 
 
 def pull_origin_from_settings() -> str:
+    """Return expected RPC origin adress from settings."""
     settings, profile = ComfyRemoteSettings.pull_committed_settings()
     if isinstance(profile, ComfyRemoteSettings.ComfyRemoteProfile):
         return profile.address_frontend
@@ -107,6 +148,23 @@ class AyonLocalHost(Route):
             self.qt_thread.schedule(show_tool_by_name, tool_name)
             return f"{tool_name} scheduled in qt_thread"
         return tool_name
+
+    @decorators.proxy
+    async def requestSaveByName(  # noqa: N802
+        self, file_name: str, workfile_contents: str
+    ) -> None:
+        """Schedule saving workfile in thread.
+
+        File name is without extension (as represented in ComfyUI tab)
+        """
+        log.debug(f"origin {self.socket.request.headers}")  # noqa: G004
+        log.debug("Saving workfile in place")
+        if self.qt_thread:
+            self.qt_thread.schedule(
+                overwrite_workfile, file_name, workfile_contents
+            )
+            return f"{file_name} save scheduled in qt_thread"
+        return file_name
 
 
 class RPCServerThread(Thread):
@@ -223,7 +281,10 @@ class RPCServerThread(Thread):
 
 
 def call_on_origin(
-    origin: str | None = None, namespace: str | None = None
+    origin: str | None = None,
+    namespace: str | None = None,
+    *,
+    wait_forever: bool = False,
 ) -> Callable:
     """Decorator to send a function to a specific client on websocket thread.
 
@@ -271,16 +332,17 @@ def call_on_origin(
             if "." in func_name:
                 func_name = func.__qualname__.split(".")[-1]
 
-            # Add specified namespace if appliccable
+            # Add specified namespace if applicable
             if namespace is not None and namespace:
                 func_name = f"{namespace}.{func_name}"
 
             fut = asyncio.run_coroutine_threadsafe(
                 client.call(func_name, **kwargs), ws_loop
             )
-            # From testing, it's beneficial to explicitly wait for return.
-            result = fut.result()
-            return result  # noqa: RET504
+            # Set default timeout to prevent any operation
+            # decorated with @call_from_origin from permanently blocking
+            timeout = 10.0 if not wait_forever else None
+            return fut.result(timeout=timeout)
 
         return _inner_wrapper
 

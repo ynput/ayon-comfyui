@@ -63,7 +63,7 @@ class Result:
 
     @property
     def value(self) -> Any | None:  # noqa: ANN401
-        """Returns exception."""
+        """Returns value if present."""
         if self.is_ok:
             return self._value
         return None

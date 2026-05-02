@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from ayon_comfyui.api.rpc_stub import RPCStub
@@ -9,26 +9,32 @@ if TYPE_CHECKING:
 
 from ayon_comfyui.api.pipeline import list_instances
 from ayon_comfyui.api.qt_rpc import QRPCManager
-from ayon_core.lib import BoolDef, NumberDef, TextDef
+from ayon_comfyui.api.rpc_stub import PublishType
+from ayon_core.lib import BoolDef, EnumDef, TextDef
 from ayon_core.pipeline import CreatedInstance, Creator, CreatorError
 from ayon_core.pipeline.create import PRODUCT_NAME_ALLOWED_SYMBOLS
 
 
-class ImageCreator(Creator):
-    """Creator for image(s) before publishing.
+class ModelCreator(Creator):
+    """Creator for model before publishing.
 
     On create, spawn a node that is to be associated with
     this publish.
     """
 
-    identifier = "image"
-    label = "AI Image"
-    product_type = "image"
-    product_base_type = "image"
-    description = "Image generated using ComfyUI"
+    identifier = "model"
+    label = "AI 3D Model"
+    product_type = "model"
+    product_base_type = "model"
+    description = "ComfyUI generated model."
 
     default_variant = "Main"
-    default_img_name = "ayon"
+    default_vid_name = "ayon"
+
+    enum_fallback_format: ClassVar[dict] = {
+        "obj": "obj (experimental)",
+        "glb": "glb (uses hunyuan's glb exporter)",
+    }
 
     icon = "gears"
 
@@ -46,8 +52,7 @@ class ImageCreator(Creator):
         prefix: str = pre_create_data.get("file_prefix")
         use_unique_name: bool = pre_create_data.get("use_unique_name")
         unique_name: str = pre_create_data.get("unique_name")
-        compress_level: float = pre_create_data.get("compress_level")
-        force_recook: bool = pre_create_data.get("force_recook_on_publish")
+        fallback_format: str = pre_create_data.get("fallback_format")
 
         context: CreateContext = self.create_context
         project_name = context.get_current_project_name()
@@ -80,8 +85,7 @@ class ImageCreator(Creator):
             "use_unique_name": use_unique_name,
             "prefix": prefix,
             "unique_name": unique_name,
-            "compression_level": int(compress_level),
-            "force_recook_on_publish": force_recook,
+            "fallback_format": fallback_format,
         }
         data.update(
             {
@@ -111,7 +115,9 @@ class ImageCreator(Creator):
         )
 
         self._add_instance_to_context(new_instance)
-        stub.create_publish_node(new_instance.data_to_store())
+        stub.create_publish_node(
+            new_instance.data_to_store(), PublishType.MODEL3D
+        )
         stub.update_instance(new_instance.data_to_store())
 
     def collect_instances(self):
@@ -135,19 +141,14 @@ class ImageCreator(Creator):
 
     def remove_instances(self, instances: list[CreatedInstance]):
         stub: RPCStub = QRPCManager.get_instance().stub
-        stub.remove_publish_nodes([i.data_to_store() for i in instances])
+        stub.remove_publish_nodes(
+            [i.data_to_store() for i in instances], PublishType.MODEL3D
+        )
         stub.remove_instance(instances)
 
     def get_pre_create_attr_defs(self):
-        # NOTE: I do not know if it's possible to
-        # force image meta data behavior from here.
-        # NOTE: I actually do know. We force the entire instance dict into
-        # a json, and then either apply or don't apply the image metadata
-        # like ComfyUI does inside the node.
         return [
-            BoolDef(
-                "keep_metadata", default=True, label="Keep image metadata?"
-            ),
+            BoolDef("keep_metadata", default=True, label="Keep metadata?"),
             BoolDef(
                 "force_recook_on_publish",
                 default=False,
@@ -156,7 +157,7 @@ class ImageCreator(Creator):
             TextDef(
                 "file_prefix",
                 multiline=False,
-                default=self.default_img_name,
+                default=self.default_vid_name,
                 label="Extra prefix for file",
             ),
             BoolDef(
@@ -167,21 +168,20 @@ class ImageCreator(Creator):
             TextDef(
                 "unique_name",
                 multiline=False,
-                default=self.default_img_name,
+                default=self.default_vid_name,
                 label="Unique name included in saved file",
             ),
-            NumberDef(
-                "compress_level",
-                minimum=0,
-                maximum=9,
-                decimals=0,
-                default=4,
-                label="PNG Compression level",
+            EnumDef(
+                "fallback_format",
+                items=self.enum_fallback_format,
+                label="Fallback export format",
             ),
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator plugin for publishing ComfyUI images.
+        return """Creator plugin for ComfyUI 3D models.
 
-        Accepts batched images. These will all be loaded together too.
+        This model can take in Mesh and other types of 3D model
+        inputs. If it takes in a Mesh, it will be saved as either '.obj' or
+        '.glb', using the implementation of the nodes for Hunyuan3d (Tencent).
         """

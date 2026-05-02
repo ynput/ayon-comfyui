@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from ayon_comfyui.api.rpc_stub import RPCStub
@@ -9,30 +9,37 @@ if TYPE_CHECKING:
 
 from ayon_comfyui.api.pipeline import list_instances
 from ayon_comfyui.api.qt_rpc import QRPCManager
-from ayon_core.lib import BoolDef, NumberDef, TextDef
+from ayon_comfyui.api.rpc_stub import PublishType
+from ayon_core.lib import BoolDef, EnumDef, NumberDef, TextDef
 from ayon_core.pipeline import CreatedInstance, Creator, CreatorError
 from ayon_core.pipeline.create import PRODUCT_NAME_ALLOWED_SYMBOLS
 
 
-class ImageCreator(Creator):
-    """Creator for image(s) before publishing.
+class VideoCreator(Creator):
+    """Creator for video before publishing.
 
     On create, spawn a node that is to be associated with
     this publish.
     """
 
-    identifier = "image"
-    label = "AI Image"
-    product_type = "image"
-    product_base_type = "image"
-    description = "Image generated using ComfyUI"
+    identifier = "video"
+    label = "AI Video"
+    product_type = "video"
+    product_base_type = "video"
+    description = "Video generated using ComfyUI"
 
     default_variant = "Main"
-    default_img_name = "ayon"
+    default_vid_name = "ayon"
 
     icon = "gears"
 
     enabled = True
+
+    enum_output_format: ClassVar[dict] = {
+        "mp4/h264": "MP4 | H.264",
+        "webm/av1": "WEBM | AV1",
+        "webm/vp9": "WEBM | VP9",
+    }
 
     def create(  # noqa: D102
         self,
@@ -46,7 +53,9 @@ class ImageCreator(Creator):
         prefix: str = pre_create_data.get("file_prefix")
         use_unique_name: bool = pre_create_data.get("use_unique_name")
         unique_name: str = pre_create_data.get("unique_name")
-        compress_level: float = pre_create_data.get("compress_level")
+        formatcodec: str = pre_create_data.get("formatcodec")
+        webm_noaudio: bool = pre_create_data.get("webm_noaudio")
+        webm_crf: float = pre_create_data.get("webm_crf")
         force_recook: bool = pre_create_data.get("force_recook_on_publish")
 
         context: CreateContext = self.create_context
@@ -80,7 +89,9 @@ class ImageCreator(Creator):
             "use_unique_name": use_unique_name,
             "prefix": prefix,
             "unique_name": unique_name,
-            "compression_level": int(compress_level),
+            "formatcodec": formatcodec,
+            "webm_noaudio": webm_noaudio,
+            "webm_crf": int(webm_crf),
             "force_recook_on_publish": force_recook,
         }
         data.update(
@@ -111,7 +122,9 @@ class ImageCreator(Creator):
         )
 
         self._add_instance_to_context(new_instance)
-        stub.create_publish_node(new_instance.data_to_store())
+        stub.create_publish_node(
+            new_instance.data_to_store(), PublishType.VIDEO
+        )
         stub.update_instance(new_instance.data_to_store())
 
     def collect_instances(self):
@@ -135,19 +148,14 @@ class ImageCreator(Creator):
 
     def remove_instances(self, instances: list[CreatedInstance]):
         stub: RPCStub = QRPCManager.get_instance().stub
-        stub.remove_publish_nodes([i.data_to_store() for i in instances])
+        stub.remove_publish_nodes(
+            [i.data_to_store() for i in instances], PublishType.VIDEO
+        )
         stub.remove_instance(instances)
 
     def get_pre_create_attr_defs(self):
-        # NOTE: I do not know if it's possible to
-        # force image meta data behavior from here.
-        # NOTE: I actually do know. We force the entire instance dict into
-        # a json, and then either apply or don't apply the image metadata
-        # like ComfyUI does inside the node.
         return [
-            BoolDef(
-                "keep_metadata", default=True, label="Keep image metadata?"
-            ),
+            BoolDef("keep_metadata", default=True, label="Keep metadata?"),
             BoolDef(
                 "force_recook_on_publish",
                 default=False,
@@ -156,7 +164,7 @@ class ImageCreator(Creator):
             TextDef(
                 "file_prefix",
                 multiline=False,
-                default=self.default_img_name,
+                default=self.default_vid_name,
                 label="Extra prefix for file",
             ),
             BoolDef(
@@ -167,21 +175,30 @@ class ImageCreator(Creator):
             TextDef(
                 "unique_name",
                 multiline=False,
-                default=self.default_img_name,
+                default=self.default_vid_name,
                 label="Unique name included in saved file",
             ),
+            EnumDef(
+                "formatcodec",
+                items=self.enum_output_format,
+                label="Output Format | Codec",
+            ),
+            BoolDef("webm_noaudio", default=False, label="WebM omit audio?"),
             NumberDef(
-                "compress_level",
+                "webm_crf",
                 minimum=0,
-                maximum=9,
+                maximum=63,
                 decimals=0,
-                default=4,
-                label="PNG Compression level",
+                default=32,
+                label="WebM Compression (FFMPEG CRF)",
             ),
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator plugin for publishing ComfyUI images.
+        return """Creator plugin for publishing ComfyUI videos.
 
-        Accepts batched images. These will all be loaded together too.
+        Use the "Create Video" builtin node to construct a video first.
+        WebM is a bit experimental but supports audio using OPUS.
+
+        Audio is automatically resampled to conform to OPUS' standard.
         """

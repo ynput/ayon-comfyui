@@ -15,12 +15,15 @@ import traceback
 from pathlib import Path
 from textwrap import dedent
 from threading import Thread
-from traceback import format_tb
+from typing import TYPE_CHECKING
 
 from ayon_core.lib import env_value_to_bool
 from ayon_core.pipeline import get_current_project_name, install_host
 from ayon_core.tools.utils import get_ayon_qt_app
 from ayon_core.tools.utils.dialogs import show_message_dialog
+
+if TYPE_CHECKING:
+    from qtpy.QtWidgets import QApplication
 
 from ayon_comfyui.api.connection_util import defer_site_launch_when_available
 from ayon_comfyui.api.consts import LOG_LEVEL
@@ -31,11 +34,16 @@ from ayon_comfyui.api.deduce_python import (
     venv_get_python,
 )
 from ayon_comfyui.api.profile_selector import (
-    LocalProfileDialog,
-    RemoteProfileDialog,
+    ProfileDialog,
+    ProfileTypeEnum,
 )
 from ayon_comfyui.api.qt_rpc import QRPCManager
-from ayon_comfyui.parse_settings import ComfyLocalSettings, ComfyRemoteSettings
+from ayon_comfyui.api.result import safe_partial
+from ayon_comfyui.api.rpc_server import get_client_from_origin
+from ayon_comfyui.settings_util import (
+    ComfyLocalSettings,
+    ComfyRemoteSettings,
+)
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
@@ -48,45 +56,26 @@ def safe_excepthook(*args):  # noqa: ANN201, ANN002, D103
 def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
     """Adjust settings for comfyui plugin."""
     settings, _ = ComfyLocalSettings.pull_committed_settings()
-
-    # javascript = f'export const AYON_WEBUI_PORT = "{settings.port_webui}";'
     python = f"AYON_BACKEND_PORT = {settings.port_backend}"
-
     py_file = plugin_path / "ayon_menu" / "consts.py"
-    # js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
 
-    # TODO: We really shouldn't be updating files inside the packaged plugin,
-    #  but for now this is the easiest way to get the settings in there
-    #  without having to do some sort of IPC or environment variable passing
-    #  to comfyUI, which would be more robust but also more work to implement.
-    #
-    #  DONE: inject info about ports through live HTML templating instead
-    #        of JS files.
-    #
-    # COMMENT FROM(@sas): The design philosophy of ComfyUI is very much against
-    #  using environment variables. An important thing to note too, is that
-    #  while an environment variable is easily gotten in python, it's harder to
-    #  do for JS. We also cannot make an environment variable easily accessible
-    #  to JS through python.
-    #  Writing out a file is a valid form of IPC.
-    #  If we still wish to stray
+    # update python consts plugin with port to use.
+    # IPC using the proc Popen is not very wise,
+    # since we can't reliably get a hold of the entire process tree
+    # We communicate with the JS side by templating HTML,
 
     Path(py_file).write_text(python, encoding="utf-8")
 
-    # Path(js_file).write_text(javascript, encoding="utf-8")
-
 
 def _subproc_launch_ComfyUI() -> subprocess.Popen:
-    """Launch local profile."""
+    """Launch local profile.
+
+    Returns:
+        Popen ComfyUI subprocess.
+    """
     settings, profile = ComfyLocalSettings.pull_committed_settings()
 
     # CHECK IF WINDOWS PORTABLE TO TARGET THE RIGHT PYTHON PATH
-    # TODO(@sas): maybe allow for launch using ayon_console.
-    # This would suck, though.
-    # The better solution would be to understand which python is present
-    # by subprocessing launching "python" / "python3" and then doing
-    # sys.executable() to get the path
-    # if nothing works, quit while we are ahead
 
     pythonpath = deduce_default_python_executable()
 
@@ -100,9 +89,8 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
             Path(profile.base_folder).parent / "python_embeded" / "python.exe"
         )
 
-    # TEST IMPLEMENTATION OF:
-    # TODO(@sas): add an option for
-    # letting the user manage a python environment themselves
+    # let the user manage a python environment themselves
+    # TODO(@sas): Look into astral uv as an alternative.
 
     if profile.using_managed_venv and not (
         profile.is_windows_portable and profile.current_os == "Windows"
@@ -191,19 +179,7 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         *profile.launch_args,
     ]
 
-    # 8 space | 2 tabs indent to sit below custom nodes
-    path_indent = " " * 8
-
-    # simulate paths comin in from settings
-    # paths = [R"C:\Users\sas.vangulik\Documents\comfy_nodes_ayon"]
-    paths = profile.extra_node_dirs or []
-
-    # TODO(@Sas): Adress following
-    # There needs to be a setting for this so we can point to
-    # a development folder
-    include_content = not profile.omit_packaged_plugin
-
-    if include_content:
+    if not profile.omit_packaged_plugin:
         import ayon_comfyui as comfy_plugin
 
         comfy_plugin_path = (
@@ -212,17 +188,14 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         # inject settings
         adjust_consts_comfyui_plugin(comfy_plugin_path)
 
-        paths.append(str(comfy_plugin_path))
-
-    paths = ["\n" + path_indent + p.replace("\\", "/") for p in paths]
-
-    yaml_folder = profile.base_folder.replace("\\", "/")
+    yaml_folder = Path(profile.base_folder).as_posix()
     yaml = dedent(f"""
             ayon_config:
                 base_path: "{yaml_folder}"
-                custom_nodes: |""")
+            """)
 
-    yaml += "".join(paths)
+    # Construct yaml within profile.
+    yaml += profile.get_customfolders_yaml
 
     proc = None
     # Generate temporary file,
@@ -261,21 +234,23 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     )
 
     # time buffer closing of tempfile, allowing it to be read by comfyUI
-    buffer_time = 20
+    buffer_time = 20.0
 
-    def _defer_delete_tmp(path: str, hold_time: float) -> None:
+    def _defer_delete_tmp(*, path: str = "", hold_time: float = 10.0) -> None:
         time.sleep(hold_time)
         os.remove(path)
 
     Thread(
-        target=_defer_delete_tmp, args={tmp_path, buffer_time}, daemon=True
+        target=_defer_delete_tmp,
+        kwargs={"path": tmp_path, "hold_time": buffer_time},
+        daemon=True,
     ).start()
 
     return proc
 
 
-def main_local(*subproc_args):
-    """Local launch."""
+def main(*args):
+    """Main designed to accomodate both local and remote launch profiles."""
     sys.excepthook = safe_excepthook
 
     from ayon_comfyui.api import ComfyUIHost
@@ -290,73 +265,64 @@ def main_local(*subproc_args):
 
     log.info("got QT app")
 
-    env_workfiles_on_launch = os.getenv(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1"
-    )
-    workfiles_on_launch = env_value_to_bool(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
-        value=env_workfiles_on_launch,
-        default=True,
-    )
-
     try:
         project_name = get_current_project_name() or None
 
-        settings = ComfyLocalSettings(project_name=project_name)
+        profile_selector = ProfileDialog()
+        # initialize local/remote settings
+        profile_selector.populate_list(project_name)
 
-        profile_selector = LocalProfileDialog()
-        # ensure project specific settings
-        profile_selector.populate_list(settings)
-
-        # block and get profile first.
-        # Profile will also commit results to
         profile_selector.exec()
+    except BaseException:  # noqa: BLE001
+        log.debug("Error during profile dialog", exc_info=True)
 
-        profile = profile_selector.profile
-    except BaseException as e:
-        log.debug(
-            "".join(
-                [
-                    "error during profile dialog ",
-                    e,
-                    "\n",
-                    "\n".join(format_tb(e.__traceback__)),
-                ]
-            )
-        )
-
-    # sys.excepthook = safe_excepthook
-
-    if not profile:
+    if (res := profile_selector.dialog_result) == ProfileTypeEnum.UNDECIDED:
         show_message_dialog(
             title="No profile selected!",
             message="You have not selected a profile.\nClosing...",
             level="warning",
         )
         sys.exit(0)
+    elif res == ProfileTypeEnum.LOCAL:
+        settings, profile = (
+            profile_selector.settings_local.pull_committed_settings()
+        )
+        launch_local(app, settings, profile)
+    elif res == ProfileTypeEnum.REMOTE:
+        settings, profile = (
+            profile_selector.settings_remote.pull_committed_settings()
+        )
+        launch_remote(app, settings, profile)
 
-    # Currently Unused
-    log.info(f"Workfiles on launch: {workfiles_on_launch}")  # noqa:G004
+    # Launch Qt Thread
+    log.info("Launching qt thread")
 
+    try:
+        ret = app.exec_()
+    except BaseException:  # noqa: BLE001
+        log.debug("Problems keeping thread alive", exc_info=True)
+
+    # terminate connection after Qt Thread.
+    # This can hang, use os._exit to kill it. We already cleaned up properly
+    # in qrpcman
+
+    # sys.exit(ret)
+    os._exit(ret)
+
+
+def launch_local(
+    app: QApplication,
+    settings: ComfyLocalSettings,
+    profile: ComfyLocalSettings.ComfyLocalProfile,
+) -> None:
+    """Launch ComfyUI as a subprocess."""
     process = None
 
     try:
         # Launch comfyUI
         process = _subproc_launch_ComfyUI()
-    except BaseException as e:
-        log.debug("Problems launching ComfyUI")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-    # Somehow wrap a connection here.
-
-    if workfiles_on_launch:
-        pass
-        # Crashes.
-        # rpc.show_tool_by_name("workfiles", save=False)
-        # log.info("Showed workfiles")
-
-    # Launch ComfyUI if the connection isn't external.
-
-    # ComfyUI launch procedure
+    except BaseException:  # noqa: BLE001
+        log.debug("Problems launching ComfyUI:", exc_info=True)
 
     log.info("Creating QRPCmanager")
 
@@ -380,94 +346,34 @@ def main_local(*subproc_args):
         log.info("Created rpc manager")
         rpcman.start_server()
         log.info("called start_server")
-    except BaseException as e:
-        log.debug("Problems starting server")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-    # Launch Qt Thread
-    log.info("launching qt thread")
 
-    try:
-        ret = app.exec_()
-    except BaseException as e:
-        log.debug("Problems keeping thread alive")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-    # terminate connection after Qt Thread.
+        workfile_path = os.getenv("AYON_LAST_WORKFILE")
+        if workfile_path and env_value_to_bool("AVALON_OPEN_LAST_WORKFILE"):
+            origin = settings.address_frontend
+            log.info(f"Scheduling launch workfile load: {workfile_path}")
 
-    sys.exit(ret)
+            def _load_workfile_when_ready() -> None:
+                while not get_client_from_origin(origin):
+                    time.sleep(0.5)
+
+                safe_load = safe_partial(rpcman.stub.load_workfile, workfile_path)
+
+                retries = 30
+                while safe_load().is_err and retries > 0:
+                    retries -= 1
+                    time.sleep(0.5)
+
+            Thread(target=_load_workfile_when_ready, daemon=True).start()
+    except BaseException:  # noqa: BLE001
+        log.debug("Problems starting server:", exc_info=True)
 
 
-def main_remote(*subproc_args):
-    """Remote Launch."""
-    sys.excepthook = safe_excepthook
-
-    from ayon_comfyui.api import ComfyUIHost
-
-    host = ComfyUIHost()
-    install_host(host)
-
-    log.info("Installed host")
-
-    app = get_ayon_qt_app()
-    app.setQuitOnLastWindowClosed(False)
-
-    log.info("got QT app")
-
-    env_workfiles_on_launch = os.getenv(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH", "1"
-    )
-    workfiles_on_launch = env_value_to_bool(
-        "AYON_COMFYUI_WORKFILES_ON_LAUNCH",
-        value=env_workfiles_on_launch,
-        default=True,
-    )
-
-    try:
-        project_name = get_current_project_name() or None
-
-        settings = ComfyRemoteSettings(project_name=project_name)
-
-        profile_selector = RemoteProfileDialog()
-        # ensure project specific settings
-        profile_selector.populate_list(settings)
-
-        # block and get profile first.
-        # Profile will also commit results to
-        profile_selector.exec()
-
-        profile = profile_selector.profile
-    except BaseException as e:
-        log.debug(
-            "".join(
-                [
-                    "error during profile dialog ",
-                    e,
-                    "\n",
-                    "\n".join(format_tb(e.__traceback__)),
-                ]
-            )
-        )
-
-    if not profile:
-        show_message_dialog(
-            title="No profile selected!",
-            message="You have not selected a profile.\nClosing...",
-            level="warning",
-        )
-        sys.exit(0)
-
-    # Currently Unused
-    log.info(f"Workfiles on launch: {workfiles_on_launch}")  # noqa:G004
-
-    if workfiles_on_launch:
-        pass
-        # Crashes.
-        # rpc.show_tool_by_name("workfiles", save=False)
-        # log.info("Showed workfiles")
-
-    # Launch ComfyUI if the connection isn't external.
-
-    # ComfyUI launch procedure
-
+def launch_remote(
+    app: QApplication,
+    settings: ComfyRemoteSettings,  # noqa: ARG001
+    profile: ComfyRemoteSettings.ComfyRemoteProfile,
+) -> None:
+    """Launch browser."""
     log.info("Creating QRPCmanager")
 
     try:
@@ -488,18 +394,6 @@ def main_remote(*subproc_args):
 
         log.info("Created rpc manager")
         rpcman.start_server()
-        log.info("called start_server")
-    except BaseException as e:
-        log.debug("Problems starting server")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-    # Launch Qt Thread
-    log.info("launching qt thread")
-
-    try:
-        ret = app.exec_()
-    except BaseException as e:
-        log.debug("Problems keeping thread alive")
-        log.debug("\n".join(format_tb(e.__traceback__)))
-
-    # terminate connection after Qt Thread.
-    sys.exit(ret)
+        log.info("Called start_server")
+    except BaseException:  # noqa: BLE001
+        log.debug("Problems starting server", exc_info=True)

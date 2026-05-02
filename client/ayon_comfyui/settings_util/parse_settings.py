@@ -8,6 +8,14 @@ from urllib.parse import ParseResult, urlparse
 
 from ayon_core.settings import get_project_settings, get_studio_settings
 
+from ayon_comfyui.api.connection_util import (
+    poll_site_availability_timeout,
+    poll_site_headers,
+)
+from ayon_comfyui.settings_util import ComfyUICustomDirectories
+
+from .template_helper import template_wrap
+
 DEFAULT_T = TypeVar("DEFAULT_T")
 
 
@@ -22,11 +30,30 @@ class ComfyLocalSettings:
 
         def __init__(self, profile_dict: dict[str, str]) -> None:
             """Initialize config helper class."""
-            self._name = profile_dict.get("comfy_setting_name")
+            self._name = profile_dict.get("name")
             os_map = {"win32": "win", "linux": "lin", "darwin": "osx"}
             self._os = os_map.get(sys.platform, "lin")
 
             self._profile_dict: dict[str, str] = profile_dict
+
+            custom_dir_list: list[dict] = (
+                self._get_launch_profile_bare_setting("extra_dirs")
+            )
+
+            self._custom_directories = [
+                ComfyUICustomDirectories(dir_dict, self._os)
+                for dir_dict in custom_dir_list
+            ]
+
+            # filter for enabled entries
+            self._custom_directories = [
+                dir_ for dir_ in self._custom_directories if dir_.is_enabled
+            ]
+
+            if not self.omit_packaged_plugin:
+                self._custom_directories.append(
+                    ComfyUICustomDirectories.create_default_customnodes_profile()
+                )
 
         def _get_platform_profile_setting(
             self, base_key: str
@@ -65,6 +92,19 @@ class ComfyLocalSettings:
                 "launch_profile"
             )
             return launch_profile.get(f"{base_key}_{self._os}")
+
+        def _get_launch_profile_bare_setting(
+            self, base_key: str
+        ) -> str | dict | list | None:
+            """Used in properties to fetch the right value.
+
+            Returns:
+            Value expected from key
+            """
+            launch_profile: dict[str, str] = self._profile_dict.get(
+                "launch_profile"
+            )
+            return launch_profile.get(base_key)
 
         def _get_launch_profile_setting_path(
             self, base_key: str
@@ -118,6 +158,7 @@ class ComfyLocalSettings:
             return self._name
 
         @property
+        @template_wrap
         def base_folder(self) -> str:
             """Gets base folder where ComfyUI is stored."""
             return self._get_platform_profile_setting_path("comfy_base_folder")
@@ -143,6 +184,7 @@ class ComfyLocalSettings:
             return self._profile_dict.get("python_use_managed_venv")
 
         @property
+        @template_wrap
         def custom_python_path(self) -> str | None:
             """Return path to python if a custom."""
             if self.using_custom_python:
@@ -150,10 +192,10 @@ class ComfyLocalSettings:
             return None
 
         @property
-        def extra_node_dirs(self) -> list[str]:
-            """Return paths to extra nodes."""
-            return self._get_launch_profile_setting_path(
-                "extra_custom_node_dirs"
+        def get_customfolders_yaml(self) -> str:
+            """Return indented YAML component of custom folders."""
+            return ComfyUICustomDirectories.generate_yaml(
+                self._custom_directories
             )
 
         @property
@@ -209,6 +251,17 @@ class ComfyLocalSettings:
             old_os = self._os
             self._os = os_name
 
+            profiles_os = [
+                ComfyUICustomDirectories(
+                    custom_dir._directory_settings,  # noqa : SLF001
+                    os_name,
+                )
+                for custom_dir in self._custom_directories
+            ]
+            profiles_dict = ComfyUICustomDirectories.collect_as_dict(
+                profiles_os
+            )
+
             # Run tests
             errors = []
             logs = []
@@ -226,7 +279,10 @@ class ComfyLocalSettings:
                     f"{self.name} | {os_name}: is missing custom "
                     "python path with 'use custom python' specified"
                 )
-            if not self.extra_node_dirs and self.omit_packaged_plugin:
+            if (
+                profiles_dict.get("custom_nodes") is None
+                and self.omit_packaged_plugin
+            ):
                 logs.append(
                     f"{self.name} | {os_name}: is missing extra node"
                     " directory in dev mode. Ayon plugin may be missing."
@@ -376,8 +432,98 @@ class ComfyRemoteSettings:
 
         def __init__(self, profile_dict: dict[str, str]) -> None:
             """Initialize config helper class."""
-            self._name = profile_dict.get("comfy_setting_name")
+            self._name = profile_dict.get("name")
             self._profile_dict: dict[str, str] = profile_dict
+
+            self._is_valid = None
+            self._cached_validation = {"errors": [], "logs": []}
+
+        def validate_profile(
+            self, *, rerun: bool = False
+        ) -> dict[str, list[str]]:
+            """Validate this profile and report back.
+
+            Only run on demand, since this tries connecting to sites.
+
+            Returns:
+                A dict with errors and (benign) logs:
+                {
+                    "errors" : [...],
+                    "logs"   : [...],
+                }
+            """
+            if self._is_valid is not None and not rerun:
+                return self._cached_validation
+
+            errors = []
+            logs = []
+
+            if not self.name:
+                errors.append(
+                    f"{self.name} | Remote: ill formed name for profile"
+                    " (must have contents)"
+                )
+
+            is_available = poll_site_availability_timeout(
+                self.comfy_url, timeout=1
+            )
+
+            static_origin = f"http://localhost:{self.port_static_frontend}"
+
+            if is_available:
+                logs.append(
+                    f"{self.name} | Remote: site {self.comfy_url}"
+                    " is reachable!"
+                )
+                headers = poll_site_headers(self.comfy_url)
+                if "X-Frame-Options" in headers:
+                    errors.append(
+                        f"{self.name} | Remote: X-Frame-Options header set!"
+                        " This likely causes ComfyUI not to embed properly."
+                    )
+
+                    xframeopts = headers.get("X-Frame-Options")
+                    possible_working_xframeopts = f"ALLOW-FROM {static_origin}"
+                    if xframeopts != possible_working_xframeopts:
+                        errors.append(
+                            f"{self.name} | Remote: X-Frame -Options header: "
+                            f"'{xframeopts}' will not work."
+                        )
+                    else:
+                        logs.append(
+                            f"{self.name} | Remote: there is a small chance "
+                            f"X-Frame-Options: {possible_working_xframeopts} "
+                            "could still allow the plugin to function."
+                        )
+
+                if "Content-Security-Policy" in headers:
+                    csp = headers.get("Content-Security-Policy")
+                    ideal_csps = {
+                        "frame-ancestors *",
+                        f"frame-ancestors {static_origin}",
+                    }
+
+                    if csp in ideal_csps:
+                        logs.append(
+                            f"{self.name} | Remote: Content-Security-Policy "
+                            f"header present, but value '{csp}' should work."
+                        )
+                    else:
+                        errors.append(
+                            f"{self.name} | Remote: Content-Security-Policy "
+                            f"header present, with a value of {csp}. "
+                            "This makes embedding likely impossible."
+                        )
+            else:
+                errors.append(
+                    f"{self.name} | Remote: site {self.comfy_url} is "
+                    "unreachable. Couldn't connect."
+                )
+
+            self._is_valid = not bool(errors)
+            self._cached_validation = {"errors": errors, "logs": logs}
+
+            return self._cached_validation
 
         @property
         def name(self) -> str:
@@ -433,8 +579,9 @@ class ComfyRemoteSettings:
         @property
         def netloc_backend(self) -> str:
             """Return netloc of webui."""
+            url_comfy = urlparse(self.comfy_url)
             url = ComfyRemoteSettings.url_specify_port(
-                self.comfy_url, self.port_backend
+                url_comfy, self.port_backend
             )
             return urlparse(url).netloc
 
@@ -442,6 +589,11 @@ class ComfyRemoteSettings:
         def open_browser(self) -> bool:
             """Whether to open browser."""
             return self._profile_dict.get("open_browser_on_connect")
+
+        @property
+        def is_valid(self) -> bool:
+            """Returns whether profile is bad."""
+            return not bool(self.validate_profile().get("errors"))
 
     def __init__(self, project_name: str | None):
         """Initialize settings for local launch."""
@@ -477,7 +629,7 @@ class ComfyRemoteSettings:
             netloc = f"{netloc.split(':')[0]}:{port}"
         else:
             netloc += f":{port}"
-        return parsed_url._replace(netloc=netloc)
+        return parsed_url._replace(netloc=netloc).geturl()
 
     @property
     def profiles(self) -> list[str]:
@@ -547,21 +699,29 @@ class ComfyCommittedSettings:
 
     _settings: ClassVar[ComfyLocalSettings | ComfyRemoteSettings] = None
     _config: ClassVar[
-        ComfyLocalSettings.ComfyLocalProfile | ComfyRemoteSettings
+        ComfyLocalSettings.ComfyLocalProfile
+        | ComfyRemoteSettings.ComfyRemoteProfile
     ] = None
 
     @classmethod
     def commit(
         cls,
-        settings: ComfyLocalSettings,
-        config: ComfyLocalSettings.ComfyLocalProfile,
+        settings: ComfyLocalSettings | ComfyRemoteSettings,
+        config: ComfyLocalSettings.ComfyLocalProfile
+        | ComfyRemoteSettings.ComfyRemoteProfile,
     ) -> None:
         """Commit settings and configuration to memory."""
         if cls._settings is not None or cls._config is not None:
             # Maybe raise an error but I am not a fan...
             return
-        if isinstance(settings, ComfyLocalSettings) and isinstance(
-            config, ComfyLocalSettings.ComfyLocalProfile
+        if isinstance(
+            settings, (ComfyLocalSettings, ComfyRemoteSettings)
+        ) and isinstance(
+            config,
+            (
+                ComfyLocalSettings.ComfyLocalProfile,
+                ComfyRemoteSettings.ComfyRemoteProfile,
+            ),
         ):
             cls._settings = settings
             cls._config = config
@@ -569,7 +729,10 @@ class ComfyCommittedSettings:
     @classmethod
     def pull(
         cls,
-    ) -> tuple[ComfyLocalSettings, ComfyLocalSettings.ComfyLocalProfile]:
+    ) -> (
+        tuple[ComfyLocalSettings, ComfyLocalSettings.ComfyLocalProfile]
+        | tuple[ComfyRemoteSettings, ComfyRemoteSettings.ComfyRemoteProfile]
+    ):
         """Returns class level stored settings and configuration.
 
         ```

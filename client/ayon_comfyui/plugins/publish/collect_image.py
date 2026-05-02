@@ -33,9 +33,7 @@ class CollectImage(pyblish.api.InstancePlugin):
         ext = ".png"
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = get_instance_staging_dir(instance)
-        self.log.info(f"Outputting image to {staging_dir}")
-
-        # http://127.0.0.1:8188/api/view?filename=Big_Slop_0001.png&subfolder=AYON/Big_Slop_imageMain&type=output
+        self.log.info("Outputting image to %s", staging_dir)
 
         files = []
 
@@ -76,3 +74,20 @@ class CollectImage(pyblish.api.InstancePlugin):
                 "stagingDir": staging_dir,
             }
         )
+
+        # Maybe use PIL to generate a tiled image
+
+        thumbnail_img = files
+        if isinstance(thumbnail_img, list):
+            thumbnail_img = thumbnail_img[0]
+
+        # Thumbnail
+        thumbnail = {
+            "name": "thumbnail",
+            "ext": ext[1:],
+            "files": thumbnail_img,
+            "stagingDir": staging_dir,
+            "tags": ["thumbnail"],
+        }
+
+        instance.data["representations"].append(thumbnail)

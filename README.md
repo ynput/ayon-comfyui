@@ -1,13 +1,18 @@
 # ComfyUI addon
 ComfyUI integration for AYON.
 
-For environment, set:
-```json
-{
-"COMFY_IS_REMOTE" : "No",
-}
-```
-To make sure to launch locally in applications.
+Setup Guide: [Read about setting up the plugin here!](./documentation/setup_guide.md)
+
+#### Migrating settings to ayon_comfyui 0.19+ from earlier.
+Tooling is included in `additional_tooling/migrate_json.py`<br>
+Save your data from AYON with the low level settings editor, e.g. <br>
+in Studio Settings / Project settings -> Addons -> ComfyUI (right click) -> `Low-level editor` -> Copy
+
+Then save the contents to a json file.
+
+Then run `python additional_tooling/migration_json.py "path/to/json/ayon_comfyui_settings.json"`<br>
+The console will then fix it for you, and display: `Migrated settings here: path/to/json/ayon_comfyui_settings_migrated.json`,<br>
+which you can then copy into the low level editor once more.
 
 #### A note on https:
 The planned control flow is as follows:

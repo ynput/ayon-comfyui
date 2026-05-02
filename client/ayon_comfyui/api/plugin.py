@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import ayon_api
-from ayon_core.pipeline import AutoCreator, CreatedInstance
+from ayon_core.pipeline import AutoCreator, CreatedInstance, LoaderPlugin
 
 if TYPE_CHECKING:
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.pipeline import list_instances
-from ayon_comfyui.api.qt_rpc import QRPCManager
+from ayon_comfyui.api.qt_rpc import QRPCManager, RPCStub
 
 
 # Adapting from Photoshop
@@ -119,3 +119,20 @@ class ComfyUIAutoCreator(AutoCreator):
             existing_instance["task"] = task_name
             existing_instance["productName"] = product_name
             existing_instance["projectName"] = project_name
+
+
+class ComfyUILoader(LoaderPlugin):
+    """Base for loader plugins."""
+
+    hosts: ClassVar[list[str]] = ["comfyui"]
+    settings_category = "comfyui"
+
+    @property
+    def stub(self) -> RPCStub:
+        """Return stub stored on QRPCManager."""
+        return QRPCManager.get_instance().stub
+
+    @property
+    def comfy_url(self) -> RPCStub:
+        """Return url stored on QRPCManager."""
+        return QRPCManager.get_instance().comfy_url

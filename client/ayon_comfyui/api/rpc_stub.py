@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -12,8 +13,10 @@ if TYPE_CHECKING:
 import json
 from pathlib import Path
 
+from ayon_core.pipeline import get_current_context
+
 from ayon_comfyui.api.consts import LOG_LEVEL
-from ayon_comfyui.api.rpc_server_iframe import (
+from ayon_comfyui.api.rpc_server import (
     call_on_origin,
     get_client_from_origin,
     pull_origin_from_settings,
@@ -21,6 +24,23 @@ from ayon_comfyui.api.rpc_server_iframe import (
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
+
+
+# Enum types for types of publish/load nodes.
+class PublishType(Enum):
+    """Correspond to custom AYON node IDs."""
+
+    IMAGE = "AYON Image Save"
+    VIDEO = "AYON Video Save"
+    MODEL3D = "AYON 3D Model Save"
+
+
+class LoadType(Enum):
+    """Corresponds to custom AYON image loader nodes."""
+
+    IMAGE = "AYON Load Image"
+    VIDEO = "AYON Load Video"
+    MODEL3D = "AYON Load 3D Model"
 
 
 # STUB TO CONTAIN CLIENT CONNECTION GOTTEN FROM SERVER
@@ -50,7 +70,7 @@ class RPCClientStub:
         return get_client_from_origin(self.origin)
 
     @call_on_origin()
-    def getPublishNodes(self):  # noqa: N802, ANN201
+    def getPublishNodes(self, node_type: str):  # noqa: N802, ANN201
         """Call getPublishNodes."""
 
     # def do_update_publishnodes(self) -> None: # Never used
@@ -60,7 +80,7 @@ class RPCClientStub:
         """Call getWorkfile."""
 
     @call_on_origin()
-    def loadWorkfile(self, *, workfile_json: str):  # noqa: N802, ANN201
+    def loadWorkfile(self, *, workfile_json: str, workfile_name: str):  # noqa: N802, ANN201
         """Call loadWorkfile."""
 
     def do_load_workfile(self, workfile_path: str | None = None) -> None:
@@ -68,8 +88,12 @@ class RPCClientStub:
         if not workfile_path:
             return
 
-        workfile_json = Path(workfile_path).read_text(encoding="utf-8")
-        self.loadWorkfile(workfile_json=workfile_json)
+        workfile_json = (workfile := Path(workfile_path)).read_text(
+            encoding="utf-8"
+        )
+        self.loadWorkfile(
+            workfile_json=workfile_json, workfile_name=workfile.name
+        )
 
     @call_on_origin()
     def getImprintContext(self) -> str:  # noqa: N802
@@ -156,19 +180,71 @@ class RPCClientStub:
 
         return None
 
+    def do_containers_imprint(self, imprint_info: str = "[]") -> bool:
+        """Updates (replaces) "containers" field of context node.
+
+        Returns:
+            True/False based on whether operation was succesful
+        """
+        # Massage info to fit into a scheme
+        # {
+        #   "context" : {**context_imprint_info},
+        #   "instances": [
+        #       {
+        #           "id" : ...,
+        #           "images": ...,
+        #       },
+        #   ],
+        #   "containers": [
+        #       {
+        #        "id": ...,
+        #        "name": ...,
+        #       },
+        #   ],
+        # }
+
+        # retrieve and set the context.
+        existing_context = self.getImprintContext()
+
+        # ensure valid context
+        if existing_context is not None and existing_context:
+            existing_context = json.loads(existing_context)
+        else:
+            existing_context = {}
+
+        existing_context = self._ensure_wellformed_context(existing_context)
+
+        log.info("updating info")
+        # update context by overwriting
+        existing_context["containers"] = json.loads(imprint_info)
+
+        log.info("imprinting containers")
+        result = self.setImprintContext(
+            imprint_info=json.dumps(existing_context),
+        )
+
+        if result:
+            return result
+
+        return None
+
     @call_on_origin()
-    def addPublishNode(self, *, instance_json: str):  # noqa: N802, ANN201
+    def addPublishNode(self, *, instance_json: str, node_type: str):  # noqa: N802, ANN201
         """Call addPublishNode."""
 
-    async def do_publishnode_create(self, instance_json: str) -> None:
-        """Helper for creator to create a Ayon Image Save node.
+    async def do_publishnode_create(
+        self, instance_json: str, node_type: PublishType = PublishType.IMAGE
+    ) -> None:
+        """Helper for creator to create a Ayon [Type] Save node.
 
         TODO(@sas): just call addPublishnode directly.
         """
-        self.addPublishNode(instance_json=instance_json)
+        self.addPublishNode(
+            instance_json=instance_json, node_type=node_type.value
+        )
 
     @call_on_origin()
-    def removePublishNodes(self, *, ids_to_remove: str) -> str:  # noqa: N802
+    def removePublishNodes(self, *, ids_to_remove: str, node_type: str) -> str:  # noqa: N802
         """Call removePublishNodes.
 
         ids_to_remove has to contain a json list of instance ids associated
@@ -177,8 +253,10 @@ class RPCClientStub:
         Returns a string json representation of instances that were removed.
         """
 
-    @call_on_origin()
-    def getPublishNodeImages(self, *, id_for_images: str) -> str:  # noqa: N802
+    @call_on_origin(wait_forever=True)
+    def getPublishNodeImages(  # noqa: N802
+        self, *, id_for_images: str, node_type: str
+    ) -> str:
         """Call getPublishNodeImages.
 
         id_for_images has to contain a single instance ids associated with
@@ -186,18 +264,57 @@ class RPCClientStub:
 
         Returns a string json representation of a list of image locations
         on network.
+
+        Waits until graph has finished cooking.
         """
 
-    def do_get_publishnode_images(self, publish_instance: str) -> str:
-        """Retrieve images from a node.
+    @call_on_origin()
+    def addLoadProductNode(  # noqa: N802
+        self, *, container_json: str, node_type: str
+    ) -> None:
+        """Call addLoadProductNode.
+
+        container_json has to contain a single image container dict serialized
+        as json. This will be imprinted on the node.
+        Make sure to upload the image before uploading.
+        """
+
+    @call_on_origin()
+    def removeLoadProductNodes(  # noqa: N802
+        self, *, ids_to_remove: str, node_type: str
+    ) -> None:
+        """Call removeLoadProductNodes.
+
+        ids_to_remove has to contain a json list of container uuids associated
+        with containers to remove.
+
+        Returns a string json representation of containers that were removed.
+        """
+
+    @call_on_origin()
+    def updateLoadProductNode(  # noqa: N802
+        self, *, container_json: str, node_type: str
+    ) -> None:
+        """Call updateLoadProductNode.
+
+        Uses the container_json container_uuid
+        to match nodes present in the scene.
+        """
+
+    def do_get_publishnode_images(
+        self, publish_instance: str, node_type: PublishType = PublishType.IMAGE
+    ) -> str:
+        """Retrieve images field from a node.
 
         Returns:
-            string JSON list representation of links to images.
+            string JSON list representation of links to output product type.
         """
         instance = json.loads(publish_instance)
         id_ = instance["instance_id"]
 
-        result = self.getPublishNodeImages(id_for_images=id_)
+        result = self.getPublishNodeImages(
+            id_for_images=id_, node_type=node_type.value
+        )
 
         if result:
             return result
@@ -240,10 +357,13 @@ class RPCClientStub:
         if context.get("instances") is None:
             context["instances"] = []
 
+        if context.get("containers") is None:
+            context["containers"] = []
+
         return context
 
 
-class RPCStub:
+class RPCStub:  # noqa : PLR0904
     """Wrapper to expose client functionality.
 
     Exposes client calls in a sane way to the plugin.
@@ -282,6 +402,14 @@ class RPCStub:
         log.info("_load_context (full context)")
         context_json_raw = self.client_stub.do_context_retrieve()
 
+        # Fallback if context doesn't exist, imprint it.
+        # Sometimes, an attempt is made to load the context before
+        # imprinting it. (e.g. Loader plugin)
+        if not context_json_raw:
+            context = get_current_context()
+            self.imprint_context(context)
+            context_json_raw = self.client_stub.do_context_retrieve()
+
         log.info(context_json_raw)
         return (
             json.loads(context_json_raw)
@@ -313,12 +441,30 @@ class RPCStub:
             return context_json_raw["instances"]
         return None
 
+    def list_containers(self) -> list[MutableMapping] | None:
+        """Query load context.
+
+        Returns:
+            list[dict]; 'containers' part of imprintent context
+        """
+        context_json_raw = self._load_context()
+        log.info("list containers")
+        if context_json_raw:
+            return context_json_raw["containers"]
+        return None
+
     def _imprint_instances(self, data: list) -> None:
         """Hard update instance field of context node."""
         log.info("imprint_instances")
         json_data = json.dumps(data)
 
         self.client_stub.do_instances_imprint(imprint_info=json_data)
+
+    def _imprint_containers(self, data: list) -> None:
+        """Hard update containers field of context node."""
+        json_data = json.dumps(data)
+
+        self.client_stub.do_containers_imprint(imprint_info=json_data)
 
     @staticmethod
     def instances_check_duplicate(instances: list[dict]) -> list[dict]:
@@ -334,6 +480,23 @@ class RPCStub:
             if id_ not in encountered:
                 encountered.append(id_)
                 clean.append(instance)
+
+        return clean
+
+    @staticmethod
+    def containers_check_duplicate(containers: list[dict]) -> list[dict]:
+        """Utility method to check duplicates in instances.
+
+        Returns:
+            list of duplicate free instances.
+        """
+        encountered = []
+        clean = []
+        for container in containers:
+            id_ = container.get("container_uuid")
+            if id_ not in encountered:
+                encountered.append(id_)
+                clean.append(container)
 
         return clean
 
@@ -423,14 +586,120 @@ class RPCStub:
 
         self._imprint_instances(instances)
 
-    def create_publish_node(self, instance_to_create: dict) -> None:
+    def add_containers(self, containers_to_add: dict | list[dict]) -> None:
+        """Add instances ensuring no duplicates."""
+        containers = self.list_containers()
+
+        if containers is None:
+            containers = []
+
+        if isinstance(containers_to_add, dict):
+            containers.append(containers_to_add)
+        elif isinstance(containers_to_add, list):
+            containers.extend(containers_to_add)
+
+        containers = self.containers_check_duplicate(containers)
+
+        self._imprint_containers(containers)
+
+    def remove_containers(
+        self, containers_to_remove: list[dict] | dict
+    ) -> None:
+        """Remove instance(s)."""
+        containers = self.list_containers()
+
+        if containers is None:
+            # nothing to remove
+            return
+
+        if isinstance(containers_to_remove, dict):
+            containers = [
+                instance
+                for instance in containers
+                if instance.get("container_uuid")
+                != containers_to_remove.get("container_uuid")
+            ]
+        elif isinstance(containers_to_remove, list):
+            ids_to_rem = [
+                container.get("container_uuid")
+                for container in containers_to_remove
+            ]
+            containers = [
+                instance
+                for instance in containers
+                if instance.get("container_uuid") not in ids_to_rem
+            ]
+
+        self._imprint_containers(containers)
+
+    def update_containers(
+        self, containers_to_update: list[dict] | dict
+    ) -> None:
+        """Update instance(s) on hash collision, if hash not present, add."""
+        containers = self.list_containers()
+
+        if containers is None:
+            # all instances will have to be added
+            # if nothing is present on update.
+            self.add_containers(containers_to_update)
+            return
+
+        if isinstance(containers_to_update, dict):
+            containers = [
+                container
+                if container.get("container_uuid")
+                != containers_to_update.get("container_uuid")
+                else containers_to_update
+                for container in containers
+            ]
+            if containers_to_update.get("container_uuid") not in [
+                container.get("container_uuid") for container in containers
+            ]:
+                containers.append(containers_to_update)
+        elif isinstance(containers_to_update, list):
+            ids_to_update = {
+                container.get("container_uuid"): container
+                for container in containers_to_update
+            }
+            containers = [
+                ids_to_update.get(instance.get("container_uuid"), instance)
+                for instance in containers
+            ]
+            ids = {container.get("container_uuid") for container in containers}
+            # add the ones that were left behind
+            containers.extend(
+                [
+                    container
+                    for container in containers_to_update
+                    if container.get("container_uuid") not in ids
+                ]
+            )
+
+        self._imprint_containers(containers)
+
+        # Update all nodes.
+        for container in containers:
+            container_json = json.dumps(container)
+            self.client_stub.updateLoadImageNode(container_json=container_json)
+
+    def create_publish_node(
+        self,
+        instance_to_create: dict,
+        publish_type: PublishType = PublishType.IMAGE,
+    ) -> None:
         """Pass along a call to create a Ayon Image Save node."""
         log.info("stub create publish node")
         json_data = json.dumps(instance_to_create)
 
-        self.client_stub.addPublishNode(instance_json=json_data)
+        self.client_stub.addPublishNode(
+            instance_json=json_data, node_type=publish_type.value
+        )
 
-    def remove_publish_nodes(self, instances_to_remove: dict | list) -> None:
+    def remove_publish_nodes(
+        self,
+        instances_to_remove: dict | list,
+        publish_type: PublishType = PublishType.IMAGE,
+    ) -> None:
         """Pass along a call to remove a Ayon Image Save nodes."""
         log.info("stub remove publish node")
 
@@ -443,13 +712,65 @@ class RPCStub:
 
         json_ids_to_remove = json.dumps(ids_to_remove)
 
-        self.client_stub.removePublishNodes(ids_to_remove=json_ids_to_remove)
+        self.client_stub.removePublishNodes(
+            ids_to_remove=json_ids_to_remove, node_type=publish_type.value
+        )
 
-    def get_publish_node_images(self, instance_for_images: dict) -> list[str]:
-        """Returns list of images associated with node."""
+    def create_load_node(
+        self, container_to_create: dict, node_type: LoadType = LoadType.IMAGE
+    ) -> None:
+        """Pass along a call to create a Ayon Load [Type] node."""
+        log.info("stub create load node:")
+        log.info(node_type.value)
+        json_data = json.dumps(container_to_create)
+
+        self.client_stub.addLoadProductNode(
+            container_json=json_data, node_type=node_type.value
+        )
+
+    def update_load_node(
+        self, container_to_update: dict, node_type: LoadType = LoadType.IMAGE
+    ) -> None:
+        """Pass along call to update Ayon Load [Type] node."""
+        log.info("stub update load node")
+        log.info(node_type.value)
+        json_data = json.dumps(container_to_update)
+        self.client_stub.updateLoadProductNode(
+            container_json=json_data, node_type=node_type.value
+        )
+
+    def remove_load_nodes(
+        self,
+        containers_to_remove: dict | list,
+        node_type: LoadType = LoadType.IMAGE,
+    ) -> None:
+        """Pass along a call to remove Ayon Load [Type] nodes."""
+        log.info("stub remove load node")
+        log.info(node_type.value)
+        if isinstance(containers_to_remove, dict):
+            containers_to_remove = [containers_to_remove]
+
+        ids_to_remove = [
+            container["container_uuid"] for container in containers_to_remove
+        ]
+
+        json_ids_to_remove = json.dumps(ids_to_remove)
+
+        self.client_stub.removeLoadProductNodes(
+            ids_to_remove=json_ids_to_remove, node_type=node_type.value
+        )
+
+    def get_publish_node_images(
+        self,
+        instance_for_images: dict,
+        publish_type: PublishType = PublishType.IMAGE,
+    ) -> list[str]:
+        """Returns list of products associated with node."""
         log.info("stub get publish node images")
         id_ = instance_for_images["instance_id"]
-        result = self.client_stub.getPublishNodeImages(id_for_images=id_)
+        result = self.client_stub.getPublishNodeImages(
+            id_for_images=id_, node_type=publish_type.value
+        )
         try:
             return json.loads(result)
         except json.JSONDecodeError:

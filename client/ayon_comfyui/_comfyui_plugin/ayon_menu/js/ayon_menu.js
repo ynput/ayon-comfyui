@@ -4,6 +4,61 @@ import {RPCServer} from "../../../../extensions/ayon_menu/lib/rpc_server.js"
 
 app.registerExtension({
     name: "comfy_ayon_menu",
+    async afterConfigureGraph(graphData) {
+
+        async function execute_single_node(node) {
+          const proompt = await app.graphToPrompt(node.graph);
+          const id = `${node.id}`;
+          const output_obj = {}
+          output_obj[id] = proompt.output[id]
+          
+          const prompt_t = {
+            output: output_obj  
+          };
+          
+          console.log(prompt_t)
+          await app.api.queuePrompt(0,prompt_t);
+        }
+
+        async function generate_thumbnails_loadimage_nodes(){
+          const nodeType = "AYON Load Image"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          console.log(foundNodes)
+          foundNodes.forEach((node) => {
+            console.log(node)
+            execute_single_node(node);
+          })
+        }
+
+        async function generate_thumbnails_loadvideo_nodes(){
+          const nodeType = "AYON Load Video"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          console.log(foundNodes)
+          foundNodes.forEach((node) => {
+            console.log(node)
+            execute_single_node(node);
+          })
+        }
+
+        async function generate_thumbnails_load3dmodel_nodes(){
+          const nodeType = "AYON 3D Model Save"
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          console.log(foundNodes)
+          foundNodes.forEach((node) => {
+            console.log(node)
+            execute_single_node(node);
+          })
+        }
+
+        console.log("AYON: Graph loaded.");
+        // generate thumbnails for AYON Load Images / AYON Load Videos
+        requestAnimationFrame(() =>{
+          console.log("animation frame retrieved, cooking Load Image thumbnails")
+          generate_thumbnails_loadimage_nodes()
+          generate_thumbnails_loadvideo_nodes()
+          generate_thumbnails_load3dmodel_nodes() // Don't know if this will actually make UI thumbnails, but it will at least load stuff in memory
+      })
+    },
     async setup() {
         console.log("AYON")
 
@@ -25,6 +80,57 @@ app.registerExtension({
         function predictate_is_resolved(){
           const local_this = get_this()
           return local_this.expecting_id == local_this.resolved_id
+        }
+
+        // v2 adapter for newer comfyui
+        function get_workfiles_v2(){
+          // Attempt OpenPaths first.
+          const clientId = window.sessionStorage.getItem("clientId");
+          const openpath_str = window.sessionStorage.getItem(`Comfy.Workflow.OpenPaths:${clientId}`)
+          let path_str = null
+          if (openpath_str !== null) {
+            const openpath_parse = JSON.parse(openpath_str)
+            path_str = openpath_parse.paths[openpath_parse.activeIndex]
+          } else {
+            path_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
+            if (!path_str) {
+              return null;
+            }
+            path_str = JSON.parse(path_str).path;
+          }
+          const path = path_str
+
+          if (!path) {
+            return null;
+          }
+
+          const draftindex_str = window.localStorage.getItem("Comfy.Workflow.DraftIndex.v2:personal");
+          if (!draftindex_str) {
+            return null;
+          }
+
+          const draftindex = JSON.parse(draftindex_str);
+          const keys = Object.keys(draftindex.entries);
+
+          const personal_key = keys.filter((key) => {
+            if (draftindex.entries[key].path == path) {
+              return true;
+            }
+          })[0]
+
+          if (personal_key === undefined){
+            return null;
+          }
+
+          const data_str = window.localStorage.getItem(`Comfy.Workflow.Draft.v2:personal:${personal_key}`);
+          
+          if (!data_str) {
+            return null;
+          }
+          // workfiles data as a string
+          const data = JSON.parse(data_str).data
+
+          return data
         }
 
         app.api.addEventListener("executed", (e) => {
@@ -52,6 +158,45 @@ app.registerExtension({
           });
         }
 
+        async function execute_single_node(node) {
+          const proompt = await app.graphToPrompt(node.graph);
+          const id = `${node.id}`;
+          const output_obj = {}
+          output_obj[id] = proompt.output[id]
+          
+          const prompt_t = {
+            output: output_obj  
+          };
+          console.log(prompt_t)
+          await app.api.queuePrompt(0,prompt_t);
+        }
+
+        async function execute_node_subgraph(node_out) {
+          const proompt = await app.graphToPrompt(node_out.graph);
+        
+          const subgraph = {};
+          const stack = [node_out.id];
+        
+          while (stack.length) {
+            const id = stack.pop();
+            if (subgraph[id]) continue;
+          
+            const node = proompt.output[id];
+            if (!node) continue;
+          
+            subgraph[id] = node;
+          
+            for (const input of Object.values(node.inputs || {})) {
+              if (Array.isArray(input)) {
+                stack.push(input[0]);
+              }
+            }
+          }
+          console.log(subgraph)
+          return await app.api.queuePrompt(0, {
+            output: subgraph
+          });
+        }
 
         async function getNodeImages(node,recook) {
           const local_this = get_this();
@@ -60,16 +205,15 @@ app.registerExtension({
             return local_this.map_images[node.id]
           }
 
-          const proompt = await app.graphToPrompt(node.graph)
           reset_expectations(node.id)
-          await app.api.queuePrompt(0,proompt);
+          await execute_node_subgraph(node)
           await waitForFlag(() => predictate_is_resolved())
           reset_expectations()
 
           return local_this.map_images[node.id]
         }
 
-        function addNodeAtCenter(type) {
+        function addNodeAtCenter_v1(type) {
           // Uses device pixel ratio to account for visible area at 100%
           const node = LiteGraph.createNode(type);
           app.graph.add(node);
@@ -149,10 +293,10 @@ app.registerExtension({
           const baseurl =  `${window.location.protocol}//${window.location.host}/api/view`;
           // look into if '/' or '\\' in url doesn't give any problems
           console.log("getNodeImages")
-          const images = await getNodeImages(node, recook)
-
+          // Flatten in case of "animated" output. This outputs a list of arrays.
+          const images = (await getNodeImages(node, recook)).flat()
           let urls = images.map((image) => 
-            `${baseurl}?filename=${image.filename}&subfolder=${image.subfolder}&type=${image.type}`)
+            `${baseurl}?filename=${image.filename}&subfolder=${image.subfolder.replace("\\","/")}&type=${image.type}`)
             .flat()
           return urls
         }
@@ -186,7 +330,7 @@ app.registerExtension({
         })
 
         this.IFRAMERPC.register('getPublishNodes', (data) => {
-          const nodeType = "AYON Image Save"
+          const nodeType = data.node_type
 
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           return JSON.stringify(foundNodes)
@@ -196,15 +340,21 @@ app.registerExtension({
         this.IFRAMERPC.register('getWorkfile', (data) => {
           // Fetch clientId from session storage,
           // because workflows are saved as workflow:<id>
-          let client = window.sessionStorage.getItem("clientId")
-          let workflow_key = `workflow:${client}`
-          console.log("workfile requested", window.sessionStorage.getItem(workflow_key))
-          return window.sessionStorage.getItem(workflow_key)
+          const client = window.sessionStorage.getItem("clientId")
+          const workflow_key = `workflow:${client}`
+          let workfile = window.sessionStorage.getItem(workflow_key)
+          if (workfile == null){
+            // overwrite workfile in case of new API for this. Gets current tab.
+            workfile = get_workfiles_v2()
+          }
+          console.log("workfile requested", workfile)
+          return workfile
         })
 
         this.IFRAMERPC.register('addPublishNode', (data) => {
           console.log("adding node...")
-          const save_node = addNodeAtCenter("AYON Image Save")
+          const nodeType = data.node_type
+          const save_node = addNodeAtCenter(nodeType)
           const info_widget = save_node.widgets.find(widget => widget.name == "ayon_info")
           const recook_widget = save_node.widgets.find(widget => widget.name == "recook")
           save_node.color = "#233"
@@ -226,7 +376,7 @@ app.registerExtension({
 
 
         this.IFRAMERPC.register('removePublishNodes', (data) => {
-          const nodeType = "AYON Image Save"
+          const nodeType = data.node_type
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           
           let to_remove = [];
@@ -251,7 +401,7 @@ app.registerExtension({
         })
 
         this.IFRAMERPC.register('getPublishNodeImages', async (data) => {
-          const nodeType = "AYON Image Save";
+          const nodeType = data.node_type;
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           console.log("getting publish node images", data)
           for (const node of foundNodes) {
@@ -275,6 +425,67 @@ app.registerExtension({
             }
           return JSON.stringify([]); // none found
         });
+
+        this.IFRAMERPC.register('addLoadProductNode', (data) => {
+          const nodeType = data.node_type
+          const loadimg_node = addNodeAtCenter(nodeType)
+          const info_widget = loadimg_node.widgets.find(widget => widget.name == "ayon_container_info")
+          info_widget.value = data.container_json
+
+          const parsed = JSON.parse(data.container_json)
+          let productName = parsed.name
+          loadimg_node.title = `AYON Container (${productName})`
+          loadimg_node.color = "#233"
+          loadimg_node.bgcolor = "#355"
+          app.graph.setDirtyCanvas(true, true);
+          execute_single_node(loadimg_node); // make sure image shows up
+          return true
+        });
+
+        this.IFRAMERPC.register('removeLoadProductNodes', (data) => {
+          const nodeType = data.node_type
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          
+          let to_remove = [];
+          let ayon_remove = [];
+
+          foundNodes.forEach(node => {
+            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
+            const ayon_info = JSON.parse(info_widget.value)
+            if (data.ids_to_remove.includes(ayon_info.container_uuid)) {
+              to_remove.push(node)
+              ayon_remove.push(ayon_info)
+            }
+          });
+
+          let json_removed = JSON.stringify(ayon_remove)
+
+          to_remove.map((node) => {
+            app.graph.remove(node)
+          })
+          
+          return json_removed
+        })
+
+        this.IFRAMERPC.register('updateLoadProductNode', async (data) => {
+          const nodeType = data.node_type
+          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+
+          const ayon_info_update = JSON.parse(data.container_json)
+
+          foundNodes.forEach(async (node) => {
+            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
+            const ayon_info = JSON.parse(info_widget.value)
+            if (ayon_info_update.container_uuid == ayon_info.container_uuid) {
+              info_widget.value = data.container_json
+              execute_single_node(node); // make sure image shows up
+              return true
+            }
+          });
+          return true
+        });
+
+        
 
         this.IFRAMERPC.register('setImprintContext', (data) => {
           console.log("setting context...", data)
@@ -311,7 +522,12 @@ app.registerExtension({
           console.log("loading from passed in Workfile")
           const workfile_parse = JSON.parse(data.workfile_json)
           try {
-            app.loadGraphData(workfile_parse)
+            if (data.workfile_name) {
+              app.loadGraphData(workfile_parse, true, true, data.workfile_name)
+            } else {
+              app.loadGraphData(workfile_parse)
+            }
+              
           } catch (error) {
             console.log(error)
             return false
@@ -319,8 +535,7 @@ app.registerExtension({
           return true
         })
 
-
-
+      
         //this.RPC.connect();
     },
     commands: [
@@ -379,28 +594,156 @@ app.registerExtension({
         ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "publisher"}})
       } 
     },
-
     { 
-      id: "logGraph", 
-      label: "log graph to console", 
+      id: "showLoader", 
+      label: "Loader", 
       function: () => {
-        console.log(app.graph.serialize())
-        console.log(app.graph)
+        // find plugin in array
+        const exts = app.extensions;
+        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+
+        console.log(app.extensions);
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "loader"}})
       } 
     },
+
     { 
-      id: "logApp", 
-      label: "log app object to console", 
+      id: "showInventory", 
+      label: "Scene Inventory", 
       function: () => {
-        console.log(app)
+        // find plugin in array
+        const exts = app.extensions;
+        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+
+        console.log(app.extensions);
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "sceneinventory",}})
       } 
+    },
+
+    {
+      id: "saveLocal",
+      label: "Ayon Save Workfile",
+      function: () => {
+        function showToast(text, duration = 2000) {
+          const el = document.createElement("div");
+          el.textContent = text;
+              
+          Object.assign(el.style, {
+              position: "fixed",
+              top: "10px",
+              left: "10px",
+              background: "#249b9b",
+              color: "white",
+              padding: "8px 12px",
+              borderRadius: "6px",
+              zIndex: 9999,
+              fontSize: "14px",
+              fontFamily: "sans-serif",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
+              opacity: "1",
+              transition: "opacity 0.3s ease"
+          });
+        
+          // attach to ComfyUI root instead of body if possible
+          (app.canvasElRef?.parentElement || document.body).appendChild(el);
+        
+          setTimeout(() => {
+              el.style.opacity = "0";
+              setTimeout(() => el.remove(), 300);
+          }, duration);
+        }
+
+        // v2 adapter for newer comfyui
+        function get_workfiles_save() {
+          // Attempt OpenPaths first.
+          const clientId = window.sessionStorage.getItem("clientId");
+          const openpath_str = window.sessionStorage.getItem(`Comfy.Workflow.OpenPaths:${clientId}`)
+          let path_str = null
+          if (openpath_str !== null) {
+            const openpath_parse = JSON.parse(openpath_str)
+            path_str = openpath_parse.paths[openpath_parse.activeIndex]
+          } else {
+            path_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
+            if (!path_str) {
+              return null;
+            }
+            path_str = JSON.parse(path_str).path;
+          }
+          const path = path_str
+
+          if (!path) {
+            return null;
+          }
+
+          const draftindex_str = window.localStorage.getItem("Comfy.Workflow.DraftIndex.v2:personal");
+          if (!draftindex_str) {
+            return null;
+          }
+
+          const draftindex = JSON.parse(draftindex_str);
+          const keys = Object.keys(draftindex.entries);
+
+          const personal_key = keys.filter((key) => {
+            if (draftindex.entries[key].path == path) {
+              return true;
+            }
+          })[0]
+
+          if (personal_key === undefined){
+            return null;
+          }
+
+          const data_str = window.localStorage.getItem(`Comfy.Workflow.Draft.v2:personal:${personal_key}`);
+          
+          if (!data_str) {
+            return null;
+          }
+          // workfiles data as a string
+          const data = JSON.parse(data_str).data
+
+          return data
+        }
+        
+        console.log("called save local")
+        // Attempt OpenPaths first, to get current tab.  
+        const clientId = window.sessionStorage.getItem("clientId");
+        const openpath_str = window.sessionStorage.getItem(`Comfy.Workflow.OpenPaths:${clientId}`)
+        let path_str = null
+        if (openpath_str !== null) {
+          const openpath_parse = JSON.parse(openpath_str)
+          path_str = openpath_parse.paths[openpath_parse.activeIndex]
+        } else {
+          const activepath_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
+          path_str = JSON.parse(activepath_str).path;
+          if (!path_str) {
+            return null;
+          }
+        }
+        const path = path_str
+
+        const formatted_path = path.replace(".json","").replace("workflows/","")
+      
+
+        // find plugin in array
+        const exts = app.extensions;
+        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+
+        const workfile = get_workfiles_save()
+
+        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestSaveByName', args: {"file_name" : `${formatted_path}`, "workfile_contents": `${workfile}`}})
+
+        showToast("Ayon Saved!")
+        
+      }
+
+
     },
   ],
   // Add commands to menu
   menuCommands: [
     { 
       path: ["AYON"],
-      commands: ["showPublisher","showCreator","showWorkfiles","logGraph","logApp"] 
+      commands: ["showPublisher","showCreator","showWorkfiles","showLoader","showInventory"] 
     },
   ]
 })

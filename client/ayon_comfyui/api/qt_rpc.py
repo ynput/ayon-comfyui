@@ -19,8 +19,8 @@ from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.iframe import StaticServerThread
 from ayon_comfyui.api.qtthread_interface import QThread_interface
 from ayon_comfyui.api.result import safe_partial
-from ayon_comfyui.api.rpc_server_iframe import RPCServerThread
-from ayon_comfyui.api.rpc_server_stub_iframe import RPCStub
+from ayon_comfyui.api.rpc_server import RPCServerThread
+from ayon_comfyui.api.rpc_stub import RPCStub
 from ayon_comfyui.api.ws_client import WSClientThread
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
@@ -78,6 +78,7 @@ class QRPCManager(QObject, QThread_interface):
 
         # Stub just exists by itself.
         self._stub = RPCStub()
+        self._comfy_url = comfy_url
 
         # Define QTimers to process the tasks
         loop_timer = QTimer()
@@ -195,8 +196,7 @@ class QRPCManager(QObject, QThread_interface):
         log.info("Websocket RPC Server stopped.")
 
         self._loop_timer.stop()
-
-        QCoreApplication.exit()
+        QCoreApplication.exit(0)
 
     def handle_failed_tab(self) -> None:
         """Handle signal recieved when a tab is closed."""
@@ -229,8 +229,7 @@ class QRPCManager(QObject, QThread_interface):
                 )
 
         self._loop_timer.stop()
-
-        QCoreApplication.exit()
+        QCoreApplication.exit(0)
 
     @classmethod
     def get_instance(cls) -> QRPCManager:
@@ -245,3 +244,8 @@ class QRPCManager(QObject, QThread_interface):
     def stub(self) -> RPCStub:
         """Return stored stub."""
         return self._stub
+
+    @property
+    def comfy_url(self) -> str:
+        """Return UI url (frontend)."""
+        return self._comfy_url
