@@ -33,6 +33,9 @@ Note that all string entries in the menu that pertain to paths, can recieve **te
 
 (change root name to preferred root as set up in studio anatomy settings.)
 
+As of 0.0.26, you can also use `{roots[root_name]}` if you so desire.<br>
+This mimicks the way roots work in `applications`.
+
 <details>
 <summary>Setting up a basic local launch profile:</summary>
 

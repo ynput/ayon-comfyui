@@ -39,6 +39,8 @@ def construct_template_data() -> dict[str, Any]:
         project_name=project_name, project_entity=project_entity
     ).roots
 
+    top_roots_dict = {"roots": roots}
+
     return (
         get_template_data(
             project_entity=project_entity,
@@ -49,6 +51,7 @@ def construct_template_data() -> dict[str, Any]:
             username=username,
         )
         | roots
+        | top_roots_dict
     )
 
 
