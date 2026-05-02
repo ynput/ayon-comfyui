@@ -173,7 +173,7 @@ Sometimes, we just want to press Ctrl-S and save a file. However, the expected b
 <details>
 <summary>Setting up workfile overriding save shortcut.</summary>
 
-In order to set up a screenshot that does actually write to the right place, we included a hook to do so.<br>
+In order to set up a shortcut that does actually write to the right place, we included a hook to do so.<br>
 Go to settings, keybinding, and bind a shortcut to **Ayon Save Workfile**.<br>
 Note that this **Does Not** save the file as it would in ComfyUI natively, so the little "unsaved white dot"
 still appears on your tabs.
