@@ -145,6 +145,8 @@ class ModelCreator(Creator):
             [i.data_to_store() for i in instances], PublishType.MODEL3D
         )
         stub.remove_instance(instances)
+        for instance in instances:
+            self._remove_instance_from_context(instance)
 
     def get_pre_create_attr_defs(self):
         return [
