@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING
 import pyblish.api
 
 if TYPE_CHECKING:
-    from ayon_core.host import IWorkfileHost
+    from ayon_comfyui.api.pipeline import ComfyUIHost
+
+from pathlib import Path
 
 from ayon_core.host.interfaces import SaveWorkfileOptionalData
 from ayon_core.pipeline import registered_host
@@ -39,7 +41,7 @@ class IncrementWorkfile(pyblish.api.InstancePlugin):
         version = None
         context = instance.context
         current_filepath: str = context.data["currentFile"]
-        host: IWorkfileHost = registered_host()
+        host: ComfyUIHost = registered_host()
 
         if not instance.data["do_increment"]:
             self.log.info("Not incremented since first publish")
@@ -67,5 +69,7 @@ class IncrementWorkfile(pyblish.api.InstancePlugin):
         )
 
         new_scene_path = host.get_current_workfile()
+        new_name = Path(new_scene_path).stem
+        host.stub.client_stub.updateTab(new_name=new_name)
 
-        self.log.info(f"Incremented workfile to: {new_scene_path}")
+        self.log.info(f"Incremented workfile to: {new_scene_path}")  # noqa: G004

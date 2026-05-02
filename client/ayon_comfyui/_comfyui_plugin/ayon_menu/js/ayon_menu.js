@@ -351,6 +351,12 @@ app.registerExtension({
           return workfile
         })
 
+        this.IFRAMERPC.register('updateTab', (data) => {
+          console.log(data);
+          app.loadGraphData(app.graph.serialize(), true, true, data.new_name);
+          return true;
+        })
+
         this.IFRAMERPC.register('addPublishNode', (data) => {
           console.log("adding node...")
           const nodeType = data.node_type

@@ -45,7 +45,7 @@ class LoadType(Enum):
 
 
 # STUB TO CONTAIN CLIENT CONNECTION GOTTEN FROM SERVER
-class RPCClientStub:
+class RPCClientStub:  # noqa: PLR0904
     """Alias methods on the client <iframe> side.
 
     Also provides helper methods to process results.
@@ -57,7 +57,7 @@ class RPCClientStub:
     # TODO(@sas): retrieve from url settings
     origin: str = "http://localhost:5454"
 
-    def __init__(self):
+    def __init__(self):  # noqa: D107
         self.__class__.origin = pull_origin_from_settings()
 
     @property
@@ -79,6 +79,13 @@ class RPCClientStub:
     @call_on_origin()
     def getWorkfile(self):  # noqa: N802, ANN201
         """Call getWorkfile."""
+
+    @call_on_origin()
+    def updateTab(self, *, new_name: str):  # noqa: N802, ANN201
+        """Call updateTab.
+
+        switches context to a new tab with a new name.
+        """
 
     @call_on_origin()
     def loadWorkfile(self, *, workfile_json: str, workfile_name: str):  # noqa: N802, ANN201
