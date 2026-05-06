@@ -22,10 +22,10 @@ class VideoCreator(Creator):
     this publish.
     """
 
-    identifier = "video"
+    identifier = "review"
     label = "AI Video"
-    product_type = "video"
-    product_base_type = "video"
+    product_base_type = "review"
+    product_type = product_base_type
     description = "Video generated using ComfyUI"
 
     default_variant = "Main"

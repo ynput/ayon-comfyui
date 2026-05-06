@@ -43,7 +43,7 @@ class CollectVideo(pyblish.api.InstancePlugin):
     order = pyblish.api.CollectorOrder + 0.16
     label = "Collect Generated Video + Thumbnail"
     hosts = ["comfyui"]
-    families = ["video"]
+    families = ["review"]
 
     default_variant = "Main"
 
