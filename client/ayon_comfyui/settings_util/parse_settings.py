@@ -199,6 +199,7 @@ class ComfyLocalSettings:
             )
 
         @property
+        @template_wrap
         def launch_args(self) -> list[str]:
             """Return launch arguments for profile.
 
