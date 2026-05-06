@@ -131,6 +131,7 @@ class CollectVideo(pyblish.api.InstancePlugin):
                 "ext": video_info.video_extension[1:],
                 "files": video_info.video_file,
                 "stagingDir": staging_dir,
+                "tags": ["webreview"],
             }
         )
 

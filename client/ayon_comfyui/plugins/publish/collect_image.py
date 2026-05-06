@@ -72,6 +72,7 @@ class CollectImage(pyblish.api.InstancePlugin):
                 "ext": ext[1:],
                 "files": files,
                 "stagingDir": staging_dir,
+                "tags": ["webreview"],
             }
         )
 
