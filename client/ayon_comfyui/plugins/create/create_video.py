@@ -22,7 +22,7 @@ class VideoCreator(Creator):
     this publish.
     """
 
-    identifier = "render"
+    identifier = "io.ayon.creators.comfyui.render"
     label = "AI Video"
     product_base_type = "render"
     product_type = product_base_type
