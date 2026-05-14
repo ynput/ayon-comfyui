@@ -28,7 +28,7 @@ Please note that the `Name` and `Host name` entries need to be lowercase.
 ### 3. Setting up basic profiles
 
 The plugin for ComfyUI works on profiles, divided into local and remote profiles.<br>
-Note that all string entries in the menu that pertain to paths, can recieve **templates**, e.g.<br>
+Note that all string entries in the menu that pertain to paths (including custom directory settings and launch arguments), can recieve **templates**, e.g.<br>
 `{root_name}/{project[name]}/Lab/comfyui/0.18.2/ComfyUI`
 
 (change root name to preferred root as set up in studio anatomy settings.)
