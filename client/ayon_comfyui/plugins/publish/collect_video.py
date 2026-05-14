@@ -124,6 +124,9 @@ class CollectVideo(pyblish.api.InstancePlugin):
 
         instance.context.data["currentFile"] = video_info.video_file
 
+        # marking instance as reviewable
+        instance.data["review"] = True
+
         # creating representation
         instance.data["representations"].append(
             {
@@ -131,7 +134,7 @@ class CollectVideo(pyblish.api.InstancePlugin):
                 "ext": video_info.video_extension[1:],
                 "files": video_info.video_file,
                 "stagingDir": staging_dir,
-                "tags": ["webreview"],
+                "tags": ["review"],
             }
         )
 
