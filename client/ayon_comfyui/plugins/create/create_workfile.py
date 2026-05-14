@@ -4,7 +4,7 @@ from ayon_comfyui.api.plugin import ComfyUIAutoCreator
 
 
 class CreateWorkfile(ComfyUIAutoCreator):
-    identifier = "workfile"
+    identifier = "io.ayon.creators.comfyui.workfile"
     label = "Workfile"
     product_type = "workfile"
 
