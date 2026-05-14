@@ -22,7 +22,7 @@ class ModelCreator(Creator):
     this publish.
     """
 
-    identifier = "model"
+    identifier = "io.ayon.creators.comfyui.model"
     label = "AI 3D Model"
     product_type = "model"
     product_base_type = "model"

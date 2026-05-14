@@ -21,7 +21,7 @@ class ImageCreator(Creator):
     this publish.
     """
 
-    identifier = "image"
+    identifier = "io.ayon.creators.comfyui.image"
     label = "AI Image"
     product_type = "image"
     product_base_type = "image"
