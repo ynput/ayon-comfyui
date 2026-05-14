@@ -59,11 +59,12 @@ class CollectImage(pyblish.api.InstancePlugin):
 
         instance.context.data["currentFile"] = files[0]
 
-        # With publishing just one file, there's a tendency
-        # for Comfy to cache the results in the browser
-
         if len(files) == 1:
             files = files[0]
+
+        # marking instance as reviewable
+        instance.data["review"] = True
+        instance.data["families"].append("review")
 
         # creating representation
         instance.data["representations"].append(
@@ -72,10 +73,11 @@ class CollectImage(pyblish.api.InstancePlugin):
                 "ext": ext[1:],
                 "files": files,
                 "stagingDir": staging_dir,
+                "tags": ["review"],
             }
         )
 
-        # Maybe use PIL to generate a tiled image
+        # NOTE(@sas): Maybe generate a tiled image for batched images
 
         thumbnail_img = files
         if isinstance(thumbnail_img, list):
