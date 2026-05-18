@@ -103,7 +103,7 @@ def pull_origin_from_settings() -> str:
 def get_client_from_origin(origin: str) -> WSRPCBase | None:
     """Attempt to get client from socket connections.
 
-    This mimicks the photoshop ayon plugin, where the socket
+    This mimics the photoshop ayon plugin, where the socket
     is read out and the first connection is picked.
     We want to be more thorough though, and make sure the
     connection header checks out!

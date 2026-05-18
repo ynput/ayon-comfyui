@@ -20,7 +20,7 @@ async def upload_image(
     """Posts an image/video to /upload/image endpoint.
 
     Returns:
-        JSON object response if succesful, otherwise None
+        JSON object response if successful, otherwise None
     """
     if isinstance(image_path, str):
         image_path = Path(image_path)
@@ -128,7 +128,7 @@ def upload_input_image(
     ```
 
     Returns:
-        JSON object response if succesful, otherwise None
+        JSON object response if successful, otherwise None
 
     """
     loop = asyncio.new_event_loop()
@@ -163,7 +163,7 @@ def upload_input_images(
     ```
 
     Returns:
-        JSON objects in list if response if succesful, otherwise None
+        JSON objects in list if response if successful, otherwise None
 
     """
     loop = asyncio.new_event_loop()
