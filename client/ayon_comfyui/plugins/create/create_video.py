@@ -10,12 +10,13 @@ if TYPE_CHECKING:
 from ayon_comfyui.api.pipeline import list_instances
 from ayon_comfyui.api.qt_rpc import QRPCManager
 from ayon_comfyui.api.rpc_stub import PublishType
+from ayon_comfyui.api.plugin import ComfyUICreator
 from ayon_core.lib import BoolDef, EnumDef, NumberDef, TextDef
-from ayon_core.pipeline import CreatedInstance, Creator, CreatorError
+from ayon_core.pipeline import CreatedInstance, CreatorError
 from ayon_core.pipeline.create import PRODUCT_NAME_ALLOWED_SYMBOLS
 
 
-class VideoCreator(Creator):
+class CreateVideo(ComfyUICreator):
     """Creator for video before publishing.
 
     On create, spawn a node that is to be associated with
@@ -28,7 +29,6 @@ class VideoCreator(Creator):
     product_type = product_base_type
     description = "Video generated using ComfyUI"
 
-    default_variant = "Main"
     default_vid_name = "ayon"
 
     icon = "gears"
