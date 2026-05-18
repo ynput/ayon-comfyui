@@ -9,9 +9,9 @@ if TYPE_CHECKING:
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.pipeline import list_instances
+from ayon_comfyui.api.plugin import ComfyUICreator
 from ayon_comfyui.api.qt_rpc import QRPCManager
 from ayon_comfyui.api.rpc_stub import PublishType
-from ayon_comfyui.api.plugin import ComfyUICreator
 from ayon_core.lib import BoolDef, EnumDef, TextDef
 from ayon_core.pipeline import CreatedInstance, CreatorError
 from ayon_core.pipeline.create import PRODUCT_NAME_ALLOWED_SYMBOLS

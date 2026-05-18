@@ -31,7 +31,7 @@ class CollectWorkfile(pyblish.api.InstancePlugin):
         files = [
             file for file in os.listdir(workdir) if file.endswith(".json")
         ]
-        self.log.debug(files)
+        self.log.debug("Work directory files: %s", files)
         vers = [
             int(re.match(regex, file).group(1))
             for file in files

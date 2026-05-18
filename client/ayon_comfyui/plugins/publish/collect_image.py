@@ -4,7 +4,6 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import urlretrieve
 
 import pyblish.api
-import pyblish.plugin
 from ayon_comfyui.api.pipeline import ComfyUIHost
 from ayon_core.pipeline import registered_host
 from ayon_core.pipeline.publish.lib import get_instance_staging_dir
@@ -20,8 +19,7 @@ class CollectImage(pyblish.api.InstancePlugin):
 
     default_variant = "Main"
 
-    def process(self, instance: pyblish.plugin.Instance):
-
+    def process(self, instance: pyblish.api.Instance):
         host: ComfyUIHost = registered_host()
         image_urls = host.stub.get_publish_node_images(instance.data)
         ext = ".png"
