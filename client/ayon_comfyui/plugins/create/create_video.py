@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -197,10 +198,12 @@ class CreateVideo(ComfyUICreator):
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator plugin for publishing ComfyUI videos.
+        return inspect.cleandoc(
+            """Creator plugin for publishing ComfyUI videos.
 
-        Use the "Create Video" builtin node to construct a video first.
-        WebM is a bit experimental but supports audio using OPUS.
-
-        Audio is automatically resampled to conform to OPUS' standard.
-        """
+            Use the "Create Video" builtin node to construct a video first.
+            WebM is a bit experimental but supports audio using OPUS.
+    
+            Audio is automatically resampled to conform to OPUS' standard.
+            """
+        )

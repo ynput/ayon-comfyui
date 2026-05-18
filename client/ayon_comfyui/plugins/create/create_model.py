@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -181,9 +182,12 @@ class CreateModel(ComfyUICreator):
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator plugin for ComfyUI 3D models.
+        return inspect.cleandoc(
+            """Creator plugin for ComfyUI 3D models.
 
-        This model can take in Mesh and other types of 3D model
-        inputs. If it takes in a Mesh, it will be saved as either '.obj' or
-        '.glb', using the implementation of the nodes for Hunyuan3d (Tencent).
-        """
+            This model can take in Mesh and other types of 3D model
+            inputs. If it takes in a Mesh, it will be saved as either '.obj' 
+            or '.glb', using the implementation of the nodes for Hunyuan3d 
+            (Tencent).
+            """
+        )

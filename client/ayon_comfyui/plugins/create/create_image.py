@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -183,7 +184,9 @@ class CreateImage(ComfyUICreator):
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator plugin for publishing ComfyUI images.
+        return inspect.cleandoc(
+            """Creator plugin for publishing ComfyUI images.
 
-        Accepts batched images. These will all be loaded together too.
-        """
+            Accepts batched images. These will all be loaded together too.
+            """
+        )
