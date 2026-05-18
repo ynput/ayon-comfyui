@@ -21,13 +21,7 @@ class CollectImage(pyblish.api.InstancePlugin):
     default_variant = "Main"
 
     def process(self, instance: pyblish.plugin.Instance):
-        proj = os.environ.get("AYON_PROJECT_NAME")[:3]
-        task = os.environ.get("AYON_TASK_NAME")
-        folder = os.environ.get("AYON_FOLDER_PATH").split("/")[-1]
-        workdir = os.environ.get("AYON_WORKDIR")
-        self.log.debug(workdir)
-        self.log.debug(instance)
-        self.log.debug(instance.data)
+
         host: ComfyUIHost = registered_host()
         image_urls = host.stub.get_publish_node_images(instance.data)
         ext = ".png"
@@ -38,16 +32,15 @@ class CollectImage(pyblish.api.InstancePlugin):
         files = []
 
         for image in image_urls:
-            self.log.info(image)
+            self.log.debug("Downloading image: %s", image)
             parse = urlsplit(image)
-            self.log.info(parse)
+            self.log.debug(parse)
             query = parse_qs(parse.query)
-            self.log.info(query)
+            self.log.debug(query)
             filename = next(iter(query.get("filename")), None)
             if filename is None:
                 continue
-            self.log.info(filename)
-            self.log.info(staging_dir)
+            self.log.debug("Got filename: %s", filename)
             destination = os.path.join(
                 staging_dir, instance.data.get("productName"), filename
             )

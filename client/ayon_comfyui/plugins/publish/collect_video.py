@@ -48,13 +48,6 @@ class CollectVideo(pyblish.api.InstancePlugin):
     default_variant = "Main"
 
     def process(self, instance: pyblish.plugin.Instance):
-        proj = os.environ.get("AYON_PROJECT_NAME")[:3]
-        task = os.environ.get("AYON_TASK_NAME")
-        folder = os.environ.get("AYON_FOLDER_PATH").split("/")[-1]
-        workdir = os.environ.get("AYON_WORKDIR")
-        self.log.debug(workdir)
-        self.log.debug(instance)
-        self.log.debug(instance.data)
         host: ComfyUIHost = registered_host()
         image_urls = host.stub.get_publish_node_images(
             instance.data, publish_type=PublishType.VIDEO
@@ -69,7 +62,7 @@ class CollectVideo(pyblish.api.InstancePlugin):
 
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = get_instance_staging_dir(instance)
-        self.log.info("Outputting video to %s", staging_dir)
+        self.log.debug("Outputting video to %s", staging_dir)
 
         video_link = next(iter(image_urls))
         if video_link is None:
@@ -77,11 +70,11 @@ class CollectVideo(pyblish.api.InstancePlugin):
             return
 
         # Download video
-        self.log.info(video_link)
+        self.log.debug(video_link)
         parse = urlsplit(video_link)
-        self.log.info(parse)
+        self.log.debug(parse)
         query = parse_qs(parse.query)
-        self.log.info(query)
+        self.log.debug(query)
         filename = next(iter(query.get("filename")), None)
         if filename is None:
             self.log.warning(
@@ -95,8 +88,8 @@ class CollectVideo(pyblish.api.InstancePlugin):
             )
             return
         video_info.video_extension = extension
-        self.log.info(filename)
-        self.log.info(staging_dir)
+        self.log.debug(filename)
+        self.log.debug(staging_dir)
         destination = os.path.join(
             staging_dir, instance.data.get("productName"), filename
         )
@@ -112,8 +105,8 @@ class CollectVideo(pyblish.api.InstancePlugin):
         thumb_url = parse._replace(
             query=naive_reconstruct_querydict(query)
         ).geturl()
-        self.log.info("Retrieving generated thumbnail")
-        self.log.info(thumb_url)
+        self.log.debug("Retrieving generated thumbnail")
+        self.log.debug(thumb_url)
         thumb_destination = os.path.join(
             staging_dir, instance.data.get("productName"), thumb_filename
         )
