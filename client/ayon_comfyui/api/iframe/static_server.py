@@ -14,7 +14,8 @@ log = logging.getLogger("ayon_comfyui")
 
 
 class StaticServerThread(Thread):
-    """Serves the basic webpage on http://localhost:port with the <iframe> in it."""
+    """Serves the basic webpage on http://localhost:port with the <iframe>
+    in it."""
 
     def __init__(
         self,

@@ -9,7 +9,6 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import urlretrieve
 
 import pyblish.api
-import pyblish.plugin
 from ayon_comfyui.api.rpc_stub import PublishType
 from ayon_core.pipeline import registered_host
 from ayon_core.pipeline.publish.lib import get_instance_staging_dir
@@ -44,14 +43,7 @@ class CollectModel(pyblish.api.InstancePlugin):
         ".ksplat",
     ]
 
-    def process(self, instance: pyblish.plugin.Instance):
-        proj = os.environ.get("AYON_PROJECT_NAME")[:3]
-        task = os.environ.get("AYON_TASK_NAME")
-        folder = os.environ.get("AYON_FOLDER_PATH").split("/")[-1]
-        workdir = os.environ.get("AYON_WORKDIR")
-        self.log.debug(workdir)
-        self.log.debug(instance)
-        self.log.debug(instance.data)
+    def process(self, instance: pyblish.api.Instance):
         host: ComfyUIHost = registered_host()
         image_urls = host.stub.get_publish_node_images(
             instance.data, publish_type=PublishType.MODEL3D
@@ -59,7 +51,7 @@ class CollectModel(pyblish.api.InstancePlugin):
 
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = get_instance_staging_dir(instance)
-        self.log.info(f"Outputting model to {staging_dir}")
+        self.log.info("Outputting model to: %s", staging_dir)
 
         model_link = next(iter(image_urls))
         if model_link is None:
@@ -67,11 +59,11 @@ class CollectModel(pyblish.api.InstancePlugin):
             return
 
         # Download model
-        self.log.info(model_link)
+        self.log.debug("Downloading model: %s", model_link)
         parse = urlsplit(model_link)
-        self.log.info(parse)
+        self.log.debug(parse)
         query = parse_qs(parse.query)
-        self.log.info(query)
+        self.log.debug(query)
         filename = next(iter(query.get("filename")), None)
         if filename is None:
             self.log.warning(
@@ -84,12 +76,10 @@ class CollectModel(pyblish.api.InstancePlugin):
                 "(filename has invalid extension for video.)"
             )
             return
-        self.log.info(filename)
-        self.log.info(staging_dir)
-        destination = os.path.join(
-            staging_dir, instance.data.get("productName"), filename
-        )
-        model_file = os.path.join(instance.data.get("productName"), filename)
+
+        product_name: str = instance.data["productName"]
+        destination = os.path.join(staging_dir, product_name, filename)
+        model_file = os.path.join(product_name, filename)
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
         urlretrieve(model_link, destination)  # noqa: S310
 

@@ -24,10 +24,6 @@ class ComfyUIAddon(AYONAddon, IHostAddon):
     label = "ComfyUI"
     version = __version__
 
-    # def initialize(self, settings):
-    #    self.enabled = True
-    #    return super().initialize(settings)
-
     def add_implementation_envs(self, env, _app):
         defaults = {
             "LOGLEVEL": "DEBUG",

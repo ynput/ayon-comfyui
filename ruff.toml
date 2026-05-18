@@ -26,6 +26,8 @@ exclude = [
     "node_modules",
     "site-packages",
     "venv",
+    "vendor",
+    "generated",
     "package.py",
 ]
 
@@ -33,33 +35,15 @@ exclude = [
 line-length = 79
 indent-width = 4
 
+# Assume Python 3.11
+target-version = "py311"
+
 [lint]
-preview = true  # this is needed for linting empty lines, etc.
-
+preview = true
 pydocstyle.convention = "google"
-
-select = ["ALL"]
-ignore = [
-    "PTH",
-    "ANN101",  # missing-type-function-argument: for older ruff version
-    "ANN204",  # missing-return-type-special-method
-    "COM812",  # missing-trailing-comma
-    "S603",    # subprocess-without-shell-equals-true
-    "ERA001",  # commented-out-code
-    "TRY003",  # raise-vanilla-args
-    "UP006",   # non-pep585-annotation: older python version (type vs. Type)
-    "UP007",   # non-pep604-annotation-union: ..^
-    "UP035",   # deprecated-import: ..
-    "UP045",   # non-pep604-annotation-optional: Use `X | None` for type annotations
-    "ARG002",  # unused-method-argument
-    "INP001",  # implicit-namespace-package: add `__init__.py` to namespaced package
-    "FIX002",  # line-contains-todo: FIX all TODOs
-    "TD003",   # missing-todo-link: missing issue link
-    "S404",    # suspicious-subprocess-import: subprocess module can be insecure
-    "PLC0415", # import-outside-top-level: import must be on top of the file
-    "CPY001",  # missing-copyright-notice: missing copyright header
-
-]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
+select = ["E", "F", "W"]
+ignore = []
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]

@@ -169,7 +169,7 @@ Adding a `Custom Nodes` entry is **essential** when the `Omit included plugin` o
 <img src="./images/dev_mode_extradirentry.png" width="500" height="auto">
 
 As you can see here, a `Custom Nodes` entry is added to a path containing the `ayon_menu` ComfyUI plugin normally present in<br>
-`client/ayon_comfyui/_comfyui_plugin`, so that it can be worked on seperately.
+`client/ayon_comfyui/_comfyui_plugin`, so that it can be worked on separately.
 </details>
 
 ### 5. Setting up a shortcut for saving a workfile to the right destination instead of "within" ComfyUI:

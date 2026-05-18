@@ -9,7 +9,7 @@ from ayon_core.pipeline import (
     AutoCreator,
     CreatedInstance,
     Creator,
-    LoaderPlugin
+    LoaderPlugin,
 )
 
 if TYPE_CHECKING:
@@ -23,9 +23,15 @@ class ComfyUICreator(Creator):
     skip_discovery = True
     settings_category = "comfyui"
 
+    @property
+    def stub(self) -> RPCStub:
+        """Return stub stored on QRPCManager."""
+        return QRPCManager.get_instance().stub
+
 
 class ComfyUIAutoCreator(AutoCreator):
     """Generic ComfyUI autocreator to extend."""
+
     skip_discovery = True
     settings_category = "comfyui"
 
@@ -99,9 +105,6 @@ class ComfyUIAutoCreator(AutoCreator):
                     None,
                 )
             )
-
-            if not self.active_on_create:
-                data["active"] = False
 
             new_instance = CreatedInstance(
                 self.product_type, product_name, data, self

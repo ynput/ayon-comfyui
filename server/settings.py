@@ -32,4 +32,5 @@ class ComfyUISettings(BaseSettingsModel):
     )
 
     create: CreatorsModel = SettingsField(
-        default_factory=CreatorsModel, title="Creators")
+        default_factory=CreatorsModel, title="Creators"
+    )

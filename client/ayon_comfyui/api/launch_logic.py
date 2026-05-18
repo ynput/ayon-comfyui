@@ -65,9 +65,9 @@ def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
     # IPC using the proc Popen is not very wise,
     # since we can't reliably get a hold of the entire process tree
 
-    # Since communicating the adress to JS isn't possible before establishing a
-    # connection with IFrame RPC,
-    # we still have to send over the actual adress to the plugin.
+    # Since communicating the address to JS isn't possible before establishing
+    # a connection with IFrame RPC,
+    # we still have to send over the actual address to the plugin.
 
     Path(py_file).write_text(python, encoding="utf-8")
     Path(js_file).write_text(js, encoding="utf-8")

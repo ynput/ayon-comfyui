@@ -22,13 +22,9 @@ class ProductTypeItemModel(BaseSettingsModel):
 
 
 class BasicCreatorModel(BaseSettingsModel):
-    enabled: bool = SettingsField(
-        True,
-        title="Enabled"
-    )
+    enabled: bool = SettingsField(True, title="Enabled")
     default_variants: list[str] = SettingsField(
-        default_factory=list,
-        title="Default Variants"
+        default_factory=list, title="Default Variants"
     )
     product_type_items: list[ProductTypeItemModel] = SettingsField(
         default_factory=list,
@@ -40,7 +36,7 @@ class BasicCreatorModel(BaseSettingsModel):
 
     @staticmethod
     def is_valid_variant(variant: str) -> bool:
-        return re.fullmatch(r'[A-Za-z0-9_]+', variant)  # alphanumeric
+        return re.fullmatch(r"[A-Za-z0-9_]+", variant)  # alphanumeric
 
     @validator("default_variants")
     def valid_variants(cls, value):
@@ -54,18 +50,14 @@ class BasicCreatorModel(BaseSettingsModel):
 
 
 class CreatorsModel(BaseSettingsModel):
-
     CreateImage: BasicCreatorModel = SettingsField(
-        default_factory=BasicCreatorModel,
-        title="Create Image"
+        default_factory=BasicCreatorModel, title="Create Image"
     )
     CreateModel: BasicCreatorModel = SettingsField(
-        default_factory=BasicCreatorModel,
-        title="Create Model"
+        default_factory=BasicCreatorModel, title="Create Model"
     )
     CreateVideo: BasicCreatorModel = SettingsField(
-        default_factory=BasicCreatorModel,
-        title="Create Video"
+        default_factory=BasicCreatorModel, title="Create Video"
     )
 
 

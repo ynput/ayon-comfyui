@@ -10,6 +10,7 @@ import os
 import sys
 from collections.abc import Generator
 from typing import Any
+from uuid import uuid4
 
 import pyblish.api
 from ayon_core.host import (
@@ -22,16 +23,10 @@ from ayon_core.host import (
 from ayon_core.pipeline import (
     AYON_CONTAINER_ID,
     deregister_creator_plugin_path,
-    deregister_inventory_action_path,
     deregister_loader_plugin_path,
-    deregister_workfile_build_plugin_path,
-    get_current_project_name,
     register_creator_plugin_path,
-    register_inventory_action_path,
     register_loader_plugin_path,
-    register_workfile_build_plugin_path,
 )
-from ayon_core.settings import get_project_settings
 
 from ayon_comfyui import COMFYUI_ADDON_ROOT
 from ayon_comfyui.api.consts import LOG_LEVEL
@@ -44,11 +39,6 @@ PLUGINS_DIR = os.path.join(COMFYUI_ADDON_ROOT, "plugins")
 PUBLISH_PATH = os.path.join(PLUGINS_DIR, "publish")
 LOAD_PATH = os.path.join(PLUGINS_DIR, "load")
 CREATE_PATH = os.path.join(PLUGINS_DIR, "create")
-# [[maybe_unused]]
-INVENTORY_PATH = os.path.join(PLUGINS_DIR, "inventory")
-WORKFILE_BUILD_PATH = os.path.join(PLUGINS_DIR, "workfile_build")
-
-from uuid import uuid4
 
 
 class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
@@ -76,15 +66,9 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
 
     def install(self) -> None:
         """Install host context."""
-        # Context
-        project_name = get_current_project_name()
-        project_settings = get_project_settings(project_name)
 
         register_loader_plugin_path(LOAD_PATH)
         register_creator_plugin_path(CREATE_PATH)
-        # Not sure we'll use these.
-        register_inventory_action_path(INVENTORY_PATH)
-        register_workfile_build_plugin_path(WORKFILE_BUILD_PATH)
 
         # Pyblish
         pyblish.api.register_host("comfyui")
@@ -127,9 +111,6 @@ def uninstall() -> None:
 
     deregister_loader_plugin_path(LOAD_PATH)
     deregister_creator_plugin_path(CREATE_PATH)
-    # Not sure we'll use these.
-    deregister_inventory_action_path(INVENTORY_PATH)
-    deregister_workfile_build_plugin_path(WORKFILE_BUILD_PATH)
 
 
 def list_instances() -> list[dict[str, Any]]:
@@ -189,13 +170,13 @@ def containerise(  # noqa: PLR0913, PLR0917
     }
     stub = QRPCManager.get_instance().stub
 
-    # TODO(@sas): Expand stub logic to keep track of containers seperately,
+    # TODO(@sas): Expand stub logic to keep track of containers separately,
     #             for my own sanity. That way, we can track representation
     #             instead of instance_id, and we might also want to enforce
     #             some uuid to keep track of every instance we make, since
     #             I can forsee people wanting to import the same image twice.
-    #             It seems that regular implementations seperate this through
-    #             ls() and list_instances(), I guess. We will cleanly seperate
+    #             It seems that regular implementations separate this through
+    #             ls() and list_instances(), I guess. We will cleanly separate
     #             them.
 
     stub.add_containers(data)

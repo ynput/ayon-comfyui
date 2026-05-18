@@ -87,7 +87,8 @@ class AyonSaveNode(io.ComfyNode):
         # subfolder = "renders"
         # filename_prefix = "dragon"
 
-        # I'm choosing to ignore the counter, and we're just going to overwrite the files.
+        # I'm choosing to ignore the counter, and we're just going to overwrite
+        # the files.
 
         full_prefix = file_prefix
         if use_unique_name:
@@ -106,10 +107,12 @@ class AyonSaveNode(io.ComfyNode):
 
         for idx, image in enumerate(images_in, start=1):
             image_data = 255.0 * image.cpu().numpy()
-            img_pil = Image.fromarray(np.clip(image_data, 0, 255).astype(np.uint8))
-            # clip to 8 bit PNG. This could need work, png also supports 16 bit,1
-            # if data needs to exist as float, and we need to export within OpenEXR,
-            # we're screwed if we do this.
+            img_pil = Image.fromarray(
+                np.clip(image_data, 0, 255).astype(np.uint8)
+            )
+            # clip to 8 bit PNG. This could need work, png also supports 16
+            # bit, 1 if data needs to exist as float, and we need to export
+            # within OpenEXR, we're screwed if we do this.
 
             metadata = None
             if keep_metadata:
@@ -118,7 +121,9 @@ class AyonSaveNode(io.ComfyNode):
                     metadata.add_text("prompt", json.dumps(cls.hidden.prompt))
                 if (extra_pnginfo := cls.hidden.extra_pnginfo) is not None:
                     for info in cls.hidden.extra_pnginfo:
-                        metadata.add_text(info, json.dumps(extra_pnginfo[info]))
+                        metadata.add_text(
+                            info, json.dumps(extra_pnginfo[info])
+                        )
 
             filename_out = f"{filename}_{idx:0>4}.png"
             img_path = os.path.join(full_output_folder, filename_out)
@@ -126,7 +131,9 @@ class AyonSaveNode(io.ComfyNode):
             # ensure path existence.
 
             Path(img_path).parent.mkdir(parents=True, exist_ok=True)
-            img_pil.save(img_path, pnginfo=metadata, compress_level=compress_level)
+            img_pil.save(
+                img_path, pnginfo=metadata, compress_level=compress_level
+            )
 
             images_processed.append(
                 ui.SavedResult(filename_out, subfolder, io.FolderType.output)
@@ -242,7 +249,9 @@ class AyonSaveVideoNode(io.ComfyNode):
                 metadata=saved_metadata,
             )
             video_saved = [
-                ui.SavedResult(filename_with_ext, subfolder, io.FolderType.output)
+                ui.SavedResult(
+                    filename_with_ext, subfolder, io.FolderType.output
+                )
             ]
         elif format == "webm":
             if webm_no_audio:
@@ -329,7 +338,9 @@ class AyonSaveVideoNode(io.ComfyNode):
                 target_sample_rate = 48000
 
                 # Create audio stream
-                audio_stream = container.add_stream("libopus", rate=target_sample_rate)
+                audio_stream = container.add_stream(
+                    "libopus", rate=target_sample_rate
+                )
                 audio_stream.layout = layout
 
                 # Resample (planar)
@@ -423,7 +434,6 @@ class AyonSave3DModelNode(io.ComfyNode):
     def execute(
         cls, mesh: Types.MESH | Types.File3D, recook: bool, ayon_info: str
     ) -> io.NodeOutput:
-
         # parse ayon_info and retrieve settings from there.
         try:
             ayon_json = json.loads(ayon_info)
@@ -473,7 +483,9 @@ class AyonSave3DModelNode(io.ComfyNode):
             f = f"{filename}.{ext}"
             mesh.save_to(os.path.join(full_output_folder, f))
 
-            results.append({"filename": f, "subfolder": subfolder, "type": "output"})
+            results.append(
+                {"filename": f, "subfolder": subfolder, "type": "output"}
+            )
         else:
             # Handle Mesh input - save vertices and faces as GLB or OBJ
             for idx, i in enumerate(range(mesh.vertices.shape[0]), start=1):
@@ -486,7 +498,11 @@ class AyonSave3DModelNode(io.ComfyNode):
                         metadata,
                     )
                     results.append(
-                        {"filename": f, "subfolder": subfolder, "type": "output"}
+                        {
+                            "filename": f,
+                            "subfolder": subfolder,
+                            "type": "output",
+                        }
                     )
                 elif fallback_format == "obj":
                     f = f"{filename}_{idx:0>4}.obj"
@@ -497,7 +513,11 @@ class AyonSave3DModelNode(io.ComfyNode):
                         metadata,
                     )
                     results.append(
-                        {"filename": f, "subfolder": subfolder, "type": "output"}
+                        {
+                            "filename": f,
+                            "subfolder": subfolder,
+                            "type": "output",
+                        }
                     )
 
         # We have to use old dictionary style
@@ -508,7 +528,8 @@ class AyonSave3DModelNode(io.ComfyNode):
         """
         Borrowed from ComfyUI/comfy_extras/nodes_hunyuan3d.py
 
-        Save PyTorch tensor vertices and faces as a GLB file without external dependencies.
+        Save PyTorch tensor vertices and faces as a GLB file without external
+        dependencies.
 
         Parameters:
         vertices: torch.Tensor of shape (N, 3) - The vertex coordinates
@@ -603,7 +624,10 @@ class AyonSave3DModelNode(io.ComfyNode):
         # Create the GLB header
         # Magic glTF
         glb_header = struct.pack(
-            "<4sII", b"glTF", 2, 12 + 8 + len(gltf_json_padded) + 8 + len(buffer_data)
+            "<4sII",
+            b"glTF",
+            2,
+            12 + 8 + len(gltf_json_padded) + 8 + len(buffer_data),
         )
 
         # Create JSON chunk header (chunk type 0)

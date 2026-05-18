@@ -32,25 +32,29 @@ class IncrementWorkfile(pyblish.api.InstancePlugin):
     optional = True
 
     def process(self, instance):
-        errored_plugins = get_errored_plugins_from_context(instance.context)
+        context = instance.context
+        errored_plugins = get_errored_plugins_from_context(context)
         if errored_plugins:
             raise RuntimeError(
                 "Skipping incrementing current file because publishing failed."
             )
 
         version = None
-        context = instance.context
         current_filepath: str = context.data["currentFile"]
         host: ComfyUIHost = registered_host()
 
+        # TODO(Roy): Why do we need this?
         if not instance.data["do_increment"]:
             self.log.info("Not incremented since first publish")
+
             version = get_versioning_start(
-                instance.context.data.get("projectName"),
+                context.data.get("projectName"),
                 host.name,
-                task_name=instance.context.data["taskEntity"]["name"],
-                task_type=instance.context.data["taskEntity"]["taskType"],
-                product_type="workfile",
+                task_name=context.data["taskEntity"]["name"],
+                task_type=context.data["taskEntity"]["taskType"],
+                product_base_type="workfile",
+                product_name=instance.data["productName"],
+                project_settings=context.data["project_settings"],
             )
             if version > 1:
                 version -= 1

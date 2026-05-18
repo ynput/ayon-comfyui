@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import inspect
 import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ayon_comfyui.api.rpc_stub import RPCStub
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.pipeline import list_instances
-from ayon_comfyui.api.qt_rpc import QRPCManager
 from ayon_comfyui.api.plugin import ComfyUICreator
 from ayon_core.lib import BoolDef, NumberDef, TextDef
 from ayon_core.pipeline import CreatedInstance, CreatorError
@@ -40,7 +39,6 @@ class CreateImage(ComfyUICreator):
         data: dict[str, Any],
         pre_create_data: dict[str, bool | str],
     ) -> None:
-        stub: RPCStub = QRPCManager.get_instance().stub
 
         keep_metadata: bool = pre_create_data.get("keep_metadata")
         prefix: str = pre_create_data.get("file_prefix")
@@ -111,8 +109,8 @@ class CreateImage(ComfyUICreator):
         )
 
         self._add_instance_to_context(new_instance)
-        stub.create_publish_node(new_instance.data_to_store())
-        stub.update_instance(new_instance.data_to_store())
+        self.stub.create_publish_node(new_instance.data_to_store())
+        self.stub.update_instance(new_instance.data_to_store())
 
     def collect_instances(self):
         for instance_data in list_instances():
@@ -127,16 +125,14 @@ class CreateImage(ComfyUICreator):
     def update_instances(  # noqa: D102, PLR6301
         self, update_list: list[tuple[CreatedInstance, Any]]
     ) -> None:
-        stub: RPCStub = QRPCManager.get_instance().stub
         updated = [
             instance.data_to_store() for instance, _changes in update_list
         ]
-        stub.update_instance(updated)
+        self.stub.update_instance(updated)
 
     def remove_instances(self, instances: list[CreatedInstance]):
-        stub: RPCStub = QRPCManager.get_instance().stub
-        stub.remove_publish_nodes([i.data_to_store() for i in instances])
-        stub.remove_instance(instances)
+        self.stub.remove_publish_nodes([i.data_to_store() for i in instances])
+        self.stub.remove_instance(instances)
         for instance in instances:
             self._remove_instance_from_context(instance)
 
@@ -148,12 +144,12 @@ class CreateImage(ComfyUICreator):
         # like ComfyUI does inside the node.
         return [
             BoolDef(
-                "keep_metadata", default=True, label="Keep image metadata?"
+                "keep_metadata", default=True, label="Keep image metadata"
             ),
             BoolDef(
                 "force_recook_on_publish",
                 default=False,
-                label="Force re-cook on publish?",
+                label="Force re-cook on publish",
             ),
             TextDef(
                 "file_prefix",
@@ -164,7 +160,7 @@ class CreateImage(ComfyUICreator):
             BoolDef(
                 "use_unique_name",
                 default=True,
-                label="Use unique product name?",
+                label="Use unique product name",
             ),
             TextDef(
                 "unique_name",
@@ -183,7 +179,9 @@ class CreateImage(ComfyUICreator):
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator plugin for publishing ComfyUI images.
+        return inspect.cleandoc(
+            """Creator plugin for publishing ComfyUI images.
 
-        Accepts batched images. These will all be loaded together too.
-        """
+            Accepts batched images. These will all be loaded together too.
+            """
+        )
