@@ -87,7 +87,8 @@ class AyonSaveNode(io.ComfyNode):
         # subfolder = "renders"
         # filename_prefix = "dragon"
 
-        # I'm choosing to ignore the counter, and we're just going to overwrite the files.
+        # I'm choosing to ignore the counter, and we're just going to overwrite
+        # the files.
 
         full_prefix = file_prefix
         if use_unique_name:
@@ -109,9 +110,9 @@ class AyonSaveNode(io.ComfyNode):
             img_pil = Image.fromarray(
                 np.clip(image_data, 0, 255).astype(np.uint8)
             )
-            # clip to 8 bit PNG. This could need work, png also supports 16 bit,1
-            # if data needs to exist as float, and we need to export within OpenEXR,
-            # we're screwed if we do this.
+            # clip to 8 bit PNG. This could need work, png also supports 16
+            # bit, 1 if data needs to exist as float, and we need to export
+            # within OpenEXR, we're screwed if we do this.
 
             metadata = None
             if keep_metadata:
@@ -433,7 +434,6 @@ class AyonSave3DModelNode(io.ComfyNode):
     def execute(
         cls, mesh: Types.MESH | Types.File3D, recook: bool, ayon_info: str
     ) -> io.NodeOutput:
-
         # parse ayon_info and retrieve settings from there.
         try:
             ayon_json = json.loads(ayon_info)
@@ -528,7 +528,8 @@ class AyonSave3DModelNode(io.ComfyNode):
         """
         Borrowed from ComfyUI/comfy_extras/nodes_hunyuan3d.py
 
-        Save PyTorch tensor vertices and faces as a GLB file without external dependencies.
+        Save PyTorch tensor vertices and faces as a GLB file without external
+        dependencies.
 
         Parameters:
         vertices: torch.Tensor of shape (N, 3) - The vertex coordinates

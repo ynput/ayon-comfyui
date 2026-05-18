@@ -51,7 +51,7 @@ class CollectModel(pyblish.api.InstancePlugin):
 
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = get_instance_staging_dir(instance)
-        self.log.info(f"Outputting model to: %s", staging_dir)
+        self.log.info("Outputting model to: %s", staging_dir)
 
         model_link = next(iter(image_urls))
         if model_link is None:
@@ -76,10 +76,10 @@ class CollectModel(pyblish.api.InstancePlugin):
                 "(filename has invalid extension for video.)"
             )
             return
-        destination = os.path.join(
-            staging_dir, instance.data.get("productName"), filename
-        )
-        model_file = os.path.join(instance.data.get("productName"), filename)
+
+        product_name: str = instance.data["productName"]
+        destination = os.path.join(staging_dir, product_name, filename)
+        model_file = os.path.join(product_name, filename)
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
         urlretrieve(model_link, destination)  # noqa: S310
 

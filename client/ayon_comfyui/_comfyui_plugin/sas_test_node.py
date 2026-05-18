@@ -86,7 +86,11 @@ class SasTestNode(io.ComfyNode):
         """Main execution function.
 
         The arguments for this function are the inputs by id as arguments.
-        lets's say I have a [io.String.Input("mystring"), io.Float.Input("myfloat")]
+        If you have:
+            [
+                io.String.Input("mystring"),
+                io.Float.Input("myfloat")
+            ]
         as inputs, this means the function signature will be:
         ```
         @classmethod

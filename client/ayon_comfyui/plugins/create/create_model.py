@@ -186,8 +186,8 @@ class CreateModel(ComfyUICreator):
             """Creator plugin for ComfyUI 3D models.
 
             This model can take in Mesh and other types of 3D model
-            inputs. If it takes in a Mesh, it will be saved as either '.obj' 
-            or '.glb', using the implementation of the nodes for Hunyuan3d 
+            inputs. If it takes in a Mesh, it will be saved as either '.obj'
+            or '.glb', using the implementation of the nodes for Hunyuan3d
             (Tencent).
             """
         )

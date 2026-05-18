@@ -203,7 +203,7 @@ class CreateVideo(ComfyUICreator):
 
             Use the "Create Video" builtin node to construct a video first.
             WebM is a bit experimental but supports audio using OPUS.
-    
+
             Audio is automatically resampled to conform to OPUS' standard.
             """
         )

@@ -127,7 +127,8 @@ class AyonLoadImageNode(io.ComfyNode):
                 output_masks.append(mask.unsqueeze(0))
 
                 if img.format == "MPO":
-                    break  # ignore all frames except the first one for MPO format
+                    # ignore all frames except the first one for MPO format
+                    break
 
         if len(output_images) > 1:
             output_image = torch.cat(output_images, dim=0)
@@ -214,7 +215,8 @@ class AyonLoadVideoNode(io.ComfyNode):
 
     @classmethod
     def execute(cls, ayon_container_info: str):
-        """Mimic nodes_video.py/LoadVideo with container info imprinted on node."""
+        """Mimic nodes_video.py/LoadVideo with container info imprinted on
+        node."""
         container = json.loads(ayon_container_info)
         upload_info = next(iter(container["image_upload_info"]))
         if not upload_info:
