@@ -4,22 +4,26 @@ Ayon ComfyUI Setup Guide
 Setting up ComfyUI for Ayon can be a bit of a hassle,<br>
 but with this guide, hopefully, step by step you'll get it going!
 
-#### [Return to README!](../README.md)
-#### Assuming ayon_comfyui is already in an active bundle;
+Assuming ayon_comfyui is already in an active bundle:
 
 ### 1. Getting ComfyUI
-Download a release of ComfyUI from ComfyOrg on GitHub: [**Over here!**](https://github.com/Comfy-Org/ComfyUI/releases)
 
-#### Note: The plugin has been tested with ComfyUI Windows Standalone 0.18.1
+Download a [release of ComfyUI from ComfyOrg on GitHub](https://github.com/Comfy-Org/ComfyUI/releases).
+
+> [!Note]
+> The plugin has been tested with ComfyUI Windows Standalone 0.18.1
+
 
 ### 2. Setup AYON Applications
+
 Add an entry for ComfyUI as an application in the webui settings for `Applications / Additional Applications`
+
 <details>
 <summary>Setup for Ayon Applications settings</summary>
 In the AYON web interface, navigate to either Studio or Project settings, and choose the Applications plugin.<br>
 We need to add an entry for ComfyUI.
 
-Please note that the `Name` and `Host name` entries need to be lowercase.
+Please note that the `Name` and `Host name` entries need to be lowercase: `comfyui`.
 
 <img src="./images/applications.png" width="650" height="auto">
 
@@ -27,14 +31,15 @@ Please note that the `Name` and `Host name` entries need to be lowercase.
 
 ### 3. Setting up basic profiles
 
-The plugin for ComfyUI works on profiles, divided into local and remote profiles.<br>
-Note that all string entries in the menu that pertain to paths (including custom directory settings and launch arguments), can recieve **templates**, e.g.<br>
-`{root_name}/{project[name]}/Lab/comfyui/0.18.2/ComfyUI`
+The plugin for ComfyUI works on profiles, divided into local and remote profiles.
+
+
+Note that all string entries in the menu that pertain to paths (including custom directory settings and launch arguments), can receive **template formatting**, e.g.<br>
+`{roots[work]}/{project[name]}/Lab/comfyui/0.18.2/ComfyUI`
 
 (change root name to preferred root as set up in studio anatomy settings.)
 
-As of 0.0.26, you can also use `{roots[root_name]}` if you so desire.<br>
-This mimicks the way roots work in `applications`.
+This mimics the way roots work in `applications`.
 
 <details>
 <summary>Setting up a basic local launch profile:</summary>
