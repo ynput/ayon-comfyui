@@ -10,6 +10,7 @@ import os
 import sys
 from collections.abc import Generator
 from typing import Any
+from uuid import uuid4
 
 import pyblish.api
 from ayon_core.host import (
@@ -38,8 +39,6 @@ PLUGINS_DIR = os.path.join(COMFYUI_ADDON_ROOT, "plugins")
 PUBLISH_PATH = os.path.join(PLUGINS_DIR, "publish")
 LOAD_PATH = os.path.join(PLUGINS_DIR, "load")
 CREATE_PATH = os.path.join(PLUGINS_DIR, "create")
-
-from uuid import uuid4
 
 
 class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
