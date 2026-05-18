@@ -9,7 +9,7 @@ from ayon_core.pipeline import (
     AutoCreator,
     CreatedInstance,
     Creator,
-    LoaderPlugin
+    LoaderPlugin,
 )
 
 if TYPE_CHECKING:
@@ -26,6 +26,7 @@ class ComfyUICreator(Creator):
 
 class ComfyUIAutoCreator(AutoCreator):
     """Generic ComfyUI autocreator to extend."""
+
     skip_discovery = True
     settings_category = "comfyui"
 

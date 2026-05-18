@@ -104,7 +104,9 @@ class AyonSaveNode(io.ComfyNode):
 
         for idx, image in enumerate(images_in, start=1):
             image_data = 255.0 * image.cpu().numpy()
-            img_pil = Image.fromarray(np.clip(image_data, 0, 255).astype(np.uint8))
+            img_pil = Image.fromarray(
+                np.clip(image_data, 0, 255).astype(np.uint8)
+            )
             # clip to 8 bit PNG. This could need work, png also supports 16 bit,1
             # if data needs to exist as float, and we need to export within OpenEXR,
             # we're screwed if we do this.
@@ -116,7 +118,9 @@ class AyonSaveNode(io.ComfyNode):
                     metadata.add_text("prompt", json.dumps(prompt))
                 if extra_pnginfo is not None:
                     for info in extra_pnginfo:
-                        metadata.add_text(info, json.dumps(extra_pnginfo[info]))
+                        metadata.add_text(
+                            info, json.dumps(extra_pnginfo[info])
+                        )
 
             filename_out = f"{filename}_{idx:0>4}.png"
             img_path = os.path.join(full_output_folder, filename_out)
@@ -124,7 +128,9 @@ class AyonSaveNode(io.ComfyNode):
             # ensure path existence.
 
             Path(img_path).parent.mkdir(parents=True, exist_ok=True)
-            img_pil.save(img_path, pnginfo=metadata, compress_level=compress_level)
+            img_pil.save(
+                img_path, pnginfo=metadata, compress_level=compress_level
+            )
 
             images_processed.append(
                 ui.SavedResult(filename_out, subfolder, io.FolderType.output)
