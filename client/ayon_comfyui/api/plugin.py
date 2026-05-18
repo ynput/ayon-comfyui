@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import ayon_api
-from ayon_core.pipeline import AutoCreator, CreatedInstance, LoaderPlugin
+from ayon_core.pipeline import (
+    AutoCreator,
+    CreatedInstance,
+    Creator,
+    LoaderPlugin
+)
 
 if TYPE_CHECKING:
     from ayon_core.pipeline.create.context import CreateContext
@@ -14,9 +19,15 @@ from ayon_comfyui.api.pipeline import list_instances
 from ayon_comfyui.api.qt_rpc import QRPCManager, RPCStub
 
 
-# Adapting from Photoshop
+class ComfyUICreator(Creator):
+    skip_discovery = True
+    settings_category = "comfyui"
+
+
 class ComfyUIAutoCreator(AutoCreator):
     """Generic ComfyUI autocreator to extend."""
+    skip_discovery = True
+    settings_category = "comfyui"
 
     def get_instance_attr_defs(self):
         return []

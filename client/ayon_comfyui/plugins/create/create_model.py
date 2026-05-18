@@ -10,12 +10,13 @@ if TYPE_CHECKING:
 from ayon_comfyui.api.pipeline import list_instances
 from ayon_comfyui.api.qt_rpc import QRPCManager
 from ayon_comfyui.api.rpc_stub import PublishType
+from ayon_comfyui.api.plugin import ComfyUICreator
 from ayon_core.lib import BoolDef, EnumDef, TextDef
-from ayon_core.pipeline import CreatedInstance, Creator, CreatorError
+from ayon_core.pipeline import CreatedInstance, CreatorError
 from ayon_core.pipeline.create import PRODUCT_NAME_ALLOWED_SYMBOLS
 
 
-class ModelCreator(Creator):
+class CreateModel(ComfyUICreator):
     """Creator for model before publishing.
 
     On create, spawn a node that is to be associated with
@@ -23,12 +24,11 @@ class ModelCreator(Creator):
     """
 
     identifier = "io.ayon.creators.comfyui.model"
-    label = "AI 3D Model"
+    label = "3D Model"
     product_type = "model"
     product_base_type = "model"
-    description = "ComfyUI generated model."
+    description = "ComfyUI generated model"
 
-    default_variant = "Main"
     default_vid_name = "ayon"
 
     enum_fallback_format: ClassVar[dict] = {

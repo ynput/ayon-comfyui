@@ -29,7 +29,6 @@ class ComfyUIAddon(AYONAddon, IHostAddon):
     #    return super().initialize(settings)
 
     def add_implementation_envs(self, env, _app):
-        env["COMFYUI_PATH"] = R"C:/test_path/"
         defaults = {
             "LOGLEVEL": "DEBUG",
             "AYON_LOG_NO_COLORS": "1",
