@@ -32,6 +32,6 @@ Content-Security-Policy: frame-ancestors http://localhost:<port_that_iframe_is_h
 ### Security notice
 
 > [!WARNING]  
-> This explicitly allows mixed security and (limit; ASSUMING `Content-Security-Policy`) cross-origin remote scripting.
+> This explicitly allows mixed security and (limited; ASSUMING `Content-Security-Policy`) cross-origin remote scripting.
 
 More information (including header settings and further security issues) is provided [here](./client/ayon_comfyui/api/iframe/README.md).
