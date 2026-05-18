@@ -23,6 +23,11 @@ class ComfyUICreator(Creator):
     skip_discovery = True
     settings_category = "comfyui"
 
+    @property
+    def stub(self) -> RPCStub:
+        """Return stub stored on QRPCManager."""
+        return QRPCManager.get_instance().stub
+
 
 class ComfyUIAutoCreator(AutoCreator):
     """Generic ComfyUI autocreator to extend."""
