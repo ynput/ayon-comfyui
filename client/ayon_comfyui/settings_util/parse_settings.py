@@ -557,7 +557,7 @@ class ComfyRemoteSettings:
             return self._profile_dict.get("comfy_web_adress")
 
         # TODO(@sas): Look into deprecation, since origin checking
-        #             is likely unnessecary.
+        #             is likely unnecessary.
         @property
         def comfy_origin(self) -> str:
             """Return URL expected to be in Origin header."""
