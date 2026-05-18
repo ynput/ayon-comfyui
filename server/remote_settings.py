@@ -26,7 +26,9 @@ class ComfyRemoteSetting(BaseSettingsModel):
     frontend_port: int = SettingsField(
         55056,
         title="Default port for frontend RPC",
-        description="Websocket port to communicate with local browser instance",
+        description=(
+            "Websocket port to communicate with local browser instance"
+        ),
     )
 
     http_server_port: int = SettingsField(
