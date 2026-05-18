@@ -158,11 +158,11 @@ class CreateVideo(ComfyUICreator):
 
     def get_pre_create_attr_defs(self):
         return [
-            BoolDef("keep_metadata", default=True, label="Keep metadata?"),
+            BoolDef("keep_metadata", default=True, label="Keep metadata"),
             BoolDef(
                 "force_recook_on_publish",
                 default=False,
-                label="Force re-cook on publish?",
+                label="Force re-cook on publish",
             ),
             TextDef(
                 "file_prefix",
@@ -173,7 +173,7 @@ class CreateVideo(ComfyUICreator):
             BoolDef(
                 "use_unique_name",
                 default=True,
-                label="Use unique product name?",
+                label="Use unique product name",
             ),
             TextDef(
                 "unique_name",
@@ -186,7 +186,7 @@ class CreateVideo(ComfyUICreator):
                 items=self.enum_output_format,
                 label="Output Format | Codec",
             ),
-            BoolDef("webm_noaudio", default=False, label="WebM omit audio?"),
+            BoolDef("webm_noaudio", default=False, label="WebM omit audio"),
             NumberDef(
                 "webm_crf",
                 minimum=0,

@@ -28,7 +28,7 @@ class CreateModel(ComfyUICreator):
     label = "3D Model"
     product_type = "model"
     product_base_type = "model"
-    description = "ComfyUI generated model"
+    description = "ComfyUI generated 3D model"
 
     default_vid_name = "ayon"
 
@@ -151,11 +151,11 @@ class CreateModel(ComfyUICreator):
 
     def get_pre_create_attr_defs(self):
         return [
-            BoolDef("keep_metadata", default=True, label="Keep metadata?"),
+            BoolDef("keep_metadata", default=True, label="Keep metadata"),
             BoolDef(
                 "force_recook_on_publish",
                 default=False,
-                label="Force re-cook on publish?",
+                label="Force re-cook on publish",
             ),
             TextDef(
                 "file_prefix",
@@ -166,7 +166,7 @@ class CreateModel(ComfyUICreator):
             BoolDef(
                 "use_unique_name",
                 default=True,
-                label="Use unique product name?",
+                label="Use unique product name",
             ),
             TextDef(
                 "unique_name",

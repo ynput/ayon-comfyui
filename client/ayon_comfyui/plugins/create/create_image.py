@@ -149,12 +149,12 @@ class CreateImage(ComfyUICreator):
         # like ComfyUI does inside the node.
         return [
             BoolDef(
-                "keep_metadata", default=True, label="Keep image metadata?"
+                "keep_metadata", default=True, label="Keep image metadata"
             ),
             BoolDef(
                 "force_recook_on_publish",
                 default=False,
-                label="Force re-cook on publish?",
+                label="Force re-cook on publish",
             ),
             TextDef(
                 "file_prefix",
@@ -165,7 +165,7 @@ class CreateImage(ComfyUICreator):
             BoolDef(
                 "use_unique_name",
                 default=True,
-                label="Use unique product name?",
+                label="Use unique product name",
             ),
             TextDef(
                 "unique_name",
