@@ -317,8 +317,8 @@ def call_on_origin(
             )
 
             client = get_client_from_origin(origin=_origin_)
-            log.info(f"FOR ORIGIN: {_origin_}")  # noqa :G004
-            log.info(f"GOT CLIENT: {client!s}")  # noqa :G004
+            log.debug(f"FOR ORIGIN: {_origin_}")  # noqa :G004
+            log.debug(f"GOT CLIENT: {client!s}")  # noqa :G004
             if client is None:
                 return None
 
