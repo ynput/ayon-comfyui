@@ -23,7 +23,7 @@ class ModelCreator(Creator):
     """
 
     identifier = "io.ayon.creators.comfyui.model"
-    label = "AI 3D Model"
+    label = "3D Model"
     product_type = "model"
     product_base_type = "model"
     description = "ComfyUI generated model."
