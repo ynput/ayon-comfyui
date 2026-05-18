@@ -23,7 +23,7 @@ class CreateImage(ComfyUICreator):
     """
 
     identifier = "io.ayon.creators.comfyui.image"
-    label = "AI Image"
+    label = "Image"
     product_type = "image"
     product_base_type = "image"
     description = "Image generated using ComfyUI"

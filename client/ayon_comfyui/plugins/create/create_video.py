@@ -24,7 +24,7 @@ class CreateVideo(ComfyUICreator):
     """
 
     identifier = "io.ayon.creators.comfyui.render"
-    label = "AI Video"
+    label = "Video"
     product_base_type = "render"
     product_type = product_base_type
     description = "Video generated using ComfyUI"
