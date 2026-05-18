@@ -77,7 +77,7 @@ class ComfyLocalSettings:
             if not isinstance(value, str):
                 return None
             if self._os == "win":
-                value.replace("\\", "/")
+                value = value.replace("\\", "/")
             return value
 
         def _get_launch_profile_setting(
@@ -121,13 +121,13 @@ class ComfyLocalSettings:
                 if isinstance(value, list):
                     value = [val.replace("\\", "/") for val in value]
                 elif isinstance(value, str):
-                    value.replace("\\", "/")
+                    value = value.replace("\\", "/")
             return value
 
         def _get_launch_profile_args(self) -> list[str]:
             """Concatenate launch args.
 
-            Takes care of windows standalone build flag based on settigns.
+            Takes care of windows standalone build flag based on settings.
 
             Returns:
                 Launch arguments as a list.
@@ -170,7 +170,7 @@ class ComfyLocalSettings:
 
         @property
         def comfy_local_url(self) -> str:
-            """Gets complete http adress comfy runs on."""
+            """Gets complete HTTP address ComfyUI runs on."""
             return f"http://127.0.0.1:{self.comfy_port}"
 
         @property
@@ -232,7 +232,7 @@ class ComfyLocalSettings:
         ) -> dict[str, list[str]]:
             """Validate this profile and report back.
 
-            Specify os_name to spoof percieved OS for setting retrieval.
+            Specify os_name to spoof perceived OS for setting retrieval.
 
             Returns:
                 A dict with errors and logs:
