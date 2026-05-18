@@ -9,12 +9,13 @@ if TYPE_CHECKING:
 
 from ayon_comfyui.api.pipeline import list_instances
 from ayon_comfyui.api.qt_rpc import QRPCManager
+from ayon_comfyui.api.plugin import ComfyUICreator
 from ayon_core.lib import BoolDef, NumberDef, TextDef
-from ayon_core.pipeline import CreatedInstance, Creator, CreatorError
+from ayon_core.pipeline import CreatedInstance, CreatorError
 from ayon_core.pipeline.create import PRODUCT_NAME_ALLOWED_SYMBOLS
 
 
-class ImageCreator(Creator):
+class CreateImage(ComfyUICreator):
     """Creator for image(s) before publishing.
 
     On create, spawn a node that is to be associated with
@@ -27,7 +28,6 @@ class ImageCreator(Creator):
     product_base_type = "image"
     description = "Image generated using ComfyUI"
 
-    default_variant = "Main"
     default_img_name = "ayon"
 
     icon = "gears"
