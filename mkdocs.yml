@@ -50,7 +50,6 @@ plugins:
         - ./**/pythonrc.py  # houdini fix
         - .*/**/*
         - ./*.py
-        - ./**/README.md
   - mkdocstrings:
       handlers:
         python:
