@@ -52,9 +52,6 @@ plugins:
         - ./**/pythonrc.py  # houdini fix
         - .*/**/*
         - ./*.py
-      options:
-        # Force the crawler to enter folders starting with underscores
-        ignore_prefix_unquoted: false
   - mkdocstrings:
       handlers:
         python:
@@ -63,10 +60,6 @@ plugins:
             - client/*
             - server/*
             - services/*
-          options:
-              # This allows mkdocstrings to "see" and "show" items with underscores
-              filters: 
-                - "!^_"
   - minify:
       minify_html: true
       minify_js: true
