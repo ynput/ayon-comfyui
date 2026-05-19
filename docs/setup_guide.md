@@ -25,7 +25,7 @@ We need to add an entry for ComfyUI.
 
 Please note that the `Name` and `Host name` entries need to be lowercase: `comfyui`.
 
-<img src="./images/applications.png" width="650" height="auto">
+<img src="./img/applications.png" width="650" height="auto">
 
 </details>
 
@@ -51,7 +51,7 @@ The only thing you need to change to get a local profile going, is to
 
 Like this example:
 
-<img src="./images/basiclocalprofile.png" width="1000" height="auto">
+<img src="./img/basiclocalprofile.png" width="1000" height="auto">
 
 Do not worry about the rest of the options for now.
 
@@ -71,7 +71,7 @@ To set one up;
 
 Like this example:
 
-<img src="./images/basicremoteprofile.png" width="850" height="auto">
+<img src="./img/basicremoteprofile.png" width="850" height="auto">
 
 </details>
 
@@ -128,7 +128,7 @@ ComfyUI by default provides some batch files , like "run_nvidia_gpu_fast_fp16_ac
 Note that for a portable windows build, no `--windows-standalone-build` is needed.<br>
 The plugin will automatically add it based on the `Is windows path a 'portable windows build'` toggle and OS.<br>
 
-<img src="./images/fp16_args.png" width="950" height="auto">
+<img src="./img/fp16_args.png" width="950" height="auto">
 
 Note that in the launch arguments form, if a key doesn't require an argument, then you can leave the `Value` field empty.
 </details>
@@ -148,17 +148,17 @@ specify a Name for this directory setup, the "Type" (we'll come back to this) an
 In the following setup I have an entry pointing towards a folder containing subfolders that allow Z-image (by Alibaba) to work within ComfyUI.<br>
 The folder type is set to **Automatic (based on subdirectory name)**, meaning that it will pick up on **verified** compatible ComfyUI naming conventions for content directories to load the desired content.
 
-<img src="./images/extra_directories.png" width="850" height="auto">
+<img src="./img/extra_directories.png" width="850" height="auto">
 
 Note that the entries have a toggle next to their name, allowing you to enable/disable entire chunks of configuration.
 
-The folder it points to has folders with the right names for ComfyUI to pick them up:
+The folder it points to has folders with the right names for Comfycan be changed to perform much more UI to pick them up:
 
-<img src="./images/z_image_folder.PNG" width="200" height="auto">
+<img src="./img/z_image_folder.PNG" width="200" height="auto">
 
 #### **Folder type** can be changed to perform much more specialized behavior.
 
-<img src="./images/foldertypes.png" width="400" height="auto">
+<img src="./img/foldertypes.png" width="400" height="auto">
 
 - **Automatic (Based on subdirectory name):** Subdirectories that follow ComfyUI accepted convention will be included as their own entries. Good for bulk importing lots of content.
 - **Automatic (No validity checking):** Performs essentially the same duty as aforementioned Automatic mode, without whitelisting any directory names. This can be helpful for certain node setups that require custom directories to be added.
@@ -166,7 +166,7 @@ The folder it points to has folders with the right names for ComfyUI to pick the
 
 Adding a `Custom Nodes` entry is **essential** when the `Omit included plugin` option is enabled.
 
-<img src="./images/dev_mode_extradirentry.png" width="500" height="auto">
+<img src="./img/dev_mode_extradirentry.png" width="500" height="auto">
 
 As you can see here, a `Custom Nodes` entry is added to a path containing the `ayon_menu` ComfyUI plugin normally present in<br>
 `client/ayon_comfyui/_comfyui_plugin`, so that it can be worked on separately.
@@ -188,7 +188,7 @@ still appears on your tabs.
 
 Note that if this shortcut fails to find the associated file with the current open tab, it will open workfiles.
 
-<img src="./images/shortcuts.png" width="800" height="auto"><br>
+<img src="./img/shortcuts.png" width="800" height="auto"><br>
 Here, I bound it to Shift - S, but you can unbind Ctrl-S and bind Ctrl-S to this if you want to.
 
 </details>

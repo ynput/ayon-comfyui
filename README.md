@@ -1,7 +1,7 @@
 # ComfyUI addon
 ComfyUI integration for AYON.
 
-Setup Guide: [Read about setting up the plugin here!](./documentation/setup_guide.md)
+Setup Guide: [Read about setting up the plugin here!](./docs/setup_guide.md)
 
 #### A note on https:
 
