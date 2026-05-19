@@ -34,8 +34,6 @@ extra_css: [css/custom.css]
 markdown_extensions:
   - mdx_gh_links
   - pymdownx.snippets
-  - pymdownx.pathconverter:
-      base_path: "docs"
 
 plugins:
   - search
@@ -52,8 +50,6 @@ plugins:
         - ./**/pythonrc.py  # houdini fix
         - .*/**/*
         - ./*.py
-        - "**/README.md"
-        - "**/index.md"
   - mkdocstrings:
       handlers:
         python:
