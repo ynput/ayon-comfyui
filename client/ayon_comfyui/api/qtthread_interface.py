@@ -20,7 +20,7 @@ class QThread_interface:  # noqa: N801
     sig_onfrontendcon_fail: SignalInstance
 
     def schedule(
-        self, function: Callable, *args: list[Any], **kwargs: dict[str:Any]
+        self, function: Callable, *args: list[Any], **kwargs: dict[str, Any]
     ) -> None:
         """Schedule a function in the thread."""
 
