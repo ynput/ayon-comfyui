@@ -52,6 +52,9 @@ plugins:
         - ./**/pythonrc.py  # houdini fix
         - .*/**/*
         - ./*.py
+      options:
+        # Force the crawler to enter folders starting with underscores
+        ignore_prefix_unquoted: false
   - mkdocstrings:
       handlers:
         python:
