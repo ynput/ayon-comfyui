@@ -50,6 +50,8 @@ plugins:
         - ./**/pythonrc.py  # houdini fix
         - .*/**/*
         - ./*.py
+        - ./**/_comfyui_plugin
+        - ./**/_comfyui_plugin/**
   - mkdocstrings:
       handlers:
         python:
