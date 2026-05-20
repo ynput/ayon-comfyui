@@ -4,6 +4,7 @@ repo_url: https://github.com/ynput/ayon-comfyui
 nav:
   - Home: index.md
   - License: license.md
+  - Setup Guide: setup_guide.md
 
 theme:
   name: material

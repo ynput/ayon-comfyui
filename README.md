@@ -15,7 +15,7 @@ The planned control flow is as follows:
 [ComfyUI Backend] -> Middleware -> [ComfyUI Frontend]
 ```
 
-This requires, that said _Middleware_ respects the \<iframe> specifications for embedding
+This requires, that said _Middleware_ respects the `<iframe>` specifications for embedding
 pages of cross origin. This is done through headers.
 
 If your comfyui server is just being forwarded without:
