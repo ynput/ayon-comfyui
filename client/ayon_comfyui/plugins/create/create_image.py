@@ -39,7 +39,6 @@ class CreateImage(ComfyUICreator):
         data: dict[str, Any],
         pre_create_data: dict[str, bool | str],
     ) -> None:
-
         keep_metadata: bool = pre_create_data.get("keep_metadata")
         prefix: str = pre_create_data.get("file_prefix")
         use_unique_name: bool = pre_create_data.get("use_unique_name")
