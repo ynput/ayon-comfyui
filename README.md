@@ -1,7 +1,7 @@
 # ComfyUI addon
 ComfyUI integration for AYON.
 
-Setup Guide: [Read about setting up the plugin here!](./documentation/setup_guide.md)
+To learn more about configuration and user guides, please visit [AYON ComfyUi - AYON Help Center](https://help.ayon.app/en/help/collections/4847305-comfyui).
 
 #### A note on https:
 
@@ -34,4 +34,4 @@ Content-Security-Policy: frame-ancestors http://localhost:<port_that_iframe_is_h
 > [!WARNING]  
 > This explicitly allows mixed security and (limited; ASSUMING `Content-Security-Policy`) cross-origin remote scripting.
 
-More information (including header settings and further security issues) is provided [here](./client/ayon_comfyui/api/iframe/README.md).
+More information (including header settings and further security issues) is provided [here](https://github.com/ynput/ayon-comfyui/blob/develop/client/ayon_comfyui/api/iframe/README.md).
