@@ -30,4 +30,4 @@ def run_server():
     app = web.Application()
     app.router.add_get("/ws", ws_handler)
 
-    web.run_app(app, host="localhost", port=AYON_BACKEND_PORT)
+    web.run_app(app, host="127.0.0.1", port=AYON_BACKEND_PORT)

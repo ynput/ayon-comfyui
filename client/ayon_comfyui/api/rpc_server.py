@@ -97,7 +97,7 @@ def pull_origin_from_settings() -> str:
         return profile.address_frontend
     if isinstance(settings, ComfyLocalSettings):
         return settings.address_frontend
-    return "http://localhost:5454"
+    return "http://127.0.0.1:5454"
 
 
 def get_client_from_origin(origin: str) -> WSRPCBase | None:
@@ -225,10 +225,10 @@ class RPCServerThread(Thread):
         """Run server async."""
         runner = aiohttp.web.AppRunner(self._app)
         await runner.setup()
-        site = aiohttp.web.TCPSite(runner, "localhost", self._port)
+        site = aiohttp.web.TCPSite(runner, "127.0.0.1", self._port)
         await site.start()
         log.info(
-            f"Websocket Server running on ws://localhost:{self._port}/ws/"  # noqa: G004
+            f"Websocket Server running on ws://127.0.0.1:{self._port}/ws/"  # noqa: G004
         )
 
         # Shutdown conditional

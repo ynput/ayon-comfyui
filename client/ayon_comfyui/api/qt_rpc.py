@@ -40,7 +40,7 @@ class QRPCManager(QObject, QThread_interface):
         self,
         *,
         parent: QObject = None,
-        client_hostname: str = "localhost",
+        client_hostname: str = "127.0.0.1",
         client_port: int | str = 55055,
         server_port: int | str = 55056,
         static_port: int | str = 5454,
