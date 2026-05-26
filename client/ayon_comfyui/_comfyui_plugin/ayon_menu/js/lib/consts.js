@@ -1,1 +1,1 @@
-export const AYON_ORIGIN_ADRESS = "http://localhost:5454";
+export const AYON_ORIGIN_ADRESS = "http://127.0.0.1:5454";

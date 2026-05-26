@@ -42,12 +42,12 @@ class ComfyRemoteSetting(BaseSettingsModel):
     )
 
     comfy_web_adress: str = SettingsField(
-        default="http://localhost:8188",
+        default="http://127.0.0.1:8188",
         title="ComfyUI Web Address",
         description=(
             "Web address of the frontend. On localhost, "
             "ComfyUI runs on port 8188, so the address would be "
-            "'http://localhost:8188'. If comfyui is on the web, "
+            "'http://127.0.0.1:8188'. If comfyui is on the web, "
             "use something like 'https://comfyui.contoso.com'."
         ),
     )

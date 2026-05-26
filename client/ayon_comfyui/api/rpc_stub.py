@@ -55,7 +55,7 @@ class RPCClientStub:  # noqa: PLR0904
 
     # Static site hosting iframe.
     # TODO(@sas): retrieve from url settings
-    origin: str = "http://localhost:5454"
+    origin: str = "http://127.0.0.1:5454"
 
     def __init__(self):  # noqa: D107
         self.__class__.origin = pull_origin_from_settings()

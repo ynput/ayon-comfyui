@@ -371,7 +371,7 @@ class ComfyLocalSettings:
     @property
     def address_frontend(self) -> str:
         """Return static frontend adress."""
-        return f"http://localhost:{self.port_static_frontend}"
+        return f"http://127.0.0.1:{self.port_static_frontend}"
 
     @property
     def profiles(self) -> list[str]:
@@ -469,7 +469,7 @@ class ComfyRemoteSettings:
                 self.comfy_url, timeout=1
             )
 
-            static_origin = f"http://localhost:{self.port_static_frontend}"
+            static_origin = f"http://127.0.0.1:{self.port_static_frontend}"
 
             if is_available:
                 logs.append(
@@ -549,7 +549,7 @@ class ComfyRemoteSettings:
         @property
         def address_frontend(self) -> str:
             """Return static frontend adress."""
-            return f"http://localhost:{self.port_static_frontend}"
+            return f"http://127.0.0.1:{self.port_static_frontend}"
 
         @property
         def comfy_url(self) -> str:
@@ -573,7 +573,7 @@ class ComfyRemoteSettings:
         @property
         def netloc_webui(self) -> str:
             """Return netloc of webui."""
-            url = urlparse(self.comfy_url)._replace(netloc="localhost")
+            url = urlparse(self.comfy_url)._replace(netloc="127.0.0.1")
             url = ComfyRemoteSettings.url_specify_port(url, self.port_webui)
             return urlparse(url).netloc
 

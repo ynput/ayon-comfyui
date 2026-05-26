@@ -335,7 +335,7 @@ def launch_local(
     try:
         rpcman = QRPCManager(
             parent=app,
-            client_hostname="localhost",
+            client_hostname="127.0.0.1",
             client_port=settings.port_backend,
             server_port=settings.port_webui,
             static_port=settings.port_static_frontend,
