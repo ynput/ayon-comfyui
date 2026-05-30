@@ -14,7 +14,7 @@ from ayon_comfyui.api.upload_util import upload_input_images
 class ImageLoader(ComfyUILoader):
     """Load images."""
 
-    product_types: ClassVar[set[str]] = {"image", "render"}
+    product_types: ClassVar[set[str]] = {"image", "render", "plate"}
     representations: ClassVar[set[str]] = {"*"}
     label = "Load image(s) into current graph."
     icon = "image"
