@@ -15,7 +15,7 @@ from ayon_comfyui.api.upload_util import upload_input_images
 class VideoLoader(ComfyUILoader):
     """Load video."""
 
-    product_types: ClassVar[set[str]] = {"video"}
+    product_types: ClassVar[set[str]] = {"render", "plate", "prerender"}
     representations: ClassVar[set[str]] = {"mp4", "mov", "webm"}
     label = "Load video into current graph."
     icon = "image"
