@@ -40,8 +40,8 @@ class ComfyUIAddon(BaseServerAddon):
                 allow_multiselection=False,
                 icon={
                     "type": "material-symbols",
-                    "name": "terminal",
-                    "color": "#FF6600",
+                    "name": "robot",
+                    "color": "#A200FF",
                 },
             ),
             SimpleActionManifest(
@@ -53,8 +53,8 @@ class ComfyUIAddon(BaseServerAddon):
                 allow_multiselection=False,
                 icon={
                     "type": "material-symbols",
-                    "name": "terminal",
-                    "color": "#FF66FF",
+                    "name": "robot",
+                    "color": "#FFAB66",
                 },
             ),
         ]
