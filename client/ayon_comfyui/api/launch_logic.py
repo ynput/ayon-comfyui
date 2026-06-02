@@ -123,17 +123,21 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
                     pythonpath, env_path, requirements
                 )
             except ChildProcessError as e:
+
+                lines = [
+                    "<p>Couldn't instantiate virtual environment using:</p>",
+                    f"<p>python: <code>{pythonpath!s}</code></p>",
+                    f"<p>goal environment folder: <code>{env_path!s}</code></p>",  # noqa: E501
+                    f"<p>requirements: <code>{requirements!s}</code></p>",
+                    f"Error: {e}",
+                    "Process will now shut down.",
+                ]
+                message = "".join(lines)
+
                 show_message_dialog(
-                    "Virtual environment error",
-                    (
-                        "Couldn't instantiate virtual environment using:\n"
-                        f"python: {pythonpath!s}\n"
-                        f"goal environment folder: {env_path!s}\n"
-                        f"requirements: {requirements!s}\n\n"
-                        f"Error: {e}\n\n"
-                        "Process will now shut down."
-                    ),
-                    "critical",
+                    title="Virtual environment error",
+                    message=message,
+                    level="critical",
                 )
                 return None
         else:

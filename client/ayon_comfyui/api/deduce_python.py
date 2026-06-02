@@ -147,8 +147,18 @@ def pip_install_requirements(
     out, err = out.strip(), err.strip()
 
     if "Error" in out or "ERROR" in out or "Error" in err or "ERROR" in err:
+
+        code_block_style = (
+            "background: #1e1e1e;"
+            "color: #dcdcdc;"
+        )
+
         error = ChildProcessError(
-            "Failed to install packages from requirements."
+            "<p>Failed to install packages from requirements.</p>"
+            "<p>Args:</p>"
+            f"<pre style='{code_block_style}'>{args}</pre>"
+            "<p>Output:</p>"
+            f"<pre style='{code_block_style}'>{err}</pre>"
         )
         # error.add_note(
         #     "Failed to install packages from requirements. "
