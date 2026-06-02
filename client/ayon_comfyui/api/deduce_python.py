@@ -111,6 +111,28 @@ def venv_check_existence(environment_path: Path) -> bool:
     return all(asserts)
 
 
+def format_error_message(
+    stderr: str,
+    message: str = "Something went wrong.",
+    args: list[str | Path] | None = None
+) -> ChildProcessError:
+    code_block_style = (
+        "background: #1e1e1e;"
+        "color: #dcdcdc;"
+        "white-space: pre-wrap;"  # allow word wrapping in code blocks
+    )
+
+    text = f"<p>{message}</p>"
+    if args:
+        text += "<p>Args:</p>"
+        text += f"<pre style='{code_block_style}'>{args}</pre>"
+    if stderr:
+        text += "<p>Output:</p>"
+        text += f"<pre style='{code_block_style}'>{stderr}</pre>"
+
+    return ChildProcessError(text)
+
+
 def pip_install_requirements(
     python_exec_path: Path, requirements_path: Path
 ) -> None:
@@ -147,24 +169,11 @@ def pip_install_requirements(
     out, err = out.strip(), err.strip()
 
     if "Error" in out or "ERROR" in out or "Error" in err or "ERROR" in err:
-
-        code_block_style = (
-            "background: #1e1e1e;"
-            "color: #dcdcdc;"
+        error = format_error_message(
+            stderr=err,
+            message="Failed to install packages from requirements.",
+            args=args,
         )
-
-        error = ChildProcessError(
-            "<p>Failed to install packages from requirements.</p>"
-            "<p>Args:</p>"
-            f"<pre style='{code_block_style}'>{args}</pre>"
-            "<p>Output:</p>"
-            f"<pre style='{code_block_style}'>{err}</pre>"
-        )
-        # error.add_note(
-        #     "Failed to install packages from requirements. "
-        #     "Try manually installing them with "
-        #     f"{python_exec_path} -m pip instal -r {requirements_path}"
-        # )
         raise error
 
 
@@ -199,10 +208,11 @@ def python_setup_venv_with_depends(
         out, err = proc.communicate()
         out, err = out.strip(), err.strip()
         if out or err:
-            error = ChildProcessError(
-                "Failed to set up a virtual environment."
+            error = format_error_message(
+                stderr=err,
+                message="Failed to set up a virtual environment.",
+                args=venv_args,
             )
-            # error.add_note("Failed to set up a virtual environment.")
             raise error
 
     venv_python = venv_get_python(environment_path)
