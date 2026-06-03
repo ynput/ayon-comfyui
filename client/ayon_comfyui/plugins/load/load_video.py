@@ -20,7 +20,9 @@ class VideoLoader(ComfyUILoader):
 
     product_types: ClassVar[set[str]] = {"*"}
     representations: ClassVar[set[str]] = {"*"}
-    extensions: ClassVar[set[str]] = {ext.lstrip(".") for ext in VIDEO_EXTENSIONS}
+    extensions: ClassVar[set[str]] = {
+        ext.lstrip(".") for ext in VIDEO_EXTENSIONS
+    }
     label = "Load video into current graph."
     icon = "image"
     order = -10.1

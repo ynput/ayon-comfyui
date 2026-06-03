@@ -19,7 +19,9 @@ class ImageLoader(ComfyUILoader):
 
     product_types: ClassVar[set[str]] = {"*"}
     representations: ClassVar[set[str]] = {"*"}
-    extensions: ClassVar[set[str]] = {ext.lstrip(".") for ext in IMAGE_EXTENSIONS}
+    extensions: ClassVar[set[str]] = {
+        ext.lstrip(".") for ext in IMAGE_EXTENSIONS
+    }
     label = "Load image(s) into current graph."
     icon = "image"
     order = -10
