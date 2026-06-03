@@ -207,7 +207,7 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     # Generate temporary file,
     # dont delete tempfile otherwise comfy gets confused
     tmp_path = ""
-    with tempfile.TemporaryFile(
+    with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", suffix=".txt", delete=False
     ) as tmp:
         tmp.write(yaml)
