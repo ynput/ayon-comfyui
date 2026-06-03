@@ -41,9 +41,6 @@ class ImageLoader(ComfyUILoader):
             namespace (str, optional): Use pre-defined namespace
             options (dict, optional): Additional settings dictionary
         """
-        self.log.info(f"{IMAGE_EXTENSIONS = }")
-        self.log.info(f"{context = }")
-        self.log.info(f"{options = }")
         # Retrieve filepath
         filepaths = self.expand_files_if_sequence(context)
         self.log.debug(filepaths)
@@ -63,7 +60,6 @@ class ImageLoader(ComfyUILoader):
             image_upload_info=image_upload_info,
             loader=self.__class__.__name__,
         )
-        self.log.info(f"{container = }")
 
         # Create the image loader node with the data on it.
         self.stub.create_load_node(container)
