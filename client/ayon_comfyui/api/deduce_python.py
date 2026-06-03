@@ -119,7 +119,6 @@ def format_error_message(
     code_block_style = (
         "background: #1e1e1e;"
         "color: #dcdcdc;"
-        "white-space: pre-wrap;"  # allow word wrapping in code blocks
     )
 
     text = f"<p>{message}</p>"

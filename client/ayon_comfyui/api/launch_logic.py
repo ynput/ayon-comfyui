@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING
 from ayon_core.lib import env_value_to_bool
 from ayon_core.pipeline import get_current_project_name, install_host
 from ayon_core.tools.utils import get_ayon_qt_app
-from ayon_core.tools.utils.dialogs import show_message_dialog
+from ayon_core.tools.utils.dialogs import show_message_dialog, ScrollMessageBox
+from qtpy import QtWidgets
 
 if TYPE_CHECKING:
     from qtpy.QtWidgets import QApplication
@@ -124,21 +125,22 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
                 )
             except ChildProcessError as e:
 
-                lines = [
-                    "<p>Couldn't instantiate virtual environment using:</p>",
-                    f"<p>python: <code>{pythonpath!s}</code></p>",
-                    f"<p>goal environment folder: <code>{env_path!s}</code></p>",  # noqa: E501
-                    f"<p>requirements: <code>{requirements!s}</code></p>",
-                    f"Error: {e}",
+                messages = [
+                    "<h1>Couldn't instantiate virtual environment</h1>",
+                    "Using:"
+                    f"python: <code>{pythonpath!s}</code>",
+                    f"target environment folder: <code>{env_path!s}</code>",
+                    f"requirements: <code>{requirements!s}</code>",
+                    "<h3>Error:</h3>",
+                    str(e),
                     "Process will now shut down.",
                 ]
-                message = "".join(lines)
-
-                show_message_dialog(
+                dialog = ScrollMessageBox(
+                    icon=QtWidgets.QMessageBox.Icon.Critical,
                     title="Virtual environment error",
-                    message=message,
-                    level="critical",
+                    messages=messages,
                 )
+                dialog.exec()
                 return None
         else:
             pythonpath = venv_get_python(env_path)
