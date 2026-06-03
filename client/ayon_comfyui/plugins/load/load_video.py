@@ -6,6 +6,9 @@ import os
 from typing import ClassVar
 
 import clique
+
+from ayon_core.lib.transcoding import VIDEO_EXTENSIONS
+
 from ayon_comfyui.api.pipeline import containerise
 from ayon_comfyui.api.plugin import ComfyUILoader
 from ayon_comfyui.api.rpc_stub import LoadType
@@ -15,8 +18,11 @@ from ayon_comfyui.api.upload_util import upload_input_images
 class VideoLoader(ComfyUILoader):
     """Load video."""
 
-    product_types: ClassVar[set[str]] = {"video"}
-    representations: ClassVar[set[str]] = {"mp4", "mov", "webm"}
+    product_types: ClassVar[set[str]] = {"*"}
+    representations: ClassVar[set[str]] = {"*"}
+    extensions: ClassVar[set[str]] = {
+        ext.lstrip(".") for ext in VIDEO_EXTENSIONS
+    }
     label = "Load video into current graph."
     icon = "image"
     order = -10.1

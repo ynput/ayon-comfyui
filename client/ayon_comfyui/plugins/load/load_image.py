@@ -6,6 +6,9 @@ import os
 from typing import ClassVar
 
 import clique
+
+from ayon_core.lib.transcoding import IMAGE_EXTENSIONS
+
 from ayon_comfyui.api.pipeline import containerise
 from ayon_comfyui.api.plugin import ComfyUILoader
 from ayon_comfyui.api.upload_util import upload_input_images
@@ -14,8 +17,11 @@ from ayon_comfyui.api.upload_util import upload_input_images
 class ImageLoader(ComfyUILoader):
     """Load images."""
 
-    product_types: ClassVar[set[str]] = {"image", "render"}
+    product_types: ClassVar[set[str]] = {"*"}
     representations: ClassVar[set[str]] = {"*"}
+    extensions: ClassVar[set[str]] = {
+        ext.lstrip(".") for ext in IMAGE_EXTENSIONS
+    }
     label = "Load image(s) into current graph."
     icon = "image"
     order = -10
