@@ -6,6 +6,9 @@ import os
 from typing import ClassVar
 
 import clique
+
+from ayon_core.lib.transcoding import IMAGE_EXTENSIONS
+
 from ayon_comfyui.api.pipeline import containerise
 from ayon_comfyui.api.plugin import ComfyUILoader
 from ayon_comfyui.api.upload_util import upload_input_images
@@ -14,8 +17,9 @@ from ayon_comfyui.api.upload_util import upload_input_images
 class ImageLoader(ComfyUILoader):
     """Load images."""
 
-    product_types: ClassVar[set[str]] = {"image", "render", "plate"}
+    product_types: ClassVar[set[str]] = {"*"}
     representations: ClassVar[set[str]] = {"*"}
+    extensions: ClassVar[set[str]] = {ext.lstrip(".") for ext in IMAGE_EXTENSIONS}
     label = "Load image(s) into current graph."
     icon = "image"
     order = -10
@@ -35,6 +39,9 @@ class ImageLoader(ComfyUILoader):
             namespace (str, optional): Use pre-defined namespace
             options (dict, optional): Additional settings dictionary
         """
+        self.log.info(f"{IMAGE_EXTENSIONS = }")
+        self.log.info(f"{context = }")
+        self.log.info(f"{options = }")
         # Retrieve filepath
         filepaths = self.expand_files_if_sequence(context)
         self.log.debug(filepaths)
@@ -54,6 +61,7 @@ class ImageLoader(ComfyUILoader):
             image_upload_info=image_upload_info,
             loader=self.__class__.__name__,
         )
+        self.log.info(f"{container = }")
 
         # Create the image loader node with the data on it.
         self.stub.create_load_node(container)
