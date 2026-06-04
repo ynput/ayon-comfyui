@@ -80,7 +80,7 @@ class ComfyUIAddon(BaseServerAddon):
                 success=False,
             )
 
-        if len(executor.context.entity_ids) > 0:
+        if len(executor.context.entity_ids) > 1:
             return await executor.get_simple_response(
                 message=(
                     "Failed to launch ComfyUI. "
@@ -96,7 +96,7 @@ class ComfyUIAddon(BaseServerAddon):
 
         args = [
             "addon", "comfyui", "run-server",
-            "--project_name", executor.context.project_name,
+            "--project-name", executor.context.project_name,
             "--entity-id", executor.context.entity_ids[0],
         ]
         # args.extend(bundle_args) # keep this out for now
