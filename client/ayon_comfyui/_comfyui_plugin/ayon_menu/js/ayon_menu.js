@@ -1,6 +1,232 @@
 import { app } from "../../scripts/app.js";
 import "../../../../extensions/ayon_menu/lib/wsrpc.js";
 import {RPCServer} from "../../../../extensions/ayon_menu/lib/rpc_server.js"
+import {AYON_ORIGIN_ADRESS} from "../../../../extensions/ayon_menu/lib/consts.js"
+
+const AYON_EXTENSION_NAME = "comfy_ayon_menu"
+const AYON_SIDEBAR_TAB_ID = "ayon"
+const AYON_SIDEBAR_ICON_CLASS = "ayon-sidebar-icon"
+const AYON_SIDEBAR_STYLE_ID = "ayon-sidebar-style"
+const AYON_ICON_URL = new URL("./assets/ayon-icon.png?v=20260506-ayon-icon", import.meta.url).href
+const AYON_TOOL_ACTIONS = [
+  {
+    id: "showPublisher",
+    label: "Publisher",
+    tool_name: "publisher",
+    description: "Open the AYON Publisher tool."
+  },
+  {
+    id: "showCreator",
+    label: "Creator",
+    tool_name: "create",
+    description: "Open the AYON Creator tool."
+  },
+  {
+    id: "showWorkfiles",
+    label: "Workfiles",
+    tool_name: "workfiles",
+    description: "Browse and manage AYON workfiles."
+  },
+  {
+    id: "showLoader",
+    label: "Loader",
+    tool_name: "loader",
+    description: "Load AYON content into the current graph."
+  },
+  {
+    id: "showInventory",
+    label: "Scene Inventory",
+    tool_name: "sceneinventory",
+    description: "Inspect AYON scene inventory items."
+  }
+]
+
+function get_ayon_extension() {
+  const exts = app.extensions;
+  return exts.find((el) => el.name == AYON_EXTENSION_NAME)
+}
+
+function push_ayon_queue(function_name, args) {
+  const ext = get_ayon_extension()
+  if (!ext) {
+    console.warn("AYON extension was not ready when a UI action was triggered.")
+    return
+  }
+  ext.PROC_QUEUE.push({function: function_name, args})
+}
+
+function request_ayon_tool(tool_name) {
+  console.log(app.extensions);
+  push_ayon_queue("ayonComfyUI.requestToolByName", {"tool_name": tool_name})
+}
+
+function create_ayon_tool_panel(container) {
+  const root = document.createElement("div")
+  root.className = "ayon-sidebar-panel"
+
+  const header = document.createElement("div")
+  header.className = "ayon-sidebar-panel-header"
+
+  const logo = document.createElement("span")
+  logo.className = "ayon-sidebar-panel-logo"
+
+  const heading_wrap = document.createElement("div")
+
+  const title = document.createElement("h2")
+  title.className = "ayon-sidebar-panel-title"
+  title.textContent = "AYON"
+
+  const description = document.createElement("p")
+  description.className = "ayon-sidebar-panel-description"
+  description.textContent = "Launch AYON tools directly from ComfyUI."
+
+  heading_wrap.append(title, description)
+  header.append(logo, heading_wrap)
+
+  const actions = document.createElement("div")
+  actions.className = "ayon-sidebar-panel-actions"
+
+  AYON_TOOL_ACTIONS.forEach((action) => {
+    const button = document.createElement("button")
+    button.type = "button"
+    button.className = "ayon-sidebar-action"
+
+    const label = document.createElement("span")
+    label.className = "ayon-sidebar-action-label"
+    label.textContent = action.label
+
+    const detail = document.createElement("span")
+    detail.className = "ayon-sidebar-action-description"
+    detail.textContent = action.description
+
+    button.append(label, detail)
+    button.addEventListener("click", () => {
+      request_ayon_tool(action.tool_name)
+    })
+    actions.append(button)
+  })
+
+  root.append(header, actions)
+  container.replaceChildren(root)
+}
+
+function ensure_ayon_sidebar_style() {
+  if (document.getElementById(AYON_SIDEBAR_STYLE_ID)) {
+    return
+  }
+
+  const style = document.createElement("style")
+  style.id = AYON_SIDEBAR_STYLE_ID
+  style.textContent = `
+    .${AYON_SIDEBAR_ICON_CLASS} {
+      display: inline-block;
+      width: 1.1rem;
+      height: 1.1rem;
+      background-image: url("${AYON_ICON_URL}");
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: contain;
+    }
+
+    .ayon-sidebar-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      padding: 1rem;
+      color: var(--input-text);
+    }
+
+    .ayon-sidebar-panel-header {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    .ayon-sidebar-panel-logo {
+      width: 2rem;
+      height: 2rem;
+      flex-shrink: 0;
+      background-image: url("${AYON_ICON_URL}");
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: contain;
+    }
+
+    .ayon-sidebar-panel-title {
+      margin: 0;
+      font-size: 1rem;
+      line-height: 1.25rem;
+    }
+
+    .ayon-sidebar-panel-description {
+      margin: 0.25rem 0 0;
+      color: var(--descrip-text);
+      font-size: 0.875rem;
+      line-height: 1.25rem;
+    }
+
+    .ayon-sidebar-panel-actions {
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .ayon-sidebar-action {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      width: 100%;
+      padding: 0.875rem 1rem;
+      border: 1px solid var(--border-color, var(--input-border-color, #3a3a3a));
+      border-radius: 0.75rem;
+      background: var(--comfy-input-bg);
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+    }
+
+    .ayon-sidebar-action:hover {
+      background: var(--comfy-menu-bg);
+      border-color: var(--theme-color);
+      transform: translateY(-1px);
+    }
+
+    .ayon-sidebar-action-label {
+      font-size: 0.95rem;
+      font-weight: 600;
+      line-height: 1.25rem;
+    }
+
+    .ayon-sidebar-action-description {
+      color: var(--descrip-text);
+      font-size: 0.8125rem;
+      line-height: 1.125rem;
+    }
+  `
+  document.head.appendChild(style)
+}
+
+function register_ayon_sidebar_tab() {
+  if (!app.extensionManager?.registerSidebarTab) {
+    return
+  }
+
+  const existing_tabs = app.extensionManager.getSidebarTabs?.() ?? []
+  if (existing_tabs.some((tab) => tab.id === AYON_SIDEBAR_TAB_ID)) {
+    return
+  }
+
+  app.extensionManager.registerSidebarTab({
+    id: AYON_SIDEBAR_TAB_ID,
+    title: "AYON",
+    tooltip: "AYON",
+    icon: AYON_SIDEBAR_ICON_CLASS,
+    type: "custom",
+    render(container) {
+      create_ayon_tool_panel(container)
+    }
+  })
+}
 
 app.registerExtension({
     name: "comfy_ayon_menu",
@@ -66,9 +292,11 @@ app.registerExtension({
         this.expecting_id = null
         this.resolved_id = null
 
+        ensure_ayon_sidebar_style()
+        register_ayon_sidebar_tab()
+
         function get_this() {
-          const exts = app.extensions;
-          return exts.find((el) => el.name == "comfy_ayon_menu")
+          return get_ayon_extension()
         }
 
         function reset_expectations(expecting = null) {
@@ -303,7 +531,7 @@ app.registerExtension({
 
         // DO NOT THE WSRPC HERE, WE DO IFRAME THROUGH PROXY.JS
         // Retrieve host URL from consts. Will always be http
-        this.IFRAMERPC = new RPCServer(window.parent, "http://localhost:5454")
+        this.IFRAMERPC = new RPCServer(window.parent, AYON_ORIGIN_ADRESS)
 
         this.PROC_QUEUE = new Array()
 
@@ -351,6 +579,12 @@ app.registerExtension({
           return workfile
         })
 
+        this.IFRAMERPC.register('updateTab', (data) => {
+          console.log(data);
+          app.loadGraphData(app.graph.serialize(), true, true, data.new_name);
+          return true;
+        })
+
         this.IFRAMERPC.register('addPublishNode', (data) => {
           console.log("adding node...")
           const nodeType = data.node_type
@@ -360,7 +594,7 @@ app.registerExtension({
           save_node.color = "#233"
           save_node.bgcolor = "#355"
           try {
-                        // associated instance information should be put on node.
+            // associated instance information should be put on node.
             info_widget.value = data.instance_json
             const parsed = JSON.parse(data.instance_json)
             recook_widget.value = parsed.creator_attributes.force_recook_on_publish
@@ -469,8 +703,15 @@ app.registerExtension({
 
         this.IFRAMERPC.register('updateLoadProductNode', async (data) => {
           const nodeType = data.node_type
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          let foundNodes = null
 
+          
+          if (nodeType == "ALL") {
+            const nodes = ["AYON Load Image", "AYON Load Video", "AYON Load 3D Model"]
+            foundNodes = app.graph.nodes.filter((node) => nodes.includes(node.type));
+          } else {
+            foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
+          }
           const ayon_info_update = JSON.parse(data.container_json)
 
           foundNodes.forEach(async (node) => {
@@ -543,12 +784,7 @@ app.registerExtension({
       id: "myCommand", 
       label: "Ping Ayon Plugin Websocket RPC server", 
       function: () => {
-        // find plugin in array
-        const exts = app.extensions;
-        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
-
-        // console.log(app.extensions);
-        ext.PROC_QUEUE.push({function: 'ayonComfyUI.pingAyonMenu',args: {"message" :`Ping from web`}})
+        push_ayon_queue("ayonComfyUI.pingAyonMenu", {"message": "Ping from web"})
         // ext.RPC.call('ayonComfyUI.pingAyonMenu', {"message" :`Ping from web`}).then(function (data) {
         // console.log('pong: ', data);
         // }, function (error) {
@@ -556,69 +792,13 @@ app.registerExtension({
         // });
       } 
     },
-
-    { 
-      id: "showWorkfiles", 
-      label: "Workfiles", 
+    ...AYON_TOOL_ACTIONS.map((action) => ({
+      id: action.id,
+      label: action.label,
       function: () => {
-        // find plugin in array
-        const exts = app.extensions;
-        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
-
-        console.log(app.extensions);
-        ext.PROC_QUEUE.push({function: 'ayonComfyUI.requestToolByName',args: {"tool_name" : "workfiles"}})
-      } 
-    },
-
-    { 
-      id: "showCreator", 
-      label: "Creator", 
-      function: () => {
-        // find plugin in array
-        const exts = app.extensions;
-        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
-
-        console.log(app.extensions);
-        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "create"}})
-      } 
-    },
-    { 
-      id: "showPublisher", 
-      label: "Publisher", 
-      function: () => {
-        // find plugin in array
-        const exts = app.extensions;
-        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
-
-        console.log(app.extensions);
-        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "publisher"}})
-      } 
-    },
-    { 
-      id: "showLoader", 
-      label: "Loader", 
-      function: () => {
-        // find plugin in array
-        const exts = app.extensions;
-        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
-
-        console.log(app.extensions);
-        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "loader"}})
-      } 
-    },
-
-    { 
-      id: "showInventory", 
-      label: "Scene Inventory", 
-      function: () => {
-        // find plugin in array
-        const exts = app.extensions;
-        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
-
-        console.log(app.extensions);
-        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestToolByName', args: {"tool_name" : "sceneinventory",}})
-      } 
-    },
+        request_ayon_tool(action.tool_name)
+      }
+    })),
 
     {
       id: "saveLocal",
@@ -724,13 +904,9 @@ app.registerExtension({
         const formatted_path = path.replace(".json","").replace("workflows/","")
       
 
-        // find plugin in array
-        const exts = app.extensions;
-        const ext = exts.find((el) => el.name == "comfy_ayon_menu")
-
         const workfile = get_workfiles_save()
 
-        ext.PROC_QUEUE.push({function:'ayonComfyUI.requestSaveByName', args: {"file_name" : `${formatted_path}`, "workfile_contents": `${workfile}`}})
+        push_ayon_queue("ayonComfyUI.requestSaveByName", {"file_name": `${formatted_path}`, "workfile_contents": `${workfile}`})
 
         showToast("Ayon Saved!")
         
@@ -743,7 +919,7 @@ app.registerExtension({
   menuCommands: [
     { 
       path: ["AYON"],
-      commands: ["showPublisher","showCreator","showWorkfiles","showLoader","showInventory"] 
+      commands: AYON_TOOL_ACTIONS.map((action) => action.id) 
     },
   ]
 })

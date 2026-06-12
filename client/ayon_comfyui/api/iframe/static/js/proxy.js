@@ -18,6 +18,10 @@ window.onload = async (e) => {
     return await IFRAME_RPC.call('getWorkfile', data)
   })
 
+  RPC.addRoute('updateTab', async (data) => {
+    return await IFRAME_RPC.call('updateTab', data)
+  })
+
   RPC.addRoute('addPublishNode', async (data) => {
     return await IFRAME_RPC.call('addPublishNode', data)
   })

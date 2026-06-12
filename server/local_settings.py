@@ -234,13 +234,18 @@ class ComfyLocalSettings(BaseSettingsModel):
     server_pulse_port: int = SettingsField(
         55055,
         title="Default port to pulse connection to backend",
-        description="Websocket port to send heartbeat over, to make sure the backend process is still alive",
+        description=(
+            "Websocket port to send heartbeat over, to make sure the backend "
+            "process is still alive"
+        ),
     )
 
     frontend_port: int = SettingsField(
         55056,
         title="Default port for frontend websocket RPC",
-        description="Websocket port to communicate with local browser instance",
+        description=(
+            "Websocket port to communicate with local browser instance"
+        ),
     )
 
     local_setting_list: list[ComfyLocalSetting] = SettingsField(

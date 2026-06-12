@@ -41,10 +41,11 @@ class LoadType(Enum):
     IMAGE = "AYON Load Image"
     VIDEO = "AYON Load Video"
     MODEL3D = "AYON Load 3D Model"
+    ALL = "ALL"
 
 
 # STUB TO CONTAIN CLIENT CONNECTION GOTTEN FROM SERVER
-class RPCClientStub:
+class RPCClientStub:  # noqa: PLR0904
     """Alias methods on the client <iframe> side.
 
     Also provides helper methods to process results.
@@ -54,9 +55,9 @@ class RPCClientStub:
 
     # Static site hosting iframe.
     # TODO(@sas): retrieve from url settings
-    origin: str = "http://localhost:5454"
+    origin: str = "http://127.0.0.1:5454"
 
-    def __init__(self):
+    def __init__(self):  # noqa: D107
         self.__class__.origin = pull_origin_from_settings()
 
     @property
@@ -80,6 +81,13 @@ class RPCClientStub:
         """Call getWorkfile."""
 
     @call_on_origin()
+    def updateTab(self, *, new_name: str):  # noqa: N802, ANN201
+        """Call updateTab.
+
+        switches context to a new tab with a new name.
+        """
+
+    @call_on_origin()
     def loadWorkfile(self, *, workfile_json: str, workfile_name: str):  # noqa: N802, ANN201
         """Call loadWorkfile."""
 
@@ -100,14 +108,14 @@ class RPCClientStub:
         """Call getImprintContext."""
 
     @call_on_origin()
-    def setImprintContext(self, *, imprint_info: str):  # noqa: N802, ANN201
+    def setImprintContext(self, *, imprint_info: str) -> bool:  # noqa: N802, ANN201
         """Call setImprintContext."""
 
     def do_context_imprint(self, imprint_info: str = "No imprint.") -> bool:
         """Creates a node in the browser session.
 
         Returns:
-            True/False based on whether operation was succesful
+            True/False based on whether operation was successful
         """
         # Massage info to fit into a scheme
         # {
@@ -142,7 +150,7 @@ class RPCClientStub:
         """Updates (replaces) "instances" field of context node.
 
         Returns:
-            True/False based on whether operation was succesful
+            True/False based on whether operation was successful
         """
         # Massage info to fit into a scheme
         # {
@@ -166,11 +174,11 @@ class RPCClientStub:
 
         existing_context = self._ensure_wellformed_context(existing_context)
 
-        log.info("updating info")
+        log.debug("updating info")
         # update context by overwriting
         existing_context["instances"] = json.loads(imprint_info)
 
-        log.info("imprinting")
+        log.debug("imprinting")
         result = self.setImprintContext(
             imprint_info=json.dumps(existing_context),
         )
@@ -184,7 +192,7 @@ class RPCClientStub:
         """Updates (replaces) "containers" field of context node.
 
         Returns:
-            True/False based on whether operation was succesful
+            True/False based on whether operation was successful
         """
         # Massage info to fit into a scheme
         # {
@@ -214,11 +222,11 @@ class RPCClientStub:
 
         existing_context = self._ensure_wellformed_context(existing_context)
 
-        log.info("updating info")
+        log.debug("updating info")
         # update context by overwriting
         existing_context["containers"] = json.loads(imprint_info)
 
-        log.info("imprinting containers")
+        log.debug("imprinting containers")
         result = self.setImprintContext(
             imprint_info=json.dumps(existing_context),
         )
@@ -293,12 +301,14 @@ class RPCClientStub:
 
     @call_on_origin()
     def updateLoadProductNode(  # noqa: N802
-        self, *, container_json: str, node_type: str
+        self, *, container_json: str, node_type: str = "ALL"
     ) -> None:
         """Call updateLoadProductNode.
 
         Uses the container_json container_uuid
         to match nodes present in the scene.
+
+        Sentinel value ALL will match for all types of container nodes.
         """
 
     def do_get_publishnode_images(
@@ -378,28 +388,28 @@ class RPCStub:  # noqa : PLR0904
         Returns:
             String JSON of Workfile from ComfyUI.
         """
-        log.info("query_workfile")
+        log.debug("query_workfile")
         return self.client_stub.getWorkfile()
 
     def load_workfile(self, path: str) -> None:
         """Query load workfile operation."""
-        log.info("load_workfile")
+        log.debug("load_workfile")
         self.client_stub.do_load_workfile(path)
 
     def imprint_context(self, data: dict) -> None:
         """Query imprint contect operation."""
-        log.info(f"imprint_context\n{data}")  # noqa: G004
+        log.debug(f"imprint_context\n{data}")  # noqa: G004
         json_data = json.dumps(data)
-        log.info(json_data)
+        log.debug(json_data)
         self.client_stub.do_context_imprint(imprint_info=json_data)
 
     def _load_context(self) -> MutableMapping:
         """Query load entire context operation.
 
         Returns:
-            JSON object if query was succesful
+            JSON object if query was successful
         """
-        log.info("_load_context (full context)")
+        log.debug("_load_context (full context)")
         context_json_raw = self.client_stub.do_context_retrieve()
 
         # Fallback if context doesn't exist, imprint it.
@@ -410,7 +420,7 @@ class RPCStub:  # noqa : PLR0904
             self.imprint_context(context)
             context_json_raw = self.client_stub.do_context_retrieve()
 
-        log.info(context_json_raw)
+        log.debug(context_json_raw)
         return (
             json.loads(context_json_raw)
             if context_json_raw is not None
@@ -424,7 +434,7 @@ class RPCStub:  # noqa : PLR0904
             dict with 'context' part of imprinted context.
         """
         context_json_raw = self._load_context()
-        log.info("load context")
+        log.debug("load context")
         if context_json_raw:
             return context_json_raw["context"]
         return None
@@ -436,7 +446,7 @@ class RPCStub:  # noqa : PLR0904
             list[dict]; 'instances' part of imprintent context
         """
         context_json_raw = self._load_context()
-        log.info("list instances")
+        log.debug("list instances")
         if context_json_raw:
             return context_json_raw["instances"]
         return None
@@ -448,14 +458,14 @@ class RPCStub:  # noqa : PLR0904
             list[dict]; 'containers' part of imprintent context
         """
         context_json_raw = self._load_context()
-        log.info("list containers")
+        log.debug("list containers")
         if context_json_raw:
             return context_json_raw["containers"]
         return None
 
     def _imprint_instances(self, data: list) -> None:
         """Hard update instance field of context node."""
-        log.info("imprint_instances")
+        log.debug("imprint_instances")
         json_data = json.dumps(data)
 
         self.client_stub.do_instances_imprint(imprint_info=json_data)
@@ -680,7 +690,9 @@ class RPCStub:  # noqa : PLR0904
         # Update all nodes.
         for container in containers:
             container_json = json.dumps(container)
-            self.client_stub.updateLoadImageNode(container_json=container_json)
+            self.client_stub.updateLoadProductNode(
+                container_json=container_json
+            )
 
     def create_publish_node(
         self,
@@ -688,7 +700,7 @@ class RPCStub:  # noqa : PLR0904
         publish_type: PublishType = PublishType.IMAGE,
     ) -> None:
         """Pass along a call to create a Ayon Image Save node."""
-        log.info("stub create publish node")
+        log.debug("stub create publish node")
         json_data = json.dumps(instance_to_create)
 
         self.client_stub.addPublishNode(
@@ -701,7 +713,7 @@ class RPCStub:  # noqa : PLR0904
         publish_type: PublishType = PublishType.IMAGE,
     ) -> None:
         """Pass along a call to remove a Ayon Image Save nodes."""
-        log.info("stub remove publish node")
+        log.debug("stub remove publish node")
 
         if isinstance(instances_to_remove, dict):
             instances_to_remove = [instances_to_remove]
@@ -720,8 +732,8 @@ class RPCStub:  # noqa : PLR0904
         self, container_to_create: dict, node_type: LoadType = LoadType.IMAGE
     ) -> None:
         """Pass along a call to create a Ayon Load [Type] node."""
-        log.info("stub create load node:")
-        log.info(node_type.value)
+        log.debug("stub create load node:")
+        log.debug(node_type.value)
         json_data = json.dumps(container_to_create)
 
         self.client_stub.addLoadProductNode(
@@ -732,8 +744,8 @@ class RPCStub:  # noqa : PLR0904
         self, container_to_update: dict, node_type: LoadType = LoadType.IMAGE
     ) -> None:
         """Pass along call to update Ayon Load [Type] node."""
-        log.info("stub update load node")
-        log.info(node_type.value)
+        log.debug("stub update load node")
+        log.debug(node_type.value)
         json_data = json.dumps(container_to_update)
         self.client_stub.updateLoadProductNode(
             container_json=json_data, node_type=node_type.value
@@ -745,8 +757,8 @@ class RPCStub:  # noqa : PLR0904
         node_type: LoadType = LoadType.IMAGE,
     ) -> None:
         """Pass along a call to remove Ayon Load [Type] nodes."""
-        log.info("stub remove load node")
-        log.info(node_type.value)
+        log.debug("stub remove load node")
+        log.debug(node_type.value)
         if isinstance(containers_to_remove, dict):
             containers_to_remove = [containers_to_remove]
 
@@ -766,7 +778,7 @@ class RPCStub:  # noqa : PLR0904
         publish_type: PublishType = PublishType.IMAGE,
     ) -> list[str]:
         """Returns list of products associated with node."""
-        log.info("stub get publish node images")
+        log.debug("stub get publish node images")
         id_ = instance_for_images["instance_id"]
         result = self.client_stub.getPublishNodeImages(
             id_for_images=id_, node_type=publish_type.value

@@ -77,7 +77,7 @@ class ComfyLocalSettings:
             if not isinstance(value, str):
                 return None
             if self._os == "win":
-                value.replace("\\", "/")
+                value = value.replace("\\", "/")
             return value
 
         def _get_launch_profile_setting(
@@ -121,13 +121,13 @@ class ComfyLocalSettings:
                 if isinstance(value, list):
                     value = [val.replace("\\", "/") for val in value]
                 elif isinstance(value, str):
-                    value.replace("\\", "/")
+                    value = value.replace("\\", "/")
             return value
 
         def _get_launch_profile_args(self) -> list[str]:
             """Concatenate launch args.
 
-            Takes care of windows standalone build flag based on settigns.
+            Takes care of windows standalone build flag based on settings.
 
             Returns:
                 Launch arguments as a list.
@@ -170,7 +170,7 @@ class ComfyLocalSettings:
 
         @property
         def comfy_local_url(self) -> str:
-            """Gets complete http adress comfy runs on."""
+            """Gets complete HTTP address ComfyUI runs on."""
             return f"http://127.0.0.1:{self.comfy_port}"
 
         @property
@@ -199,6 +199,7 @@ class ComfyLocalSettings:
             )
 
         @property
+        @template_wrap
         def launch_args(self) -> list[str]:
             """Return launch arguments for profile.
 
@@ -231,7 +232,7 @@ class ComfyLocalSettings:
         ) -> dict[str, list[str]]:
             """Validate this profile and report back.
 
-            Specify os_name to spoof percieved OS for setting retrieval.
+            Specify os_name to spoof perceived OS for setting retrieval.
 
             Returns:
                 A dict with errors and logs:
@@ -370,7 +371,7 @@ class ComfyLocalSettings:
     @property
     def address_frontend(self) -> str:
         """Return static frontend adress."""
-        return f"http://localhost:{self.port_static_frontend}"
+        return f"http://127.0.0.1:{self.port_static_frontend}"
 
     @property
     def profiles(self) -> list[str]:
@@ -468,7 +469,7 @@ class ComfyRemoteSettings:
                 self.comfy_url, timeout=1
             )
 
-            static_origin = f"http://localhost:{self.port_static_frontend}"
+            static_origin = f"http://127.0.0.1:{self.port_static_frontend}"
 
             if is_available:
                 logs.append(
@@ -548,7 +549,7 @@ class ComfyRemoteSettings:
         @property
         def address_frontend(self) -> str:
             """Return static frontend adress."""
-            return f"http://localhost:{self.port_static_frontend}"
+            return f"http://127.0.0.1:{self.port_static_frontend}"
 
         @property
         def comfy_url(self) -> str:
@@ -556,7 +557,7 @@ class ComfyRemoteSettings:
             return self._profile_dict.get("comfy_web_adress")
 
         # TODO(@sas): Look into deprecation, since origin checking
-        #             is likely unnessecary.
+        #             is likely unnecessary.
         @property
         def comfy_origin(self) -> str:
             """Return URL expected to be in Origin header."""
@@ -572,7 +573,7 @@ class ComfyRemoteSettings:
         @property
         def netloc_webui(self) -> str:
             """Return netloc of webui."""
-            url = urlparse(self.comfy_url)._replace(netloc="localhost")
+            url = urlparse(self.comfy_url)._replace(netloc="127.0.0.1")
             url = ComfyRemoteSettings.url_specify_port(url, self.port_webui)
             return urlparse(url).netloc
 

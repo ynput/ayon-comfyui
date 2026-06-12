@@ -1,34 +1,33 @@
 from __future__ import annotations
 
+import inspect
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
-    from ayon_comfyui.api.rpc_stub import RPCStub
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.pipeline import list_instances
-from ayon_comfyui.api.qt_rpc import QRPCManager
+from ayon_comfyui.api.plugin import ComfyUICreator
 from ayon_comfyui.api.rpc_stub import PublishType
 from ayon_core.lib import BoolDef, EnumDef, TextDef
-from ayon_core.pipeline import CreatedInstance, Creator, CreatorError
+from ayon_core.pipeline import CreatedInstance, CreatorError
 from ayon_core.pipeline.create import PRODUCT_NAME_ALLOWED_SYMBOLS
 
 
-class ModelCreator(Creator):
+class CreateModel(ComfyUICreator):
     """Creator for model before publishing.
 
     On create, spawn a node that is to be associated with
     this publish.
     """
 
-    identifier = "model"
-    label = "AI 3D Model"
+    identifier = "io.ayon.creators.comfyui.model"
+    label = "3D Model"
     product_type = "model"
     product_base_type = "model"
-    description = "ComfyUI generated model."
+    description = "ComfyUI generated 3D model"
 
-    default_variant = "Main"
     default_vid_name = "ayon"
 
     enum_fallback_format: ClassVar[dict] = {
@@ -46,8 +45,6 @@ class ModelCreator(Creator):
         data: dict[str, Any],
         pre_create_data: dict[str, bool | str],
     ) -> None:
-        stub: RPCStub = QRPCManager.get_instance().stub
-
         keep_metadata: bool = pre_create_data.get("keep_metadata")
         prefix: str = pre_create_data.get("file_prefix")
         use_unique_name: bool = pre_create_data.get("use_unique_name")
@@ -115,10 +112,10 @@ class ModelCreator(Creator):
         )
 
         self._add_instance_to_context(new_instance)
-        stub.create_publish_node(
+        self.stub.create_publish_node(
             new_instance.data_to_store(), PublishType.MODEL3D
         )
-        stub.update_instance(new_instance.data_to_store())
+        self.stub.update_instance(new_instance.data_to_store())
 
     def collect_instances(self):
         for instance_data in list_instances():
@@ -133,26 +130,26 @@ class ModelCreator(Creator):
     def update_instances(  # noqa: D102, PLR6301
         self, update_list: list[tuple[CreatedInstance, Any]]
     ) -> None:
-        stub: RPCStub = QRPCManager.get_instance().stub
         updated = [
             instance.data_to_store() for instance, _changes in update_list
         ]
-        stub.update_instance(updated)
+        self.stub.update_instance(updated)
 
     def remove_instances(self, instances: list[CreatedInstance]):
-        stub: RPCStub = QRPCManager.get_instance().stub
-        stub.remove_publish_nodes(
+        self.stub.remove_publish_nodes(
             [i.data_to_store() for i in instances], PublishType.MODEL3D
         )
-        stub.remove_instance(instances)
+        self.stub.remove_instance(instances)
+        for instance in instances:
+            self._remove_instance_from_context(instance)
 
     def get_pre_create_attr_defs(self):
         return [
-            BoolDef("keep_metadata", default=True, label="Keep metadata?"),
+            BoolDef("keep_metadata", default=True, label="Keep metadata"),
             BoolDef(
                 "force_recook_on_publish",
                 default=False,
-                label="Force re-cook on publish?",
+                label="Force re-cook on publish",
             ),
             TextDef(
                 "file_prefix",
@@ -163,7 +160,7 @@ class ModelCreator(Creator):
             BoolDef(
                 "use_unique_name",
                 default=True,
-                label="Use unique product name?",
+                label="Use unique product name",
             ),
             TextDef(
                 "unique_name",
@@ -179,9 +176,12 @@ class ModelCreator(Creator):
         ]
 
     def get_detail_description(self) -> str:  # noqa: D102, PLR6301
-        return """Creator plugin for ComfyUI 3D models.
+        return inspect.cleandoc(
+            """Creator plugin for ComfyUI 3D models.
 
-        This model can take in Mesh and other types of 3D model
-        inputs. If it takes in a Mesh, it will be saved as either '.obj' or
-        '.glb', using the implementation of the nodes for Hunyuan3d (Tencent).
-        """
+            This model can take in Mesh and other types of 3D model
+            inputs. If it takes in a Mesh, it will be saved as either '.obj'
+            or '.glb', using the implementation of the nodes for Hunyuan3d
+            (Tencent).
+            """
+        )

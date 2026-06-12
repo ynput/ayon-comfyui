@@ -40,7 +40,7 @@ class QRPCManager(QObject, QThread_interface):
         self,
         *,
         parent: QObject = None,
-        client_hostname: str = "localhost",
+        client_hostname: str = "127.0.0.1",
         client_port: int | str = 55055,
         server_port: int | str = 55056,
         static_port: int | str = 5454,
@@ -183,7 +183,7 @@ class QRPCManager(QObject, QThread_interface):
         log.info("Started QT loop")
 
     def handle_failed_heartbeat(self) -> None:
-        """Handle signal recieved when a backend failed."""
+        """Handle signal received when a backend failed."""
         log.error("HEARTBEAT FAILED! Stopping services...")
         log.info("Stopping static hosted site...")
         self.static_server_thread.stop()
@@ -199,7 +199,7 @@ class QRPCManager(QObject, QThread_interface):
         QCoreApplication.exit(0)
 
     def handle_failed_tab(self) -> None:
-        """Handle signal recieved when a tab is closed."""
+        """Handle signal received when a tab is closed."""
         log.error("Tab closed! Stopping services...")
         log.info("Stopping heartbeat websocket client...")
         self.ws_pulse_client.stop()

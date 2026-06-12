@@ -97,13 +97,13 @@ def pull_origin_from_settings() -> str:
         return profile.address_frontend
     if isinstance(settings, ComfyLocalSettings):
         return settings.address_frontend
-    return "http://localhost:5454"
+    return "http://127.0.0.1:5454"
 
 
 def get_client_from_origin(origin: str) -> WSRPCBase | None:
     """Attempt to get client from socket connections.
 
-    This mimicks the photoshop ayon plugin, where the socket
+    This mimics the photoshop ayon plugin, where the socket
     is read out and the first connection is picked.
     We want to be more thorough though, and make sure the
     connection header checks out!
@@ -225,10 +225,10 @@ class RPCServerThread(Thread):
         """Run server async."""
         runner = aiohttp.web.AppRunner(self._app)
         await runner.setup()
-        site = aiohttp.web.TCPSite(runner, "localhost", self._port)
+        site = aiohttp.web.TCPSite(runner, "127.0.0.1", self._port)
         await site.start()
         log.info(
-            f"Websocket Server running on ws://localhost:{self._port}/ws/"  # noqa: G004
+            f"Websocket Server running on ws://127.0.0.1:{self._port}/ws/"  # noqa: G004
         )
 
         # Shutdown conditional
@@ -317,8 +317,8 @@ def call_on_origin(
             )
 
             client = get_client_from_origin(origin=_origin_)
-            log.info(f"FOR ORIGIN: {_origin_}")  # noqa :G004
-            log.info(f"GOT CLIENT: {client!s}")  # noqa :G004
+            log.debug(f"FOR ORIGIN: {_origin_}")  # noqa :G004
+            log.debug(f"GOT CLIENT: {client!s}")  # noqa :G004
             if client is None:
                 return None
 

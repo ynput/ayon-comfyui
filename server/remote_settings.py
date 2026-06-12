@@ -26,7 +26,9 @@ class ComfyRemoteSetting(BaseSettingsModel):
     frontend_port: int = SettingsField(
         55056,
         title="Default port for frontend RPC",
-        description="Websocket port to communicate with local browser instance",
+        description=(
+            "Websocket port to communicate with local browser instance"
+        ),
     )
 
     http_server_port: int = SettingsField(
@@ -40,12 +42,12 @@ class ComfyRemoteSetting(BaseSettingsModel):
     )
 
     comfy_web_adress: str = SettingsField(
-        default="http://localhost:8188",
+        default="http://127.0.0.1:8188",
         title="ComfyUI Web Address",
         description=(
-            "Web adress of the frontend. On localhost, "
-            "ComfyUI runs on port 8188, so the adress would be "
-            "'http://localhost:8188'. If comfyui is on the web, "
+            "Web address of the frontend. On localhost, "
+            "ComfyUI runs on port 8188, so the address would be "
+            "'http://127.0.0.1:8188'. If comfyui is on the web, "
             "use something like 'https://comfyui.contoso.com'."
         ),
     )

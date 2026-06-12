@@ -20,7 +20,7 @@ async def upload_image(
     """Posts an image/video to /upload/image endpoint.
 
     Returns:
-        JSON object response if succesful, otherwise None
+        JSON object response if successful, otherwise None
     """
     if isinstance(image_path, str):
         image_path = Path(image_path)
@@ -63,6 +63,16 @@ async def upload_image(
         ".mp4": "video/mp4",
         ".mov": "video/quicktime",
         ".webm": "video/webm",
+        # 3D Model
+        ".gltf": "model/gltf+json",
+        ".glb": "model/gltf-binary",
+        ".obj": "text/plain",  # or "model/obj" (unofficial)
+        ".fbx": "application/octet-stream",  # or "model/vnd.autodesk.fbx"
+        ".stl": "model/stl",  # or "application/vnd.ms-pki.stl"
+        ".ply": "application/octet-stream",  # or "model/ply" (unofficial)
+        ".spz": "application/octet-stream",
+        ".splat": "application/octet-stream",
+        ".ksplat": "application/octet-stream",
     }
 
     MIME_type = MIME_map.get(image_path.suffix)  # noqa : N806
@@ -118,7 +128,7 @@ def upload_input_image(
     ```
 
     Returns:
-        JSON object response if succesful, otherwise None
+        JSON object response if successful, otherwise None
 
     """
     loop = asyncio.new_event_loop()
@@ -153,7 +163,7 @@ def upload_input_images(
     ```
 
     Returns:
-        JSON objects in list if response if succesful, otherwise None
+        JSON objects in list if response if successful, otherwise None
 
     """
     loop = asyncio.new_event_loop()

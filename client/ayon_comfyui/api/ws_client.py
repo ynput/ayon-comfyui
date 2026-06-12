@@ -24,7 +24,7 @@ class WSClientThread(Thread):
 
     def __init__(  # noqa: D107
         self,
-        hostname: str = "localhost",
+        hostname: str = "127.0.0.1",
         port: int | str = 55055,
         use_https: bool = False,  # noqa: FBT001, FBT002
         retries: int = 3,

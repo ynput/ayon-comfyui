@@ -46,10 +46,7 @@ def get_launch_kwargs(kwargs: Optional[dict] = None) -> dict:
 class ComfyPrelaunchHook(PreLaunchHook):
     """Launch arguments preparation.
 
-    Hook add python executable and script path to AE implementation before
-    AE executable and add last workfile path to launch arguments.
-
-    TODO: REVISE THIS, LIFTED FROM AFTEREFFECTS
+    Set launch arguments so that it launches the ComfyUI profiles launcher.
     """
 
     app_groups: ClassVar[set] = {"comfyui"}
@@ -58,11 +55,6 @@ class ComfyPrelaunchHook(PreLaunchHook):
     launch_types: ClassVar[set] = {LaunchTypes.local}
 
     def execute(self) -> None:
-        """Abstract execute method where logic of hook is."""
-        self.log.warning(msg=str(self.launch_context.launch_args))
-        self.log.warning(msg=str(self.launch_context.kwargs))
-        self.log.warning(msg=str(self.launch_context.env))
-
         script_path = get_launch_script_path()
         # uses ayon_console to launch a script, respecting dev mode.
         dev_args = ["--use-dev"] if is_dev_mode_enabled() else []

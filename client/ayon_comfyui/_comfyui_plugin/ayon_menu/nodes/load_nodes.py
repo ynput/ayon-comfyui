@@ -66,10 +66,14 @@ class AyonLoadImageNode(io.ComfyNode):
 
         input_dir = folder_paths.get_input_directory()
         image_paths = [
-            os.path.join(input_dir, upload_info["subfolder"], upload_info["name"])
+            os.path.join(
+                input_dir, upload_info["subfolder"], upload_info["name"]
+            )
             for upload_info in upload_infos
         ]
-        image_paths = [os.path.normpath(image_path) for image_path in image_paths]
+        image_paths = [
+            os.path.normpath(image_path) for image_path in image_paths
+        ]
 
         output_images = []
         output_savedimages = []
@@ -85,7 +89,9 @@ class AyonLoadImageNode(io.ComfyNode):
             )
             output_savedimages.append(saved_result)
             for i in ImageSequence.Iterator(img):
-                i: Image.Image = node_helpers.pillow(ImageOps.exif_transpose, i)
+                i: Image.Image = node_helpers.pillow(
+                    ImageOps.exif_transpose, i
+                )
 
                 if i.mode == "I":
                     i = i.point(lambda i: i * (1 / 255))
@@ -101,21 +107,28 @@ class AyonLoadImageNode(io.ComfyNode):
                 image = np.array(image).astype(np.float32) / 255.0
                 image = torch.from_numpy(image)[None,]
                 if "A" in i.getbands():
-                    mask = np.array(i.getchannel("A")).astype(np.float32) / 255.0
+                    mask = (
+                        np.array(i.getchannel("A")).astype(np.float32) / 255.0
+                    )
                     mask = 1.0 - torch.from_numpy(mask)
                 elif i.mode == "P" and "transparency" in i.info:
                     mask = (
-                        np.array(i.convert("RGBA").getchannel("A")).astype(np.float32)
+                        np.array(i.convert("RGBA").getchannel("A")).astype(
+                            np.float32
+                        )
                         / 255.0
                     )
                     mask = 1.0 - torch.from_numpy(mask)
                 else:
-                    mask = torch.zeros((h, w), dtype=torch.float32, device="cpu")
+                    mask = torch.zeros(
+                        (h, w), dtype=torch.float32, device="cpu"
+                    )
                 output_images.append(image)
                 output_masks.append(mask.unsqueeze(0))
 
                 if img.format == "MPO":
-                    break  # ignore all frames except the first one for MPO format
+                    # ignore all frames except the first one for MPO format
+                    break
 
         if len(output_images) > 1:
             output_image = torch.cat(output_images, dim=0)
@@ -138,10 +151,14 @@ class AyonLoadImageNode(io.ComfyNode):
 
         input_dir = folder_paths.get_input_directory()
         image_paths = [
-            os.path.join(input_dir, upload_info["subfolder"], upload_info["name"])
+            os.path.join(
+                input_dir, upload_info["subfolder"], upload_info["name"]
+            )
             for upload_info in upload_infos
         ]
-        image_paths = [os.path.normpath(image_path) for image_path in image_paths]
+        image_paths = [
+            os.path.normpath(image_path) for image_path in image_paths
+        ]
 
         for image_path, upload_info in zip(image_paths, upload_infos):
             if not os.path.exists(image_path):
@@ -198,7 +215,8 @@ class AyonLoadVideoNode(io.ComfyNode):
 
     @classmethod
     def execute(cls, ayon_container_info: str):
-        """Mimic nodes_video.py/LoadVideo with container info imprinted on node."""
+        """Mimic nodes_video.py/LoadVideo with container info imprinted on
+        node."""
         container = json.loads(ayon_container_info)
         upload_info = next(iter(container["image_upload_info"]))
         if not upload_info:
@@ -225,10 +243,14 @@ class AyonLoadVideoNode(io.ComfyNode):
 
         input_dir = folder_paths.get_input_directory()
         image_paths = [
-            os.path.join(input_dir, upload_info["subfolder"], upload_info["name"])
+            os.path.join(
+                input_dir, upload_info["subfolder"], upload_info["name"]
+            )
             for upload_info in upload_infos
         ]
-        image_paths = [os.path.normpath(image_path) for image_path in image_paths]
+        image_paths = [
+            os.path.normpath(image_path) for image_path in image_paths
+        ]
 
         for image_path, upload_info in zip(image_paths, upload_infos):
             if not os.path.exists(image_path):

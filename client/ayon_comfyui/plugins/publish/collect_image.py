@@ -4,7 +4,6 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import urlretrieve
 
 import pyblish.api
-import pyblish.plugin
 from ayon_comfyui.api.pipeline import ComfyUIHost
 from ayon_core.pipeline import registered_host
 from ayon_core.pipeline.publish.lib import get_instance_staging_dir
@@ -20,14 +19,7 @@ class CollectImage(pyblish.api.InstancePlugin):
 
     default_variant = "Main"
 
-    def process(self, instance: pyblish.plugin.Instance):
-        proj = os.environ.get("AYON_PROJECT_NAME")[:3]
-        task = os.environ.get("AYON_TASK_NAME")
-        folder = os.environ.get("AYON_FOLDER_PATH").split("/")[-1]
-        workdir = os.environ.get("AYON_WORKDIR")
-        self.log.debug(workdir)
-        self.log.debug(instance)
-        self.log.debug(instance.data)
+    def process(self, instance: pyblish.api.Instance):
         host: ComfyUIHost = registered_host()
         image_urls = host.stub.get_publish_node_images(instance.data)
         ext = ".png"
@@ -38,16 +30,15 @@ class CollectImage(pyblish.api.InstancePlugin):
         files = []
 
         for image in image_urls:
-            self.log.info(image)
+            self.log.debug("Downloading image: %s", image)
             parse = urlsplit(image)
-            self.log.info(parse)
+            self.log.debug(parse)
             query = parse_qs(parse.query)
-            self.log.info(query)
+            self.log.debug(query)
             filename = next(iter(query.get("filename")), None)
             if filename is None:
                 continue
-            self.log.info(filename)
-            self.log.info(staging_dir)
+            self.log.debug("Got filename: %s", filename)
             destination = os.path.join(
                 staging_dir, instance.data.get("productName"), filename
             )
@@ -59,11 +50,12 @@ class CollectImage(pyblish.api.InstancePlugin):
 
         instance.context.data["currentFile"] = files[0]
 
-        # With publishing just one file, there's a tendency
-        # for Comfy to cache the results in the browser
-
         if len(files) == 1:
             files = files[0]
+
+        # marking instance as reviewable
+        instance.data["review"] = True
+        instance.data["families"].append("review")
 
         # creating representation
         instance.data["representations"].append(
@@ -72,10 +64,11 @@ class CollectImage(pyblish.api.InstancePlugin):
                 "ext": ext[1:],
                 "files": files,
                 "stagingDir": staging_dir,
+                "tags": ["review"],
             }
         )
 
-        # Maybe use PIL to generate a tiled image
+        # NOTE(@sas): Maybe generate a tiled image for batched images
 
         thumbnail_img = files
         if isinstance(thumbnail_img, list):

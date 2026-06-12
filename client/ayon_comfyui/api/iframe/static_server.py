@@ -14,7 +14,8 @@ log = logging.getLogger("ayon_comfyui")
 
 
 class StaticServerThread(Thread):
-    """Serves the basic webpage on http://localhost:port with the <iframe> in it."""
+    """Serves the basic webpage on http://localhost:port with the <iframe>
+    in it."""
 
     def __init__(
         self,
@@ -58,9 +59,9 @@ class StaticServerThread(Thread):
     async def async_run(self):
         runner = web.AppRunner(self._app)
         await runner.setup()
-        site = web.TCPSite(runner, "localhost", self.port)
+        site = web.TCPSite(runner, "127.0.0.1", self.port)
         await site.start()
-        print(f"Static Server running on http://localhost:{self.port}")
+        print(f"Static Server running on http://127.0.0.1:{self.port}")
 
         # Shutdown conditional
         await self._shutdown_event.wait()

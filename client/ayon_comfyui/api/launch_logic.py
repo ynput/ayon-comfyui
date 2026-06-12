@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING
 from ayon_core.lib import env_value_to_bool
 from ayon_core.pipeline import get_current_project_name, install_host
 from ayon_core.tools.utils import get_ayon_qt_app
-from ayon_core.tools.utils.dialogs import show_message_dialog
+from ayon_core.tools.utils.dialogs import show_message_dialog, ScrollMessageBox
+from qtpy import QtWidgets
 
 if TYPE_CHECKING:
     from qtpy.QtWidgets import QApplication
@@ -56,15 +57,21 @@ def safe_excepthook(*args):  # noqa: ANN201, ANN002, D103
 def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
     """Adjust settings for comfyui plugin."""
     settings, _ = ComfyLocalSettings.pull_committed_settings()
-    python = f"AYON_BACKEND_PORT = {settings.port_backend}"
+    python = f"AYON_BACKEND_PORT = {settings.port_backend}\n"
+    js = f'export const AYON_ORIGIN_ADRESS = "{settings.address_frontend}";'
     py_file = plugin_path / "ayon_menu" / "consts.py"
+    js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
 
     # update python consts plugin with port to use.
     # IPC using the proc Popen is not very wise,
     # since we can't reliably get a hold of the entire process tree
-    # We communicate with the JS side by templating HTML,
+
+    # Since communicating the address to JS isn't possible before establishing
+    # a connection with IFrame RPC,
+    # we still have to send over the actual address to the plugin.
 
     Path(py_file).write_text(python, encoding="utf-8")
+    Path(js_file).write_text(js, encoding="utf-8")
 
 
 def _subproc_launch_ComfyUI() -> subprocess.Popen:
@@ -117,18 +124,23 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
                     pythonpath, env_path, requirements
                 )
             except ChildProcessError as e:
-                show_message_dialog(
-                    "Virtual environment error",
-                    (
-                        "Couldn't instantiate virtual environment using:\n"
-                        f"python: {pythonpath!s}\n"
-                        f"goal environment folder: {env_path!s}\n"
-                        f"requirements: {requirements!s}\n\n"
-                        f"Error: {e}\n\n"
-                        "Process will now shut down."
-                    ),
-                    "critical",
+
+                messages = [
+                    "<h1>Couldn't instantiate virtual environment</h1>",
+                    "Using:"
+                    f"python: <code>{pythonpath!s}</code>",
+                    f"target environment folder: <code>{env_path!s}</code>",
+                    f"requirements: <code>{requirements!s}</code>",
+                    "<h3>Error:</h3>",
+                    str(e),
+                    "Process will now shut down.",
+                ]
+                dialog = ScrollMessageBox(
+                    icon=QtWidgets.QMessageBox.Icon.Critical,
+                    title="Virtual environment error",
+                    messages=messages,
                 )
+                dialog.exec()
                 return None
         else:
             pythonpath = venv_get_python(env_path)
@@ -201,7 +213,7 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
     # Generate temporary file,
     # dont delete tempfile otherwise comfy gets confused
     tmp_path = ""
-    with tempfile.TemporaryFile(
+    with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", suffix=".txt", delete=False
     ) as tmp:
         tmp.write(yaml)
@@ -329,7 +341,7 @@ def launch_local(
     try:
         rpcman = QRPCManager(
             parent=app,
-            client_hostname="localhost",
+            client_hostname="127.0.0.1",
             client_port=settings.port_backend,
             server_port=settings.port_webui,
             static_port=settings.port_static_frontend,
@@ -356,7 +368,9 @@ def launch_local(
                 while not get_client_from_origin(origin):
                     time.sleep(0.5)
 
-                safe_load = safe_partial(rpcman.stub.load_workfile, workfile_path)
+                safe_load = safe_partial(
+                    rpcman.stub.load_workfile, workfile_path
+                )
 
                 retries = 30
                 while safe_load().is_err and retries > 0:
