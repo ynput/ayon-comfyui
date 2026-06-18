@@ -24,7 +24,10 @@ class CollectImage(pyblish.api.InstancePlugin):
         image_urls = host.stub.get_publish_node_images(instance.data)
         ext = ".png"
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
-        staging_dir = get_instance_staging_dir(instance)
+        staging_dir = os.path.join(
+            get_instance_staging_dir(instance),
+            instance.data.get("productName"),
+        )
         self.log.info("Outputting image to %s", staging_dir)
 
         files = []
@@ -39,12 +42,8 @@ class CollectImage(pyblish.api.InstancePlugin):
             if filename is None:
                 continue
             self.log.debug("Got filename: %s", filename)
-            destination = os.path.join(
-                staging_dir, instance.data.get("productName"), filename
-            )
-            files.append(
-                os.path.join(instance.data.get("productName"), filename)
-            )
+            destination = os.path.join(staging_dir, filename)
+            files.append(filename)
             Path(destination).parent.mkdir(parents=True, exist_ok=True)
             urlretrieve(image, destination)  # noqa: S310
 
