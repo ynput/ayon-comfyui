@@ -26,7 +26,7 @@ class CollectImage(pyblish.api.InstancePlugin):
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = os.path.join(
             get_instance_staging_dir(instance),
-            instance.data.get("productName"),
+            instance.data["productName"],
         )
         self.log.info("Outputting image to %s", staging_dir)
 
