@@ -140,6 +140,8 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
                     for root in anatomy_roots.values()
                     if str(root)
                 ]
+                # A root of '/' would otherwise accept any absolute path.
+                roots = [root for root in roots if root]
             except Exception:  # noqa: BLE001
                 log.warning(
                     "Unable to get the roots of project '%s'",
