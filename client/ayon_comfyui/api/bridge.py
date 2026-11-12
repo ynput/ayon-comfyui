@@ -150,6 +150,8 @@ class ComfyUIBridge(QtCore.QObject):
         self._pairing_code = ""
         self._pairing_code_at = 0.0
         self._shutting_down = False
+        # Startup failed and the artist is being told; ignore late events.
+        self._failed = False
 
         self._sig_call.connect(self._run_callable)
         self._sig_event.connect(self._handle_event)
@@ -311,6 +313,7 @@ class ComfyUIBridge(QtCore.QObject):
         self._window.set_wanted(show)
 
     def _startup_failed(self) -> None:
+        self._failed = True
         self._timer.stop()
         try:
             check_plugin(self.comfy_url, timeout=3)
@@ -335,7 +338,7 @@ class ComfyUIBridge(QtCore.QObject):
         self._sig_event.emit(event, data)
 
     def _handle_event(self, event: str, data: Any) -> None:  # noqa: ANN401
-        if self._shutting_down:
+        if self._shutting_down or self._failed:
             return
         now = time.monotonic()
         if event == "connected":
