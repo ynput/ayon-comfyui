@@ -21,4 +21,4 @@ class CollectCurrentFile(pyblish.api.ContextPlugin):
         context.data["currentFile"] = path
         self.log.debug(f"Current workfile: {path}")
         if path is None:
-            self.log.warning(f"Current workfile is unsaved.")
+            self.log.warning("Current workfile is unsaved.")
