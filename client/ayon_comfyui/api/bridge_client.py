@@ -300,8 +300,13 @@ class BridgeClient:
                         fatal = await self._session(ws)
                         if fatal:
                             return
-                except (aiohttp.ClientError, OSError) as exc:
+                except (
+                    aiohttp.ClientError, OSError, asyncio.TimeoutError
+                ) as exc:
                     log.debug("Unable to connect to %s: %s", self.ws_url, exc)
+                except Exception:
+                    # Never let an unexpected error end the reconnect loop.
+                    log.exception("Unexpected error in the ComfyUI connection")
                 finally:
                     self._ws = None
                     self._disconnected()
@@ -339,8 +344,12 @@ class BridgeClient:
                 frame = json.loads(msg.data)
             except ValueError:
                 continue
-            if isinstance(frame, dict):
+            if not isinstance(frame, dict):
+                continue
+            try:
                 await self._on_frame(ws, frame)
+            except Exception:
+                log.exception("Unable to handle a message from ComfyUI")
 
         code = ws.close_code
         if code in {CLOSE_REJECTED, CLOSE_SUPERSEDED}:
