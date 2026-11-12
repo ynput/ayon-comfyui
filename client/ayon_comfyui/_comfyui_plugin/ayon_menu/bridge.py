@@ -56,6 +56,7 @@ PAIR_CODE_TTL = 600.0
 PAIR_CODE_REUSE = 60.0
 HOSTLESS_SESSION_TTL = 300.0
 MAX_SESSIONS = 256
+MAX_PAIR_CODES_PER_SESSION = 8
 MAX_PENDING = 1024
 MAX_ID_LENGTH = 128
 MAX_INFO_SIZE = 16 * 1024
@@ -394,6 +395,15 @@ class Bridge:
         elif kind == "response":
             await self._relay_response(session, role, frame, text)
         elif kind == "pair_code" and role == "host":
+            # Keep only the newest few codes of a session.
+            codes = [
+                code
+                for code, entry in self.pair_codes.items()
+                if entry[0] == session.id
+            ]
+            excess = len(codes) - MAX_PAIR_CODES_PER_SESSION + 1
+            for code in codes[:max(0, excess)]:
+                del self.pair_codes[code]
             code = secrets.token_urlsafe(18)
             self.pair_codes[code] = [
                 session.id, time.monotonic() + PAIR_CODE_TTL, None
