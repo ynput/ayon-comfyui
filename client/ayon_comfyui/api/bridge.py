@@ -305,6 +305,9 @@ class ComfyUIBridge(QtCore.QObject):
             show = now - reference > TAB_GRACE_SECONDS
         elif not self.client.tab_connected and self._no_tab_since:
             show = now - self._no_tab_since > self._tab_grace
+        if show and self.client.registered:
+            # Pairing codes expire; keep the one on display usable.
+            self.ensure_pairing_code()
         self._window.set_wanted(show)
 
     def _startup_failed(self) -> None:
@@ -356,6 +359,8 @@ class ComfyUIBridge(QtCore.QObject):
                     self._window.set_wanted(True)
         elif event == "disconnected":
             self._disconnected_at = now
+            # A restarted ComfyUI forgot the pairing codes it handed out.
+            self._forget_pairing_code()
             if self._process_exited():
                 log.info("ComfyUI exited, ending the AYON session.")
                 self.shutdown()
