@@ -45,6 +45,9 @@ log = logging.getLogger(__name__)
 
 # Show the session window when no tab has been connected for this long.
 TAB_GRACE_SECONDS = 10.0
+# ...or when ComfyUI isn't reachable yet this long after launch; starting
+# ComfyUI regularly takes a while.
+STARTUP_GRACE_SECONDS = 30.0
 # ...or this long after reconnecting to ComfyUI (e.g. after a restart),
 # since the tab needs to reconnect too.
 TAB_GRACE_AFTER_RECONNECT_SECONDS = 60.0
@@ -303,8 +306,10 @@ class ComfyUIBridge(QtCore.QObject):
 
         show = False
         if not self.client.registered:
-            reference = self._disconnected_at or self._started_at
-            show = now - reference > TAB_GRACE_SECONDS
+            if self._disconnected_at is None:
+                show = now - self._started_at > STARTUP_GRACE_SECONDS
+            else:
+                show = now - self._disconnected_at > TAB_GRACE_SECONDS
         elif not self.client.tab_connected and self._no_tab_since:
             show = now - self._no_tab_since > self._tab_grace
         if show and self.client.registered:
@@ -453,9 +458,6 @@ class SessionWindow(QtWidgets.QWidget):
         # Closed by the artist: stay hidden until the situation changes.
         self._dismissed = False
         self.setWindowTitle("AYON - ComfyUI")
-        self.setWindowFlags(
-            self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint
-        )
         self.setMinimumWidth(460)
         try:
             from ayon_core import resources, style  # noqa: PLC0415
