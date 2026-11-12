@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 import aiohttp.web
 from ayon_api import get_representations
+from ayon_core.pipeline import registered_host
 from ayon_core.tools.utils import host_tools
 from wsrpc_aiohttp import Route, WebSocketAsync, decorators
 
@@ -71,6 +72,28 @@ def show_tool_by_name(tool_name: str) -> None:
     host_tools.show_tool_by_name(tool_name, **kwargs)
 
 
+def save_current_workfile() -> None:
+    """Save current workfile, or show Workfiles tool if it's unsaved."""
+    host = registered_host()
+    current_path = host.get_current_workfile()
+    if not current_path:
+        log.info("Workflow is not an AYON workfile yet, showing Workfiles.")
+        show_tool_by_name("workfiles")
+        return
+
+    try:
+        host.save_workfile(current_path)
+    except Exception as exc:
+        log.exception("Failed to save workfile: %s", current_path)
+        from qtpy import QtWidgets  # noqa: PLC0415
+
+        QtWidgets.QMessageBox.critical(
+            None, "AYON - Save Workfile failed", f"{current_path}\n\n{exc}"
+        )
+        return
+    log.info(f"Saved workfile: {current_path}")  # noqa: G004
+
+
 def pull_origin_from_settings() -> str:
     """Return expected RPC origin adress from settings."""
     settings, profile = ComfyRemoteSettings.pull_committed_settings()
@@ -129,6 +152,14 @@ class AyonLocalHost(Route):
             self.qt_thread.schedule(show_tool_by_name, tool_name)
             return f"{tool_name} scheduled in qt_thread"
         return tool_name
+
+    @decorators.proxy
+    async def requestSaveWorkfile(self) -> str | None:  # noqa: N802
+        """Schedule saving the current workfile in thread."""
+        if self.qt_thread:
+            self.qt_thread.schedule(save_current_workfile)
+            return "save workfile scheduled in qt_thread"
+        return None
 
 
 class RPCServerThread(Thread):

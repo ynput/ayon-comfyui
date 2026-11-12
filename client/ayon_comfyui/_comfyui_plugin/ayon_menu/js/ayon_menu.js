@@ -4,6 +4,7 @@ import {RPCServer} from "../../../../extensions/ayon_menu/lib/rpc_server.js"
 import {AYON_ORIGIN_ADRESS} from "../../../../extensions/ayon_menu/lib/consts.js"
 
 const AYON_EXTENSION_NAME = "AYON.ComfyMenu"
+const AYON_SAVE_WORKFILE_COMMAND_ID = "AYON.SaveWorkfile"
 const AYON_SIDEBAR_TAB_ID = "ayon"
 const AYON_SIDEBAR_ICON_CLASS = "ayon-sidebar-icon"
 const AYON_SIDEBAR_STYLE_ID = "ayon-sidebar-style"
@@ -1009,12 +1010,24 @@ app.registerExtension({
         request_ayon_tool(action.tool_name)
       }
     })),
+    {
+      id: AYON_SAVE_WORKFILE_COMMAND_ID,
+      label: "Save Workfile",
+      function: () => {
+        // Saves to the current AYON workfile path, or opens the
+        // Workfiles tool when the workflow isn't an AYON workfile yet.
+        push_ayon_queue("ayonComfyUI.requestSaveWorkfile", {})
+      }
+    },
   ],
   // Add commands to menu
   menuCommands: [
     { 
       path: ["AYON"],
-      commands: AYON_TOOL_ACTIONS.map((action) => action.id) 
+      commands: [
+        AYON_SAVE_WORKFILE_COMMAND_ID,
+        ...AYON_TOOL_ACTIONS.map((action) => action.id)
+      ]
     },
   ]
 })
