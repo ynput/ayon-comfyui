@@ -1,6 +1,7 @@
 """Helper functions for templating strings."""
 
 from __future__ import annotations
+import os
 
 from functools import wraps
 from typing import Any, Callable
@@ -35,6 +36,8 @@ def construct_template_data() -> dict[str, Any]:
 
     username = get_ayon_username()
 
+    userprofile = {"userprofile": os.path.expanduser("~")}
+
     roots = Anatomy(
         project_name=project_name, project_entity=project_entity
     ).roots
@@ -52,6 +55,7 @@ def construct_template_data() -> dict[str, Any]:
         )
         | roots
         | top_roots_dict
+        | userprofile
     )
 
 
