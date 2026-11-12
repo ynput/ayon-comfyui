@@ -3,8 +3,6 @@
 Using the V3 API to remain compatible for a loooooong time.
 """
 
-from threading import Thread
-
 from comfy_api.latest import ComfyExtension, io
 from server import PromptServer
 from typing_extensions import override
@@ -21,7 +19,6 @@ from .nodes.publish_nodes import (
     AyonSaveNode,
     AyonSaveVideoNode,
 )
-from .ws_server import run_server
 
 # Routes on ComfyUI's own server that the AYON host and the paired ComfyUI
 # tab connect to.
@@ -45,6 +42,4 @@ class AyonComfyUIExtension(ComfyExtension):
 
 
 async def comfy_entrypoint() -> AyonComfyUIExtension:
-    print("Running internal websocket server for Ayon...")
-    Thread(target=run_server).start()
     return AyonComfyUIExtension()
