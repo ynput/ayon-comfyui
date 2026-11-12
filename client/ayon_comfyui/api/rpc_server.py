@@ -62,8 +62,7 @@ def show_tool_by_name(tool_name: str) -> None:
     if tool_name == "create":
         tool_name = "publisher"
         kwargs["tab"] = "create"
-
-    if tool_name == "publisher":
+    elif tool_name == "publisher":
         kwargs["tab"] = "publish"
 
     host_tools.show_tool_by_name(tool_name, **kwargs)

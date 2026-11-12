@@ -35,3 +35,14 @@ Content-Security-Policy: frame-ancestors http://localhost:<port_that_iframe_is_h
 > This explicitly allows mixed security and (limited; ASSUMING `Content-Security-Policy`) cross-origin remote scripting.
 
 More information (including header settings and further security issues) is provided [here](https://github.com/ynput/ayon-comfyui/blob/develop/client/ayon_comfyui/api/iframe/README.md).
+
+
+## Caveats
+
+### Multi-Tab / RPC Limitations in ComfyUI Addon
+
+A quick heads-up on how ComfyUI handles browser sessions:
+
+- **Single RPC Connection:** The addon isn't built to handle multiple open tabs simultaneously because the RPC connection can only link to one tab at a time.
+- **No Multi-Tab Execution:** Only the active tab responds. There isn't an API method to switch tabs remotely or push executions to inactive tabs.
+- **Session Data Inspection:** ComfyUI manages different workflow tabs internally by dumping stringified project JSONs into browser session storage. The addon works around this by identifying the active tab and extracting the relevant workflow state from that session data.
