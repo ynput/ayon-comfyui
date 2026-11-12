@@ -23,9 +23,13 @@ window.onload = async (e) => {
     return await IFRAME_RPC.call('setGraphExtra', data)
   })
 
-  // Allow host to request the client save the current graph internally
-  RPC.addRoute('save', async (data) => {
-    return await IFRAME_RPC.call('save', data)
+  // Two-step AYON workfile save: serialize (and rename tab), then mark saved
+  RPC.addRoute('beginSaveWorkfile', async (data) => {
+    return await IFRAME_RPC.call('beginSaveWorkfile', data)
+  })
+
+  RPC.addRoute('finishSaveWorkfile', async (data) => {
+    return await IFRAME_RPC.call('finishSaveWorkfile', data)
   })
 
   // Allow host to query the currently stored workfile path (if present)

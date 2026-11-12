@@ -115,8 +115,100 @@ function create_ayon_tool_panel(container) {
   container.replaceChildren(root)
 }
 
-function get_workflow() {
-  return document.querySelector('#vue-app').__vue_app__.config.globalProperties.$pinia._s.get("workflow");
+// --- ComfyUI workflow (tab) management -------------------------------------
+//
+// We deliberately go through the *public* ComfyUI frontend extension API
+// (`app.extensionManager.workflow`, typed as `ExtensionManager.workflow` in
+// the frontend's `extensionTypes.ts`) and only use the workflow store's
+// actions (`renameWorkflow`, `saveWorkflow`, ...). That way the workflow
+// manager keeps its own bookkeeping (tabs, drafts, bookmarks, thumbnails)
+// consistent and we do not duplicate its internals, which are likely to
+// change. If the store is not available (older frontends) we gracefully
+// degrade: files still save to disk, but tabs are not renamed/saved.
+
+const AYON_EXTRA_KEY = "AYON"
+
+function get_workflow_store() {
+  try {
+    return app.extensionManager?.workflow ?? null
+  } catch (err) {
+    console.warn("AYON: Unable to access ComfyUI workflow store:", err)
+    return null
+  }
+}
+
+function get_root_graph() {
+  return app.rootGraph ?? app.graph
+}
+
+function merge_into_extra(target, extra) {
+  Object.keys(extra).forEach((key) => {
+    const value = extra[key]
+    const current = target[key]
+    if (
+      value !== null && typeof value === "object" && !Array.isArray(value) &&
+      current !== null && typeof current === "object" && !Array.isArray(current)
+    ) {
+      target[key] = {...current, ...value}
+    } else {
+      target[key] = value
+    }
+  })
+  return target
+}
+
+function get_ayon_extra() {
+  return get_root_graph()?.extra?.[AYON_EXTRA_KEY] ?? null
+}
+
+function set_ayon_extra(values) {
+  const graph = get_root_graph()
+  graph.extra ??= {}
+  graph.extra[AYON_EXTRA_KEY] = {...(graph.extra[AYON_EXTRA_KEY] ?? {}), ...values}
+  return graph.extra[AYON_EXTRA_KEY]
+}
+
+function capture_tracker_state(tracker) {
+  // `checkState` was deprecated in favor of `captureCanvasState`
+  if (typeof tracker?.captureCanvasState === "function") {
+    tracker.captureCanvasState()
+  } else {
+    tracker?.checkState?.()
+  }
+}
+
+function sync_change_tracker(workflow = null) {
+  // Make ComfyUI's change tracker pick up direct graph mutations
+  // (like `graph.extra`) so that drafts and saves include them.
+  const tracker = (workflow ?? get_workflow_store()?.activeWorkflow)?.changeTracker
+  try {
+    capture_tracker_state(tracker)
+  } catch (err) {
+    console.warn("AYON: Failed to sync change tracker:", err)
+  }
+}
+
+function serialize_graph() {
+  return JSON.stringify(get_root_graph().serialize())
+}
+
+async function rename_workflow(store, workflow, name) {
+  // Rename the workflow (tab) to `name`, keeping it in its current directory.
+  const directory = workflow.directory ?? "workflows"
+  const new_path = `${directory}/${name}.json`
+  if (workflow.path === new_path) {
+    return
+  }
+  const existing = store.getWorkflowByPath(new_path)
+  if (existing && existing !== workflow) {
+    if (store.isOpen(existing)) {
+      throw new Error(`Workflow '${new_path}' is already open in another tab.`)
+    }
+    // A closed ComfyUI-side copy of this same AYON workfile. The file on
+    // disk managed by AYON is the source of truth, so we replace it.
+    await store.deleteWorkflow(existing)
+  }
+  await store.renameWorkflow(workflow, new_path)
 }
 
 function ensure_ayon_sidebar_style() {
@@ -575,185 +667,123 @@ app.registerExtension({
 
 
         this.IFRAMERPC.register('getWorkfile', (data) => {
-          // Fetch clientId from session storage,
+          // Serialize the live graph so the result always reflects the
+          // current state, instead of ComfyUI's debounced storage drafts.
+          const graph = get_root_graph()
+          if (graph?.serialize) {
+            return serialize_graph()
+          }
+
+          // Legacy fallback: fetch from session storage,
           // because workflows are saved as workflow:<id>
           const client = window.sessionStorage.getItem("clientId")
-          const workflow_key = `workflow:${client}`
-          let workfile = window.sessionStorage.getItem(workflow_key)
+          let workfile = window.sessionStorage.getItem(`workflow:${client}`)
           if (workfile == null){
-            // overwrite workfile in case of new API for this. Gets current tab.
             workfile = get_workfiles_v2()
           }
-          console.log("workfile requested", workfile)
           return workfile
         })
 
-        // Allow host to set arbitrary extra metadata on the currently opened graph
+        // Allow host to set arbitrary extra metadata on the current graph
         this.IFRAMERPC.register('setGraphExtra', (data) => {
-          try {
-            const extra_json = data.extra_json;
-            const extra = typeof extra_json === 'string' ? JSON.parse(extra_json) : extra_json;
-
-            // Update sessionStorage-stored workfile if present
-            const client = window.sessionStorage.getItem("clientId")
-            const workflow_key = `workflow:${client}`
-            let workfile = window.sessionStorage.getItem(workflow_key)
-            if (workfile == null){
-              workfile = get_workfiles_v2()
-            }
-
-            if (workfile) {
-              try {
-                const wf = typeof workfile === 'string' ? JSON.parse(workfile) : workfile;
-                wf.graph = wf.graph || {};
-                wf.graph.extra = wf.graph.extra || {};
-
-                Object.keys(extra).forEach((k) => {
-                  if (typeof extra[k] === 'object' && extra[k] !== null && typeof wf.graph.extra[k] === 'object') {
-                    wf.graph.extra[k] = { ...wf.graph.extra[k], ...extra[k] };
-                  } else {
-                    wf.graph.extra[k] = extra[k];
-                  }
-                });
-
-                window.sessionStorage.setItem(workflow_key, JSON.stringify(wf));
-              } catch (e) {
-                console.warn('Failed to update session-stored workfile:', e);
-              }
-            }
-
-            // Also attempt to update in-memory graph representation
-            if (app && app.graph && typeof app.graph.serialize === 'function') {
-              const g = app.graph.serialize();
-              g.extra = g.extra || {};
-              Object.keys(extra).forEach((k) => {
-                if (typeof extra[k] === 'object' && extra[k] !== null && typeof g.extra[k] === 'object') {
-                  g.extra[k] = { ...g.extra[k], ...extra[k] };
-                } else {
-                  g.extra[k] = extra[k];
-                }
-              });
-              // reload graph data with merged extra without altering nodes
-              // Update app.graph.extra directly to avoid triggering a new tab.
-              try {
-                app.graph.extra = app.graph.extra || {};
-                Object.keys(extra).forEach((k) => {
-                  if (typeof extra[k] === 'object' && extra[k] !== null && typeof app.graph.extra[k] === 'object') {
-                    app.graph.extra[k] = { ...app.graph.extra[k], ...extra[k] };
-                  } else {
-                    app.graph.extra[k] = extra[k];
-                  }
-                });
-                // mark graph dirty so UI reflects the change
-                if (typeof app.graph.setDirtyCanvas === 'function') {
-                  app.graph.setDirtyCanvas(true, true);
-                }
-              } catch (e) {
-                console.warn('Failed to set graph.extra directly:', e);
-              }
-            }
-
-            return true;
-          } catch (err) {
-            console.warn('setGraphExtra failed:', err);
-            return false;
-          }
+          const extra = typeof data.extra_json === 'string' ? JSON.parse(data.extra_json) : data.extra_json
+          const graph = get_root_graph()
+          graph.extra ??= {}
+          merge_into_extra(graph.extra, extra)
+          sync_change_tracker()
+          return true
         })
 
-        // Expose a simple getter that returns graph.extra.AYON.workfile_path when available
-        this.IFRAMERPC.register('getWorkfilePath', (data) => {
-          try {
-            // Prefer in-memory graph value
-            if (app && app.graph) {
-              try {
-                const g = app.graph.serialize ? app.graph.serialize() : app.graph;
-                if (g && g.extra && g.extra.AYON && g.extra.AYON.workfile_path) {
-                  return g.extra.AYON.workfile_path;
-                }
-                if (g && g.graph && g.graph.extra && g.graph.extra.AYON && g.graph.extra.AYON.workfile_path) {
-                  return g.graph.extra.AYON.workfile_path;
-                }
-              } catch (e) {
-                console.warn('Failed to read in-memory graph:', e);
-              }
-            }
-
-            // Fallback to session-stored workfile
-            const client = window.sessionStorage.getItem("clientId")
-            const workflow_key = `workflow:${client}`
-            let workfile = window.sessionStorage.getItem(workflow_key)
-            if (workfile == null){
-              workfile = get_workfiles_v2()
-            }
-
-            if (workfile) {
-              try {
-                const wf = typeof workfile === 'string' ? JSON.parse(workfile) : workfile;
-                const path = wf?.graph?.extra?.AYON?.workfile_path ?? wf?.extra?.AYON?.workfile_path ?? null;
-                return path ?? null;
-              } catch (e) {
-                console.warn('Failed to parse session-stored workfile:', e);
-                return null;
-              }
-            }
-
-            return null;
-          } catch (err) {
-            console.warn('getWorkfilePath failed:', err);
-            return null;
-          }
-        })
-
-        // Return the full graph.extra object (stringified JSON). If data.key(s) provided, return filtered value(s).
+        // Return graph.extra (stringified JSON), optionally a single key.
         this.IFRAMERPC.register('getGraphExtra', (data) => {
-          try {
-            let extraObj = {};
-
-            // Prefer in-memory graph
-            if (app && app.graph) {
-              try {
-                const g = app.graph.serialize ? app.graph.serialize() : app.graph;
-                extraObj = g?.extra ?? g?.graph?.extra ?? {};
-              } catch (e) {
-                console.warn('Failed to read in-memory graph for getGraphExtra:', e);
-              }
-            }
-
-            // Fallback to session-stored workfile if empty
-            if ((!extraObj || Object.keys(extraObj).length === 0)) {
-              const client = window.sessionStorage.getItem("clientId")
-              const workflow_key = `workflow:${client}`
-              let workfile = window.sessionStorage.getItem(workflow_key)
-              if (workfile == null){
-                workfile = get_workfiles_v2()
-              }
-              if (workfile) {
-                try {
-                  const wf = typeof workfile === 'string' ? JSON.parse(workfile) : workfile;
-                  extraObj = wf?.graph?.extra ?? wf?.extra ?? {};
-                } catch (e) {
-                  console.warn('Failed to parse session-stored workfile for getGraphExtra:', e);
-                }
-              }
-            }
-
-            // If caller requested a specific key or list of keys, filter
-            if (data && data.key) {
-              return JSON.stringify(extraObj[data.key] ?? null);
-            }
-            if (data && Array.isArray(data.keys)) {
-              const out = {};
-              data.keys.forEach((k) => {
-                out[k] = extraObj[k] ?? null;
-              });
-              return JSON.stringify(out);
-            }
-
-            return JSON.stringify(extraObj);
-          } catch (err) {
-            console.warn('getGraphExtra failed:', err);
-            return JSON.stringify({});
+          const extra = get_root_graph()?.extra ?? {}
+          if (data && data.key) {
+            return JSON.stringify(extra[data.key] ?? null)
           }
+          return JSON.stringify(extra)
+        })
+
+        // Return the AYON workfile path the current workflow was saved to or
+        // opened from, or null when it is not (or no longer) an AYON workfile.
+        this.IFRAMERPC.register('getWorkfilePath', (data) => {
+          const ayon = get_ayon_extra()
+          const path = ayon?.workfile_path
+          if (!path) {
+            return null
+          }
+
+          // `graph.extra` is copied along when a user duplicates a workflow
+          // or uses ComfyUI's own 'Save As'. Only trust the path for the
+          // workflow (tab) it was recorded for, so we never report (and then
+          // overwrite) another workflow's AYON workfile.
+          const active = get_workflow_store()?.activeWorkflow
+          if (ayon.comfy_workflow_path && active && active.path !== ayon.comfy_workflow_path) {
+            console.debug(
+              `AYON: Ignoring workfile path recorded for '${ayon.comfy_workflow_path}' ` +
+              `because the active workflow is '${active.path}'`
+            )
+            return null
+          }
+          return path
+        })
+
+        // Step one of saving an AYON workfile: name the tab after the file,
+        // record the AYON workfile path and return the serialized graph.
+        // The host writes the result to disk, then calls `finishSaveWorkfile`.
+        this.IFRAMERPC.register('beginSaveWorkfile', async (data) => {
+          const store = get_workflow_store()
+          const workflow = store?.activeWorkflow ?? null
+          const warnings = []
+          let renamed = true
+
+          if (workflow && data.workflow_name) {
+            try {
+              await rename_workflow(store, workflow, data.workflow_name)
+            } catch (err) {
+              renamed = false
+              console.warn("AYON: Failed to rename workflow:", err)
+              warnings.push(`Unable to rename ComfyUI workflow: ${err}`)
+            }
+          } else if (!workflow) {
+            warnings.push("ComfyUI workflow store is unavailable; tab is not renamed or saved.")
+          }
+
+          set_ayon_extra({
+            workfile_path: data.workfile_path,
+            comfy_workflow_path: workflow?.path ?? null,
+          })
+          sync_change_tracker(workflow)
+
+          return {
+            workfile: serialize_graph(),
+            // Only when the tab is named after the workfile do we also want
+            // to save it inside ComfyUI (see `finishSaveWorkfile`)
+            comfy_workflow_path: renamed ? (workflow?.path ?? null) : null,
+            warnings,
+          }
+        })
+
+        // Step two of saving an AYON workfile: after the host wrote the file
+        // to disk, also save the workflow in ComfyUI so the tab is no longer
+        // flagged as modified.
+        this.IFRAMERPC.register('finishSaveWorkfile', async (data) => {
+          const store = get_workflow_store()
+          if (!store || !data.comfy_workflow_path) {
+            return false
+          }
+          const workflow = store.getWorkflowByPath(data.comfy_workflow_path)
+          if (!workflow || !store.isActive(workflow)) {
+            // User switched tabs in the meantime; do not save another tab.
+            return false
+          }
+          const tracker = workflow.changeTracker
+          if (typeof tracker?.prepareForSave === "function") {
+            tracker.prepareForSave()
+          } else {
+            capture_tracker_state(tracker)
+          }
+          await store.saveWorkflow(workflow)
+          return true
         })
 
         this.IFRAMERPC.register('addPublishNode', (data) => {
@@ -929,40 +959,39 @@ app.registerExtension({
           }
         })
 
-        this.IFRAMERPC.register('loadWorkfile', (data) => {
-          console.log("loading from passed in Workfile")
-          const workfile_parse = JSON.parse(data.workfile_json)
-          try {
-            if (data.workfile_name) {
-              app.loadGraphData(workfile_parse, true, true, data.workfile_name)
-            } else {
-              app.loadGraphData(workfile_parse)
+        this.IFRAMERPC.register('loadWorkfile', async (data) => {
+          const graph_data = JSON.parse(data.workfile_json)
+          if (data.workfile_path) {
+            // Record the AYON workfile path *before* loading, so that it
+            // is part of the loaded state (no race with a separate call).
+            graph_data.extra ??= {}
+            graph_data.extra[AYON_EXTRA_KEY] = {
+              ...(graph_data.extra[AYON_EXTRA_KEY] ?? {}),
+              workfile_path: data.workfile_path,
+              comfy_workflow_path: null,
             }
-              
-          } catch (error) {
-            console.log(error)
-            return false
+          }
+
+          await app.loadGraphData(graph_data, true, true, data.workfile_name || null)
+
+          // Record which ComfyUI workflow (tab) this AYON workfile lives in
+          // and make that the change tracker baseline, so the freshly opened
+          // tab is not flagged as modified.
+          const workflow = get_workflow_store()?.activeWorkflow
+          if (data.workfile_path && workflow) {
+            set_ayon_extra({comfy_workflow_path: workflow.path})
+            const tracker = workflow.changeTracker
+            try {
+              capture_tracker_state(tracker)
+              tracker?.reset?.()
+              tracker?.updateModified?.()
+            } catch (err) {
+              console.warn("AYON: Failed to reset change tracker:", err)
+            }
           }
           return true
         })
 
-        this.IFRAMERPC.register('save', async (data) => {
-          try {
-            console.log("Saving:", data)
-            const workflow = get_workflow().activeWorkflow
-
-            if (data && data.filename) {
-              await workflow.rename(data.filename)
-            }
-            await workflow.save()
-            return true
-          } catch (err) {
-            console.warn('save handler failed:', err)
-            return false
-          }
-        })
-
-      
         //this.RPC.connect();
     },
     commands: [

@@ -76,38 +76,34 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
     def update_context_data(self, data, changes):
         self.stub.imprint_context(data)
 
-    def get_current_workfile(self):
-        # Not too great, relies on a workfile having been opened
+    def get_current_workfile(self) -> str | None:
+        """Return the AYON workfile path of the active ComfyUI workflow.
+
+        ComfyUI has no notion of files on disk, so we store the AYON workfile
+        path in the graph (`extra.AYON.workfile_path`) on open and save.
+        """
         return self.stub.get_workfile_path()
 
-    def open_workfile(self, filepath):
+    def open_workfile(self, filepath: str) -> bool:
+        """Open workfile in a ComfyUI workflow tab."""
         self.stub.load_workfile(filepath)
-        # After load, enforce that we track this file to exist at a certain
-        # path, so that `get_current_workfile` will report that path.
-        self.stub.set_workfile_path(filepath)
         return True
 
-    def save_workfile(self, dst_path=None):
-        # Overwrite if no path is set
+    def save_workfile(self, dst_path: str | None = None) -> None:
+        """Save the active ComfyUI workflow to `dst_path`.
+
+        When `dst_path` is not passed, saves to the current workfile path.
+        """
         if dst_path is None:
-            dst_path = self.stub.get_workfile_path()
-            assert isinstance(dst_path, str)
+            dst_path = self.get_current_workfile()
+            if not dst_path:
+                msg = (
+                    "The active ComfyUI workflow is not an AYON workfile yet. "
+                    "Use the Workfiles tool to save it."
+                )
+                raise RuntimeError(msg)
 
-        # Set workfile path metadata inside the graph
-        self.stub.set_workfile_path(dst_path)
-
-        # Serialize the workfile and write it to disk
-        workfile: str = self.stub.query_workfile()
-        if workfile and isinstance(dst_path, str):
-            with open(dst_path, mode="w", encoding="utf-8") as f:
-                f.write(workfile)
-
-        # Save it 'internally' for ComfyUI too (perform Save As semantics)
-        # TODO: This would error if there's already another saved workflow with
-        #  same name. So we may need to ensure at least uniqueness within the
-        #  ComfyUI local storage
-        graph_name = os.path.splitext(os.path.basename(dst_path))[0]
-        self.stub.save(graph_name)
+        self.stub.save_workfile(dst_path)
 
     @property
     def stub(self) -> RPCStub:
