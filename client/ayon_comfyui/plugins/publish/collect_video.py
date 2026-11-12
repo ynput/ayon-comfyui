@@ -12,6 +12,7 @@ from urllib.request import urlretrieve
 import pyblish.api
 from ayon_comfyui.api.rpc_stub import PublishType
 from ayon_core.pipeline import registered_host
+from ayon_core.lib import transcoding
 from ayon_core.pipeline.publish.lib import get_instance_staging_dir
 
 if TYPE_CHECKING:
@@ -60,7 +61,8 @@ class CollectVideo(pyblish.api.InstancePlugin):
         # f"{filename}_{format}_thumb.png"
 
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
-        staging_dir = get_instance_staging_dir(instance)
+        staging_dir = os.path.join(
+            get_instance_staging_dir(instance), instance.data.get("productName"))
         self.log.debug("Outputting video to %s", staging_dir)
 
         video_link = next(iter(image_urls))
@@ -87,14 +89,10 @@ class CollectVideo(pyblish.api.InstancePlugin):
             )
             return
         video_info.video_extension = extension
-        self.log.debug(filename)
-        self.log.debug(staging_dir)
-        destination = os.path.join(
-            staging_dir, instance.data.get("productName"), filename
-        )
-        video_info.video_file = os.path.join(
-            instance.data.get("productName"), filename
-        )
+        self.log.debug(f"Filename: {filename}")
+        self.log.debug(f"Staging Directory: {staging_dir}")
+        destination = os.path.join(staging_dir, filename)
+        video_info.video_file = filename
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
         urlretrieve(video_link, destination)  # noqa: S310
 
@@ -106,19 +104,52 @@ class CollectVideo(pyblish.api.InstancePlugin):
         ).geturl()
         self.log.debug("Retrieving generated thumbnail")
         self.log.debug(thumb_url)
-        thumb_destination = os.path.join(
-            staging_dir, instance.data.get("productName"), thumb_filename
-        )
+        thumb_destination = os.path.join(staging_dir, thumb_filename)
         urlretrieve(thumb_url, thumb_destination)  # noqa: S310
-        video_info.thumbnail_file = os.path.join(
-            instance.data.get("productName"), thumb_filename
+        video_info.thumbnail_file = thumb_filename
+        
+        # get frame range and frame rate
+        frame_start = int(instance.data.get("frameStart", 0))
+        frame_end = int(instance.data.get("frameEnd", 0))
+        fps = float(instance.data.get("fps", 0))
+        # get video file info
+        input_frames = 0
+        input_fps = 0
+        input_file_metadata = transcoding.get_ffprobe_data(
+            os.path.join(staging_dir, video_info.video_file), logger=self.log)
+        stream = next(
+            (
+                s for s in input_file_metadata["streams"]
+                if s.get("codec_type") == "video"
+            ),
+            {}
         )
+        if stream:
+            input_frames = int(stream.get("nb_frames", 0))
+            input_frdiv = stream.get("r_frame_rate", "") # "24/1" "24000/1001"
+            input_fps = 0
+            if input_frdiv.endswith("/1"):
+                input_fps = float(int(input_frdiv[:-2]))
+            elif input_frdiv != "":
+                input_fps = eval(input_frdiv)
+            input_fps = float(input_fps)
+
+        # use detected frame range
+        if input_frames !=0:
+            frame_start = 1
+            frame_end = input_frames
+        if input_fps !=0:
+            fps = input_fps
+        self.log.debug(f"Video Frame range: {frame_start}-{frame_end} @ {fps}")
 
         instance.context.data["currentFile"] = video_info.video_file
 
         # marking instance as reviewable
         instance.data["review"] = True
         instance.data["families"].append("review")
+        instance.data["frameStart"] = frame_start
+        instance.data["frameEnd"] = frame_end
+        instance.data["fps"] = fps
 
         # creating representation
         instance.data["representations"].append(
@@ -128,6 +159,9 @@ class CollectVideo(pyblish.api.InstancePlugin):
                 "files": video_info.video_file,
                 "stagingDir": staging_dir,
                 "tags": ["review"],
+                "frameStart": frame_start,
+                "frameEnd": frame_end,
+                "fps": fps,
             }
         )
 
