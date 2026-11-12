@@ -202,7 +202,17 @@ class ComfyUIBridge(QtCore.QObject):
             process.wait()
 
     def _process_exited(self) -> bool:
-        return self._process is not None and self._process.poll() is not None
+        """Whether the ComfyUI that AYON launched is known to be gone.
+
+        On Windows ComfyUI runs in a console (`powershell -NoExit`) that
+        stays open until the artist closes it, so its exit means ComfyUI is
+        gone. Elsewhere the terminal wrapper (`open -a Terminal`,
+        `x-terminal-emulator`) may return right away while ComfyUI keeps
+        running, so its exit says nothing.
+        """
+        if self._process is None or sys.platform != "win32":
+            return False
+        return self._process.poll() is not None
 
     # --- pairing ----------------------------------------------------------
 
