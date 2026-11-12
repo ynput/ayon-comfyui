@@ -65,7 +65,9 @@ class QRPCManager(QObject, QThread_interface):
             server_port, self, https=use_https
         )
         self._static_thread = StaticServerThread(
-            port=static_port, comfy_url=comfy_url
+            port=static_port,
+            comfy_webui_port=server_port,
+            comfy_url=comfy_url,
         )
         self._ws_client_thread = WSClientThread(
             hostname=client_hostname,
