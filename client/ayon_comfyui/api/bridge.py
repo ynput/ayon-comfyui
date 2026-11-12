@@ -393,6 +393,15 @@ class ComfyUIBridge(QtCore.QObject):
 
     # --- requests from the tab (bridge worker thread) ---------------------
 
+    def run_in_main_thread(self, func: Callable[[], Any]) -> None:
+        """Run `func` on the Qt main thread, from any thread.
+
+        Doesn't wait for it to run. Tab request handlers run on a worker
+        thread; use this for anything that touches Qt or host state, and
+        answer the tab right away.
+        """
+        self._sig_call.emit(func)
+
     def _run_callable(self, func: Callable[[], Any]) -> None:
         try:
             func()
@@ -405,11 +414,11 @@ class ComfyUIBridge(QtCore.QObject):
             msg = f"Unknown AYON tool: {tool_name!r}"
             raise ValueError(msg)
         # Acknowledge right away; the tool opens on the Qt main thread.
-        self._sig_call.emit(partial(show_tool_by_name, tool_name))
+        self.run_in_main_thread(partial(show_tool_by_name, tool_name))
         return f"{tool_name} scheduled"
 
     def _handle_request_save(self, params: dict) -> str:  # noqa: ARG002
-        self._sig_call.emit(save_current_workfile)
+        self.run_in_main_thread(save_current_workfile)
         return "save workfile scheduled"
 
     def _handle_ping(self, params: dict) -> str:
