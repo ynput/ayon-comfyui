@@ -22,6 +22,8 @@ from ayon_core.host import (
 )
 from ayon_core.pipeline import (
     AYON_CONTAINER_ID,
+    Anatomy,
+    get_current_project_name,
     deregister_creator_plugin_path,
     deregister_loader_plugin_path,
     register_creator_plugin_path,
@@ -46,6 +48,13 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
     """Main implementation of actual host operations."""
 
     name = "comfyui"
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Workfiles AYON opened or saved in this session.
+        self._known_workfiles: set[str] = set()
+        # Project name -> normalized anatomy root paths.
+        self._roots_cache: dict[str, list[str]] = {}
 
     def get_app_information(self) -> ApplicationInformation:
         """Return application information."""
@@ -82,13 +91,64 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
 
         ComfyUI has no notion of files on disk, so we store the AYON workfile
         path in the graph (`extra.AYON.workfile_path`) on open and save.
+
+        That path comes from the browser and travels with the workflow, e.g.
+        in a workflow file someone shared. Since AYON saves to it, it's
+        only trusted when AYON opened or saved it in this session, or when
+        it's a `.json` file inside the current project's roots.
         """
-        return self.stub.get_workfile_path()
+        path = self.stub.get_workfile_path()
+        if not path:
+            return None
+        if not self._is_trusted_workfile(path):
+            log.warning(
+                "Ignoring workfile path '%s' stored in the ComfyUI workflow: "
+                "AYON didn't open or save it in this session and it isn't a "
+                ".json file inside the project's roots.",
+                path,
+            )
+            return None
+        return path
 
     def open_workfile(self, filepath: str) -> bool:
         """Open workfile in a ComfyUI workflow tab."""
         self.stub.load_workfile(filepath)
+        self._known_workfiles.add(_normalize_path(filepath))
         return True
+
+    def _is_trusted_workfile(self, path: str) -> bool:
+        normalized = _normalize_path(path)
+        if normalized in self._known_workfiles:
+            return True
+        if os.path.splitext(normalized)[1] != ".json":
+            return False
+        return any(
+            normalized.startswith(root + os.sep)
+            for root in self._get_project_roots()
+        )
+
+    def _get_project_roots(self) -> list[str]:
+        project_name = get_current_project_name()
+        if not project_name:
+            return []
+        roots = self._roots_cache.get(project_name)
+        if roots is None:
+            try:
+                anatomy_roots = Anatomy(project_name).roots
+                roots = [
+                    _normalize_path(str(root)).rstrip(os.sep)
+                    for root in anatomy_roots.values()
+                    if str(root)
+                ]
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "Unable to get the roots of project '%s'",
+                    project_name,
+                    exc_info=True,
+                )
+                roots = []
+            self._roots_cache[project_name] = roots
+        return roots
 
     def save_workfile(self, dst_path: str | None = None) -> None:
         """Save the active ComfyUI workflow to `dst_path`.
@@ -105,11 +165,16 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
                 raise RuntimeError(msg)
 
         self.stub.save_workfile(dst_path)
+        self._known_workfiles.add(_normalize_path(dst_path))
 
     @property
     def stub(self) -> RPCStub:
         """Retrieve stub to interact with the paired ComfyUI tab."""
         return get_stub()
+
+
+def _normalize_path(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
 
 
 def uninstall() -> None:
