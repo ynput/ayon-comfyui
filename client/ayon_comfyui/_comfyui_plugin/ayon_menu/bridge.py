@@ -323,6 +323,7 @@ class Bridge:
             session.tab = ws
         if old is not None and old is not ws:
             await self._fail_pending(session, role)
+            self._forget_requests_from(session, role)
             # Don't wait for an unresponsive old peer's close handshake.
             self._spawn(_close(
                 old, CLOSE_SUPERSEDED, "Superseded by a newer connection"
@@ -341,8 +342,18 @@ class Bridge:
         else:
             session.tab = None
         await self._fail_pending(session, role)
+        self._forget_requests_from(session, role)
         await _send(session.peer(role), {"type": "peer", "connected": False})
         log.info("AYON session %s: %s disconnected", session.id[:8], role)
+
+    def _forget_requests_from(self, session: Session, role: str) -> None:
+        """Forget requests made by the connection for `role` that left.
+
+        Their answers must not reach whoever takes its place, which may
+        use the same request ids (e.g. a reloaded tab).
+        """
+        other = "tab" if role == "host" else "host"
+        session.pending[other].clear()
 
     async def _fail_pending(self, session: Session, role: str) -> None:
         """Error all requests that the connection for `role` won't answer."""

@@ -48,6 +48,15 @@ function storage_remove(key) {
   }
 }
 
+// Random prefix for request ids, so answers meant for a previous page load
+// of this tab can't be mistaken for answers to this one. (crypto.randomUUID
+// is not available on plain-http LAN origins; getRandomValues is.)
+function random_id_prefix() {
+  const values = new Uint32Array(2)
+  window.crypto.getRandomValues(values)
+  return Array.from(values, (value) => value.toString(16)).join("")
+}
+
 function parse_json(text) {
   try {
     return text ? JSON.parse(text) : null
@@ -73,6 +82,7 @@ export class AyonBridge extends EventTarget {
     this.handlers = new Map()
     this.pending = new Map()
     this.next_id = 1
+    this.id_prefix = random_id_prefix()
     this.ws = null
     this.state = "not_paired"
     this.reason = ""
@@ -284,7 +294,7 @@ export class AyonBridge extends EventTarget {
         reject(new Error(this.not_connected_message()))
         return
       }
-      const id = `tab-${this.next_id++}`
+      const id = `tab-${this.id_prefix}-${this.next_id++}`
       const timer = timeout_ms ? setTimeout(() => {
         this.pending.delete(id)
         reject(new Error(`AYON didn't answer '${method}' in time.`))
