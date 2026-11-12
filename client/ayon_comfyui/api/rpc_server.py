@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import sys
 from functools import wraps
-from pathlib import Path
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 import aiohttp.web
-from ayon_api import get_representations
 from ayon_core.pipeline import registered_host
 from ayon_core.tools.utils import host_tools
 from wsrpc_aiohttp import Route, WebSocketAsync, decorators
