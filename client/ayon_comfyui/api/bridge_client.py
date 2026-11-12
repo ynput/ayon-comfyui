@@ -439,7 +439,7 @@ class BridgeClient:
                 future.set_exception(BridgeError(
                     "Lost the connection to ComfyUI.", "disconnected"
                 ))
-        if was_registered:
+        if was_registered and not self._stopping:
             log.warning("Lost the connection to ComfyUI at %s", self.base_url)
             self._emit("disconnected", {})
 
