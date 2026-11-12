@@ -6,8 +6,10 @@ Using the V3 API to remain compatible for a loooooong time.
 from threading import Thread
 
 from comfy_api.latest import ComfyExtension, io
+from server import PromptServer
 from typing_extensions import override
 
+from .bridge import BRIDGE
 from .nodes.context_node import AyonContextNode
 from .nodes.load_nodes import (
     AyonLoad3DModelNode,
@@ -20,6 +22,10 @@ from .nodes.publish_nodes import (
     AyonSaveVideoNode,
 )
 from .ws_server import run_server
+
+# Routes on ComfyUI's own server that the AYON host and the paired ComfyUI
+# tab connect to.
+BRIDGE.add_routes(PromptServer.instance.routes)
 
 
 class AyonComfyUIExtension(ComfyExtension):
