@@ -19,6 +19,25 @@ from PIL.PngImagePlugin import PngInfo
 from torch import Tensor
 
 
+def get_filename_prefix(ayon_json: dict) -> str:
+
+    creator_attrs = ayon_json["creator_attributes"]
+    product_name = ayon_json["productName"]
+
+    file_prefix = creator_attrs.get("prefix", "")
+    use_unique_name = creator_attrs.get("use_unique_name", True)
+    unique_name = creator_attrs.get("unique_name", "")
+
+    if use_unique_name and unique_name:
+        file_prefix = f"{file_prefix}_{unique_name}"
+
+    # if no prefix or unique_name is provided, fallback to the product name
+    if not file_prefix:
+        file_prefix = product_name
+
+    return f"AYON/{product_name}/{file_prefix}"
+
+
 class AyonSaveNode(io.ComfyNode):
     """A node that allows the user to Batch Save images with metadata."""
 
@@ -63,12 +82,7 @@ class AyonSaveNode(io.ComfyNode):
             print_tb(e)
 
         creator_attrs = ayon_json["creator_attributes"]
-
         keep_metadata = creator_attrs["keep_metadata"]
-        file_prefix = creator_attrs["prefix"]
-        use_unique_name = creator_attrs["use_unique_name"]
-        unique_name = creator_attrs["unique_name"]
-
         compress_level = creator_attrs.get("compression_level", 4)
 
         output_dir = folder_paths.get_output_directory()
@@ -89,14 +103,10 @@ class AyonSaveNode(io.ComfyNode):
 
         # I'm choosing to ignore the counter, and we're just going to overwrite
         # the files.
-
-        full_prefix = file_prefix
-        if use_unique_name:
-            full_prefix += f"_{unique_name}"
-
+        full_prefix = get_filename_prefix(ayon_json)
         full_output_folder, filename, counter, subfolder, filename_prefix = (
             folder_paths.get_save_image_path(
-                f"AYON/{ayon_json['productName']}/{full_prefix}",
+                full_prefix,
                 output_dir,
                 images_in[0].shape[1],
                 images_in[0].shape[0],
@@ -181,9 +191,6 @@ class AyonSaveVideoNode(io.ComfyNode):
         creator_attrs = ayon_json["creator_attributes"]
 
         keep_metadata: bool = creator_attrs["keep_metadata"]
-        file_prefix: str = creator_attrs["prefix"]
-        use_unique_name: bool = creator_attrs["use_unique_name"]
-        unique_name: str = creator_attrs["unique_name"]
 
         # mp4/h264 | webm/vp9 | webm/av1
         formatcodec: str = creator_attrs["formatcodec"]
@@ -196,9 +203,7 @@ class AyonSaveVideoNode(io.ComfyNode):
 
         output_dir = folder_paths.get_output_directory()
 
-        full_prefix = file_prefix
-        if use_unique_name:
-            full_prefix += f"_{unique_name}"
+        full_prefix = get_filename_prefix(ayon_json)
 
         components = video_in.get_components()
         images, audio, fps, metadata = (
@@ -210,7 +215,7 @@ class AyonSaveVideoNode(io.ComfyNode):
 
         full_output_folder, filename, counter, subfolder, filename_prefix = (
             folder_paths.get_save_image_path(
-                f"AYON/{ayon_json['productName']}/{full_prefix}",
+                full_prefix,
                 output_dir,
                 images[0].shape[1],
                 images[0].shape[0],
@@ -441,20 +446,12 @@ class AyonSave3DModelNode(io.ComfyNode):
             print_tb(e)
 
         creator_attrs = ayon_json["creator_attributes"]
-
         keep_metadata = creator_attrs["keep_metadata"]
-        file_prefix = creator_attrs["prefix"]
-        use_unique_name = creator_attrs["use_unique_name"]
-        unique_name = creator_attrs["unique_name"]
-
         fallback_format = creator_attrs.get("fallback_format", "obj")
 
         output_dir = folder_paths.get_output_directory()
 
-        full_prefix = file_prefix
-        if use_unique_name:
-            full_prefix += f"_{unique_name}"
-
+        full_prefix = get_filename_prefix(ayon_json)
         if isinstance(mesh, Types.File3D):
             full_prefix += f"_{mesh.format}"
         else:
@@ -462,7 +459,7 @@ class AyonSave3DModelNode(io.ComfyNode):
 
         full_output_folder, filename, counter, subfolder, filename_prefix = (
             folder_paths.get_save_image_path(
-                f"AYON/{ayon_json['productName']}/{full_prefix}",
+                full_prefix,
                 output_dir,
             )
         )
