@@ -483,7 +483,11 @@ class RPCStub:  # noqa : PLR0904
             workfile_path=path, workflow_name=Path(path).stem
         )
         if not isinstance(result, dict) or not result.get("workfile"):
-            msg = f"Unable to retrieve workflow from ComfyUI to save: {path}"
+            msg = (
+                f"Unable to retrieve workflow from ComfyUI to save: {path}\n"
+                "Make sure the AYON ComfyUI page is open and up to date; "
+                "if in doubt, reload it with Ctrl+Shift+R."
+            )
             raise RuntimeError(msg)
 
         for warning in result.get("warnings") or []:
