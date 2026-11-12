@@ -458,7 +458,7 @@ class Bridge:
         # so nobody can inject results for other requests.
         pending = session.pending[role]
         request_id = frame.get("id")
-        if request_id not in pending:
+        if not isinstance(request_id, str) or request_id not in pending:
             return
         pending.discard(request_id)
         await _send_text(session.peer(role), text)
