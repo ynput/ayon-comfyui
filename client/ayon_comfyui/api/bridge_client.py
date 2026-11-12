@@ -61,6 +61,21 @@ def join_url(base_url: str, path: str, *, websocket: bool = False) -> str:
     )
 
 
+def check_url(base_url: str) -> None:
+    """Make sure `base_url` is an http(s) URL.
+
+    Raises:
+        BridgeError: With code `invalid_url`.
+    """
+    parts = urlsplit(base_url)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        msg = (
+            "The ComfyUI address must be an http:// or https:// URL, "
+            f"got '{base_url}'."
+        )
+        raise BridgeError(msg, "invalid_url")
+
+
 def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
     """Check the AYON plugin is installed on ComfyUI and compatible.
 
@@ -68,8 +83,10 @@ def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
         The plugin info reported by `/ayon/info`.
 
     Raises:
-        BridgeError: With code `unreachable`, `no_plugin` or `incompatible`.
+        BridgeError: With code `invalid_url`, `unreachable`, `no_plugin`
+            or `incompatible`.
     """
+    check_url(base_url)
     url = join_url(base_url, "/ayon/info")
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
@@ -122,6 +139,7 @@ class BridgeClient:
         on_event: EventCallback | None = None,
         ssl: Any = None,  # noqa: ANN401
     ) -> None:
+        check_url(base_url)
         self.base_url = base_url
         self.ws_url = join_url(base_url, "/ayon/ws", websocket=True)
         self.secret = secrets.token_urlsafe(32)
