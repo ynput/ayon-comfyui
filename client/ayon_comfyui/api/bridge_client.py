@@ -110,7 +110,8 @@ class BridgeClient:
         on_event: Called from the bridge thread with an event name and data:
             `connected`, `disconnected`, `tab_connected`, `tab_disconnected`
             and `rejected` (fatal, the client stops reconnecting).
-        ssl: Passed to aiohttp; by default the system's trusted CAs are used.
+        ssl: Passed to aiohttp when set. By default aiohttp verifies the
+            certificate against the system's trusted CAs.
     """
 
     def __init__(
@@ -119,7 +120,7 @@ class BridgeClient:
         *,
         info: dict | None = None,
         on_event: EventCallback | None = None,
-        ssl: Any = True,  # noqa: ANN401
+        ssl: Any = None,  # noqa: ANN401
     ) -> None:
         self.base_url = base_url
         self.ws_url = join_url(base_url, "/ayon/ws", websocket=True)
@@ -282,6 +283,9 @@ class BridgeClient:
 
     async def _run(self) -> None:
         attempt = 0
+        # Only pass `ssl` when set: aiohttp < 3.9 treats `ssl=True` as
+        # "don't verify the certificate".
+        ssl_kwargs = {} if self._ssl is None else {"ssl": self._ssl}
         async with aiohttp.ClientSession() as session:
             while not self._stopping:
                 try:
@@ -289,7 +293,7 @@ class BridgeClient:
                         self.ws_url,
                         heartbeat=HEARTBEAT,
                         max_msg_size=MAX_MSG_SIZE,
-                        ssl=self._ssl,
+                        **ssl_kwargs,
                     ) as ws:
                         self._ws = ws
                         attempt = 0
