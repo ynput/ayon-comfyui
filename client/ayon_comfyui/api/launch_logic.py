@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -16,9 +17,14 @@ from pathlib import Path
 from textwrap import dedent
 from threading import Thread
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from ayon_core.lib import env_value_to_bool
-from ayon_core.pipeline import get_current_project_name, install_host
+from ayon_core.pipeline import (
+    get_current_project_name,
+    install_host,
+    registered_host,
+)
 from ayon_core.tools.utils import get_ayon_qt_app
 from ayon_core.tools.utils.dialogs import show_message_dialog, ScrollMessageBox
 from qtpy import QtWidgets
@@ -26,7 +32,8 @@ from qtpy import QtWidgets
 if TYPE_CHECKING:
     from qtpy.QtWidgets import QApplication
 
-from ayon_comfyui.api.connection_util import defer_site_launch_when_available
+from ayon_comfyui.api.bridge import ComfyUIBridge
+from ayon_comfyui.api.bridge_client import BridgeError, check_plugin
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.deduce_python import (
     deduce_default_python_executable,
@@ -38,9 +45,6 @@ from ayon_comfyui.api.profile_selector import (
     ProfileDialog,
     ProfileTypeEnum,
 )
-from ayon_comfyui.api.qt_rpc import QRPCManager
-from ayon_comfyui.api.result import safe_partial
-from ayon_comfyui.api.rpc_server import get_client_from_origin
 from ayon_comfyui.settings_util import (
     ComfyLocalSettings,
     ComfyRemoteSettings,
@@ -49,29 +53,14 @@ from ayon_comfyui.settings_util import (
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
+# Seconds to wait for ComfyUI to become reachable. A locally launched
+# ComfyUI may install requirements or load many custom nodes first.
+LOCAL_STARTUP_TIMEOUT = 600.0
+REMOTE_STARTUP_TIMEOUT = 30.0
+
 
 def safe_excepthook(*args):  # noqa: ANN201, ANN002, D103
     traceback.print_exception(*args)
-
-
-def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
-    """Adjust settings for comfyui plugin."""
-    settings, _ = ComfyLocalSettings.pull_committed_settings()
-    python = f"AYON_BACKEND_PORT = {settings.port_backend}\n"
-    js = f'export const AYON_ORIGIN_ADRESS = "{settings.address_frontend}";'
-    py_file = plugin_path / "ayon_menu" / "consts.py"
-    js_file = plugin_path / "ayon_menu" / "js" / "lib" / "consts.js"
-
-    # update python consts plugin with port to use.
-    # IPC using the proc Popen is not very wise,
-    # since we can't reliably get a hold of the entire process tree
-
-    # Since communicating the address to JS isn't possible before establishing
-    # a connection with IFrame RPC,
-    # we still have to send over the actual address to the plugin.
-
-    Path(py_file).write_text(python, encoding="utf-8")
-    Path(js_file).write_text(js, encoding="utf-8")
 
 
 def _subproc_launch_ComfyUI() -> subprocess.Popen:
@@ -191,15 +180,6 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
         *profile.launch_args,
     ]
 
-    if not profile.omit_packaged_plugin:
-        import ayon_comfyui as comfy_plugin
-
-        comfy_plugin_path = (
-            Path(comfy_plugin.__file__).parent / "_comfyui_plugin"
-        )
-        # inject settings
-        adjust_consts_comfyui_plugin(comfy_plugin_path)
-
     yaml_folder = Path(profile.base_folder).as_posix()
     yaml = dedent(f"""
             ayon_config:
@@ -314,72 +294,107 @@ def main(*args):
     except BaseException:  # noqa: BLE001
         log.debug("Problems keeping thread alive", exc_info=True)
 
-    # terminate connection after Qt Thread.
-    # This can hang, use os._exit to kill it. We already cleaned up properly
-    # in qrpcman
+    # The bridge already disconnected and stopped ComfyUI (if we launched
+    # it) before the Qt loop ended; don't let leftover threads block exit.
 
     # sys.exit(ret)
     os._exit(ret)
 
 
+def _open_last_workfile() -> None:
+    """Open the workfile AYON asked to open on launch, if any."""
+    workfile_path = os.getenv("AYON_LAST_WORKFILE")
+    if not workfile_path or not env_value_to_bool("AVALON_OPEN_LAST_WORKFILE"):
+        return
+    if not os.path.isfile(workfile_path):
+        log.info("Last workfile doesn't exist (yet): %s", workfile_path)
+        return
+    log.info("Opening last workfile: %s", workfile_path)
+    try:
+        registered_host().open_workfile(workfile_path)
+    except Exception as exc:
+        log.exception("Failed to open last workfile: %s", workfile_path)
+        show_message_dialog(
+            title="AYON - ComfyUI",
+            message=f"Failed to open workfile:\n{workfile_path}\n\n{exc}",
+            level="critical",
+        )
+
+
+def _probe_comfyui(url: str) -> tuple[str, str]:
+    """Check what, if anything, already serves the ComfyUI URL.
+
+    Returns:
+        ("free", "") when nothing listens on its port, ("ayon", "") for a
+        ComfyUI with a compatible AYON plugin, otherwise ("busy", reason).
+    """
+    parts = urlsplit(url)
+    try:
+        socket.create_connection(
+            (parts.hostname or "127.0.0.1", parts.port or 80), timeout=1
+        ).close()
+    except OSError:
+        return "free", ""
+    try:
+        check_plugin(url, timeout=3)
+    except BridgeError as exc:
+        return "busy", str(exc)
+    return "ayon", ""
+
+
+def _fail(message: str) -> None:
+    log.error(message)
+    show_message_dialog(
+        title="AYON - ComfyUI", message=message, level="critical"
+    )
+    sys.exit(1)
+
+
 def launch_local(
     app: QApplication,
-    settings: ComfyLocalSettings,
+    settings: ComfyLocalSettings,  # noqa: ARG001
     profile: ComfyLocalSettings.ComfyLocalProfile,
 ) -> None:
-    """Launch ComfyUI as a subprocess."""
+    """Launch ComfyUI as a subprocess and connect to it."""
+    url = profile.comfy_local_url
     process = None
-
-    try:
-        # Launch comfyUI
-        process = _subproc_launch_ComfyUI()
-    except BaseException:  # noqa: BLE001
-        log.debug("Problems launching ComfyUI:", exc_info=True)
-
-    log.info("Creating QRPCmanager")
-
-    try:
-        rpcman = QRPCManager(
-            parent=app,
-            client_hostname="127.0.0.1",
-            client_port=settings.port_backend,
-            server_port=settings.port_webui,
-            static_port=settings.port_static_frontend,
-            comfy_url=profile.comfy_local_url,
-            use_https=False,
+    state, reason = _probe_comfyui(url)
+    if state == "ayon":
+        answer = QtWidgets.QMessageBox.question(
+            None,
+            "AYON - ComfyUI",
+            f"ComfyUI is already running at {url}.\n\n"
+            "Use the running ComfyUI for this AYON session? AYON won't "
+            "stop it when the session ends.",
         )
-
-        rpcman.attach_comfyui_process(process=process)
-
-        defer_site_launch_when_available(
-            profile.comfy_local_url, settings.address_frontend
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            sys.exit(0)
+        log.info("Using the ComfyUI already running at %s", url)
+    elif state == "busy":
+        _fail(
+            f"Port {urlsplit(url).port} is already in use, so ComfyUI "
+            f"can't start at {url}.\n\n{reason}\n\n"
+            "Close the program using that port, or change the ComfyUI port "
+            f"of the '{profile.name}' launch profile."
         )
+    else:
+        try:
+            process = _subproc_launch_ComfyUI()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Problems launching ComfyUI")
+            _fail(f"Unable to launch ComfyUI:\n\n{exc}")
+        if process is None:
+            sys.exit(1)
 
-        log.info("Created rpc manager")
-        rpcman.start_server()
-        log.info("called start_server")
-
-        workfile_path = os.getenv("AYON_LAST_WORKFILE")
-        if workfile_path and env_value_to_bool("AVALON_OPEN_LAST_WORKFILE"):
-            origin = settings.address_frontend
-            log.info(f"Scheduling launch workfile load: {workfile_path}")
-
-            def _load_workfile_when_ready() -> None:
-                while not get_client_from_origin(origin):
-                    time.sleep(0.5)
-
-                safe_load = safe_partial(
-                    rpcman.stub.load_workfile, workfile_path
-                )
-
-                retries = 30
-                while safe_load().is_err and retries > 0:
-                    retries -= 1
-                    time.sleep(0.5)
-
-            Thread(target=_load_workfile_when_ready, daemon=True).start()
-    except BaseException:  # noqa: BLE001
-        log.debug("Problems starting server:", exc_info=True)
+    bridge = ComfyUIBridge(
+        url,
+        process=process,
+        open_browser=True,
+        startup_timeout=LOCAL_STARTUP_TIMEOUT,
+        on_first_tab=_open_last_workfile,
+        parent=app,
+    )
+    bridge.start()
 
 
 def launch_remote(
@@ -387,27 +402,18 @@ def launch_remote(
     settings: ComfyRemoteSettings,  # noqa: ARG001
     profile: ComfyRemoteSettings.ComfyRemoteProfile,
 ) -> None:
-    """Launch browser."""
-    log.info("Creating QRPCmanager")
-
+    """Connect to a ComfyUI server that is already running."""
+    url = profile.comfy_url
     try:
-        rpcman = QRPCManager(
-            parent=app,
-            client_hostname=profile.netloc_backend,
-            client_port=profile.port_backend,
-            server_port=profile.port_webui,
-            static_port=profile.port_static_frontend,
-            comfy_url=profile.comfy_url,
-            use_https=profile.is_https,
-        )
+        check_plugin(url)
+    except BridgeError as exc:
+        _fail(str(exc))
 
-        if profile.open_browser:
-            defer_site_launch_when_available(
-                profile.comfy_url, profile.address_frontend
-            )
-
-        log.info("Created rpc manager")
-        rpcman.start_server()
-        log.info("Called start_server")
-    except BaseException:  # noqa: BLE001
-        log.debug("Problems starting server", exc_info=True)
+    bridge = ComfyUIBridge(
+        url,
+        open_browser=profile.open_browser,
+        startup_timeout=REMOTE_STARTUP_TIMEOUT,
+        on_first_tab=_open_last_workfile,
+        parent=app,
+    )
+    bridge.start()

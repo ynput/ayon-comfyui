@@ -30,7 +30,8 @@ from ayon_core.pipeline import (
 
 from ayon_comfyui import COMFYUI_ADDON_ROOT
 from ayon_comfyui.api.consts import LOG_LEVEL
-from ayon_comfyui.api.qt_rpc import QRPCManager, RPCStub
+from ayon_comfyui.api.bridge import get_stub
+from ayon_comfyui.api.rpc_stub import RPCStub
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
@@ -107,8 +108,8 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
 
     @property
     def stub(self) -> RPCStub:
-        """Retrieve stub to interact with client."""
-        return QRPCManager.get_instance().stub
+        """Retrieve stub to interact with the paired ComfyUI tab."""
+        return get_stub()
 
 
 def uninstall() -> None:
@@ -126,8 +127,7 @@ def list_instances() -> list[dict[str, Any]]:
     Returns:
     List of dictionaries describing instances
     """
-    stub = QRPCManager.get_instance().stub
-    instances = stub.list_instances()
+    instances = get_stub().list_instances()
 
     return instances or []
 
@@ -175,7 +175,7 @@ def containerise(  # noqa: PLR0913, PLR0917
         "container_uuid": str(uuid4()),
         "container_name": container_name,
     }
-    stub = QRPCManager.get_instance().stub
+    stub = get_stub()
 
     # TODO(@sas): Expand stub logic to keep track of containers separately,
     #             for my own sanity. That way, we can track representation
@@ -196,8 +196,7 @@ def ls() -> Generator[dict[str, str], None, None]:
     Equivalent to ayon core api.ls().
     """
     try:
-        rpcman = QRPCManager.get_instance()
-        containers: list[dict[str, str]] = rpcman.stub.list_containers()
+        containers: list[dict[str, str]] = get_stub().list_containers()
     except BaseException:  # noqa: BLE001
         return
 

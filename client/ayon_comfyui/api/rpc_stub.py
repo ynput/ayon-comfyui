@@ -1,29 +1,55 @@
-"""Runs a client to broadcast to JS."""
+"""Calls into the paired ComfyUI tab, through the AYON bridge."""
 
 from __future__ import annotations
 
+import inspect
+import json
 import logging
+import os
 import sys
 from enum import Enum
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-
-import json
+from functools import wraps
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 from ayon_core.pipeline import get_current_context
 
+from ayon_comfyui.api.bridge_client import join_url
 from ayon_comfyui.api.consts import LOG_LEVEL
-from ayon_comfyui.api.rpc_server import (
-    call_on_origin,
-    get_client_from_origin,
-    pull_origin_from_settings,
-)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, MutableMapping
+
+    from ayon_comfyui.api.bridge_client import BridgeClient
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
+
+DEFAULT_CALL_TIMEOUT = 20.0
+
+
+def tab_method(*, timeout: float | None = DEFAULT_CALL_TIMEOUT) -> Callable:
+    """Turn a method stub into a call of the same name in the ComfyUI tab.
+
+    The arguments (with their defaults applied) become the call's params.
+    `timeout=None` waits until the tab answers or disconnects.
+    """
+
+    def _decorator(func: Callable) -> Callable:
+        signature = inspect.signature(func)
+
+        @wraps(func)
+        def _call(self: RPCClientStub, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            bound = signature.bind(self, *args, **kwargs)
+            bound.apply_defaults()
+            params = dict(bound.arguments)
+            params.pop("self")
+            return self.client.call(func.__name__, params, timeout=timeout)
+
+        return _call
+
+    return _decorator
 
 
 # Enum types for types of publish/load nodes.
@@ -44,43 +70,28 @@ class LoadType(Enum):
     ALL = "ALL"
 
 
-# STUB TO CONTAIN CLIENT CONNECTION GOTTEN FROM SERVER
 class RPCClientStub:  # noqa: PLR0904
-    """Alias methods on the client <iframe> side.
+    """Methods of the paired ComfyUI tab (see `ayon_menu.js`).
 
     Also provides helper methods to process results.
 
     DO NOT USE DIRECTLY. These are meant to be used in RPCStub.
     """
 
-    # Static site hosting iframe.
-    # TODO(@sas): retrieve from url settings
-    origin: str = "http://127.0.0.1:5454"
+    def __init__(self, client: BridgeClient) -> None:  # noqa: D107
+        self.client = client
 
-    def __init__(self):  # noqa: D107
-        self.__class__.origin = pull_origin_from_settings()
-
-    @property
-    def client(self):  # noqa: ANN201
-        """Returns WSRPCBase connection to client in origin.
-
-        Should remain unused since @call_on_origin() takes care of this,
-        but can be used for testing routes directly by calling them on
-        the client.
-        """
-        return get_client_from_origin(self.origin)
-
-    @call_on_origin()
+    @tab_method()
     def getPublishNodes(self, node_type: str):  # noqa: N802, ANN201
         """Call getPublishNodes."""
 
     # def do_update_publishnodes(self) -> None: # Never used
 
-    @call_on_origin()
+    @tab_method()
     def getWorkfile(self):  # noqa: N802, ANN201
         """Call getWorkfile."""
 
-    @call_on_origin()
+    @tab_method()
     def loadWorkfile(  # noqa: N802, ANN201
         self,
         *,
@@ -108,22 +119,22 @@ class RPCClientStub:  # noqa: PLR0904
             workfile_path=str(workfile),
         )
 
-    @call_on_origin()
+    @tab_method()
     def getImprintContext(self) -> str:  # noqa: N802
         """Call getImprintContext."""
 
-    @call_on_origin()
+    @tab_method()
     def setImprintContext(self, *, imprint_info: str) -> bool:  # noqa: N802, ANN201
         """Call setImprintContext."""
 
-    @call_on_origin()
+    @tab_method()
     def setGraphExtra(self, *, extra_json: str):  # noqa: N802, ANN201
         """Call setGraphExtra.
 
         Merges arbitrary extra metadata into the current graph.extra.
         """
 
-    @call_on_origin()
+    @tab_method()
     def beginSaveWorkfile(  # noqa: N802, ANN201
         self, *, workfile_path: str, workflow_name: str | None = None
     ):
@@ -135,7 +146,7 @@ class RPCClientStub:  # noqa: PLR0904
         and a list of `warnings`.
         """
 
-    @call_on_origin()
+    @tab_method()
     def finishSaveWorkfile(  # noqa: N802, ANN201
         self, *, comfy_workflow_path: str | None = None
     ):
@@ -145,14 +156,14 @@ class RPCClientStub:  # noqa: PLR0904
         modified. Returns whether it was saved.
         """
 
-    @call_on_origin()
+    @tab_method()
     def getWorkfilePath(self):  # noqa: N802, ANN201
         """Call getWorkfilePath.
 
         Returns stored workfile path metadata from active graph, or null.
         """
 
-    @call_on_origin()
+    @tab_method()
     def getGraphExtra(self, *, key: str | None = None):  # noqa: N802, ANN201
         """Call getGraphExtra.
 
@@ -285,7 +296,7 @@ class RPCClientStub:  # noqa: PLR0904
 
         return None
 
-    @call_on_origin()
+    @tab_method()
     def addPublishNode(self, *, instance_json: str, node_type: str):  # noqa: N802, ANN201
         """Call addPublishNode."""
 
@@ -300,7 +311,7 @@ class RPCClientStub:  # noqa: PLR0904
             instance_json=instance_json, node_type=node_type.value
         )
 
-    @call_on_origin()
+    @tab_method()
     def removePublishNodes(self, *, ids_to_remove: str, node_type: str) -> str:  # noqa: N802
         """Call removePublishNodes.
 
@@ -310,7 +321,7 @@ class RPCClientStub:  # noqa: PLR0904
         Returns a string json representation of instances that were removed.
         """
 
-    @call_on_origin(wait_forever=True)
+    @tab_method(timeout=None)
     def getPublishNodeImages(  # noqa: N802
         self, *, id_for_images: str, node_type: str
     ) -> str:
@@ -325,7 +336,7 @@ class RPCClientStub:  # noqa: PLR0904
         Waits until graph has finished cooking.
         """
 
-    @call_on_origin()
+    @tab_method()
     def addLoadProductNode(  # noqa: N802
         self, *, container_json: str, node_type: str
     ) -> None:
@@ -336,7 +347,7 @@ class RPCClientStub:  # noqa: PLR0904
         Make sure to upload the image before uploading.
         """
 
-    @call_on_origin()
+    @tab_method()
     def removeLoadProductNodes(  # noqa: N802
         self, *, ids_to_remove: str, node_type: str
     ) -> None:
@@ -348,7 +359,7 @@ class RPCClientStub:  # noqa: PLR0904
         Returns a string json representation of containers that were removed.
         """
 
-    @call_on_origin()
+    @tab_method()
     def updateLoadProductNode(  # noqa: N802
         self, *, container_json: str, node_type: str = "ALL"
     ) -> None:
@@ -428,8 +439,9 @@ class RPCStub:  # noqa : PLR0904
     Exposes client calls in a sane way to the plugin.
     """
 
-    def __init__(self):  # noqa: D107
-        self.client_stub = RPCClientStub()
+    def __init__(self, client: BridgeClient) -> None:  # noqa: D107
+        self.client_stub = RPCClientStub(client)
+        self._base_url = client.base_url
 
     def query_workfile(self) -> str:
         """Query workfile.
@@ -902,13 +914,42 @@ class RPCStub:  # noqa : PLR0904
         instance_for_images: dict,
         publish_type: PublishType = PublishType.IMAGE,
     ) -> list[str]:
-        """Returns list of products associated with node."""
+        """Returns URLs to download the outputs of a publish node.
+
+        The tab only names the output files; the URLs are built here from
+        the ComfyUI URL of this session, so nothing downloads from a URL
+        chosen by the browser.
+        """
         log.debug("stub get publish node images")
         id_ = instance_for_images["instance_id"]
         result = self.client_stub.getPublishNodeImages(
             id_for_images=id_, node_type=publish_type.value
         )
         try:
-            return json.loads(result)
-        except json.JSONDecodeError:
+            outputs = json.loads(result)
+        except (TypeError, json.JSONDecodeError):
             return []
+        if not isinstance(outputs, list):
+            return []
+        urls = [self.output_view_url(output) for output in outputs]
+        return [url for url in urls if url]
+
+    def output_view_url(self, output: dict) -> str | None:
+        """Return the `/view` URL of a ComfyUI output file reference."""
+        if not isinstance(output, dict):
+            return None
+        filename = output.get("filename")
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or os.path.basename(filename) != filename
+            or filename in {".", ".."}
+        ):
+            log.warning("Ignoring invalid output reference: %s", output)
+            return None
+        query = urlencode({
+            "filename": filename,
+            "subfolder": str(output.get("subfolder") or ""),
+            "type": str(output.get("type") or "output"),
+        })
+        return f"{join_url(self._base_url, '/api/view')}?{query}"
