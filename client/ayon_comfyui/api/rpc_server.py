@@ -27,13 +27,17 @@ logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
 
-def show_script_editor():
+# Keep a reference so the window doesn't get garbage collected instantly
+console_window = None
+
+
+def show_script_editor() -> None:
+    """Show the AYON Python Script Editor (console interpreter)."""
     from ayon_core.tools.console_interpreter import InterpreterController
     from ayon_core.tools.console_interpreter.ui import ConsoleInterpreterWindow
-    from qt import QtCore
+    from qtpy import QtCore
 
-    # Global so it doesn't get garbage collected instantly
-    global console_window
+    global console_window  # noqa: PLW0603
     if console_window is None:
         controller = InterpreterController(name="comfyui")
         console_window = ConsoleInterpreterWindow(controller)
@@ -65,7 +69,6 @@ def show_tool_by_name(tool_name: str) -> None:
         kwargs["tab"] = "publish"
 
     host_tools.show_tool_by_name(tool_name, **kwargs)
-
 
 
 def pull_origin_from_settings() -> str:
