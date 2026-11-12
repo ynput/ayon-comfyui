@@ -442,6 +442,11 @@ class SessionWindow(QtWidgets.QWidget):
 
         self._status = QtWidgets.QLabel(self)
         self._status.setWordWrap(True)
+        self._details = QtWidgets.QLabel(self)
+        self._details.setWordWrap(True)
+        self._details.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse
+        )
 
         self._code_label = QtWidgets.QLabel("Pairing code:", self)
         self._code = QtWidgets.QLineEdit(self)
@@ -468,6 +473,7 @@ class SessionWindow(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self._status)
+        layout.addWidget(self._details)
         layout.addLayout(pairing)
         layout.addLayout(buttons)
 
@@ -493,6 +499,17 @@ class SessionWindow(QtWidgets.QWidget):
     def update_view(self) -> None:
         bridge = self._bridge
         self._status.setText(bridge.status_text())
+        info = bridge.client.info
+        context = " / ".join(
+            value
+            for value in (
+                info.get("project"), info.get("folder"), info.get("task")
+            )
+            if value
+        )
+        self._details.setText(
+            f"ComfyUI: {bridge.comfy_url}\nAYON context: {context or '-'}"
+        )
         registered = bridge.client.registered
         has_code = registered and bool(bridge.pairing_code)
         for widget in (

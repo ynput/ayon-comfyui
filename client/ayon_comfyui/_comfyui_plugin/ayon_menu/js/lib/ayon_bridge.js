@@ -11,7 +11,7 @@
 // ComfyUI loads every .js file of an extension, so this module must not have
 // side effects on import.
 
-const PROTOCOL = 1
+export const PROTOCOL = 1
 const PAIR_CODE_KEY = "ayon.bridge.pair_code"
 const CREDENTIAL_KEY = "ayon.bridge.credential"
 
