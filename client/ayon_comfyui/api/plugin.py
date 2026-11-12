@@ -28,6 +28,23 @@ class ComfyUICreator(Creator):
         """Return stub stored on QRPCManager."""
         return QRPCManager.get_instance().stub
 
+    def get_full_product_name(
+        self,
+        variant: str,
+        prefix: str = "",
+        unique_name: str = "",
+    ) -> str:
+
+        name_parts = []
+        if prefix:
+            name_parts.append(prefix)
+
+        if unique_name:
+            name_parts.append(unique_name)
+
+        name_parts.append(variant)
+        return "_".join(name_parts)
+
 
 class ComfyUIAutoCreator(AutoCreator):
     """Generic ComfyUI autocreator to extend."""

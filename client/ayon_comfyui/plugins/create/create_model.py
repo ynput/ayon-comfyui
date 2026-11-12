@@ -55,7 +55,9 @@ class CreateModel(ComfyUICreator):
         project_name = context.get_current_project_name()
         folder_path = context.get_current_folder_path()
         task_name = context.get_current_task_name()
-        # host_name = context.host_name
+
+        if not use_unique_name:
+            unique_name = ""
 
         prefix = re.sub(f"[^{PRODUCT_NAME_ALLOWED_SYMBOLS}]+", "", prefix)
 
@@ -72,10 +74,11 @@ class CreateModel(ComfyUICreator):
             }
         )
 
-        if use_unique_name:
-            product_name = f"{prefix}_{unique_name}_{product_name}"
-        else:
-            product_name = f"{prefix}_{product_name}"
+        product_name = self.get_full_product_name(
+            product_name,
+            prefix=prefix,
+            unique_name=unique_name,
+        )
 
         creator_attributes = {
             "keep_metadata": keep_metadata,
