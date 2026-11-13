@@ -22,7 +22,6 @@ class ModelLoader(ComfyUILoader):
     """
 
     product_types: ClassVar[set[str]] = {"model"}
-    # Published representations are named by their extension, without dot.
     representations: ClassVar[set[str]] = {"*"}
     extensions: ClassVar[set[str]] = {
         "gltf",
