@@ -29,6 +29,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
+try:
+    from ayon_comfyui.version import __version__ as ADDON_VERSION
+except ImportError:  # used on its own, e.g. by the bridge tests
+    ADDON_VERSION = "unknown"
+
 log = logging.getLogger(__name__)
 
 PROTOCOL = 1
@@ -92,6 +97,56 @@ def is_unencrypted_remote(base_url: str) -> bool:
         return True
 
 
+def plugin_version(info: dict) -> str:
+    """Return the plugin version from its `/ayon/info` or `welcome`.
+
+    The plugin's version is the AYON ComfyUI addon version it ships with.
+    """
+    version = info.get("version") if isinstance(info, dict) else None
+    return version if isinstance(version, str) and version else "unknown"
+
+
+def version_mismatch(base_url: str, version: str) -> str | None:
+    """Describe a plugin from another addon version than this one, if so.
+
+    AYON still connects to it when it supports this addon's bridge protocol.
+    """
+    if version == ADDON_VERSION or ADDON_VERSION == "unknown":
+        return None
+    return (
+        f"The AYON plugin on ComfyUI at {base_url} is version {version}, "
+        f"but this AYON ComfyUI addon is version {ADDON_VERSION}. AYON "
+        f"connects because both use bridge protocol {PROTOCOL}, but not "
+        "everything may work: use the AYON plugin from AYON ComfyUI addon "
+        f"{ADDON_VERSION} on that ComfyUI server."
+    )
+
+
+def _incompatible_message(base_url: str, version: str, protocols: Any) -> str:  # noqa: ANN401
+    message = (
+        f"The AYON plugin on ComfyUI at {base_url} (version {version}) "
+        f"supports bridge protocol(s) {protocols}, but this AYON ComfyUI "
+        f"addon (version {ADDON_VERSION}) needs protocol {PROTOCOL}."
+    )
+    known = (
+        [p for p in protocols if type(p) is int]
+        if isinstance(protocols, list)
+        else []
+    )
+    if known and min(known) > PROTOCOL:
+        return (
+            f"{message} The plugin is newer than this addon: update the AYON "
+            "ComfyUI addon in AYON to the plugin's version."
+        )
+    install = (
+        f"install the AYON plugin from AYON ComfyUI addon {ADDON_VERSION} "
+        "on that ComfyUI server."
+    )
+    if known and max(known) < PROTOCOL:
+        return f"{message} The plugin is older than this addon: {install}"
+    return f"{message} To use this addon, {install}"
+
+
 def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
     """Check the AYON plugin is installed on ComfyUI and compatible.
 
@@ -109,10 +164,12 @@ def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
             info = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:  # noqa: PLR2004
+            # Also what an AYON plugin from before the bridge answers.
             msg = (
                 f"ComfyUI at {base_url} does not have the AYON plugin, or "
-                "it is outdated. Install or update the AYON ComfyUI plugin "
-                "on that ComfyUI server."
+                "has one that is older than this AYON ComfyUI addon "
+                f"(version {ADDON_VERSION}). Install the AYON plugin from "
+                f"AYON ComfyUI addon {ADDON_VERSION} on that ComfyUI server."
             )
             raise BridgeError(msg, "no_plugin") from exc
         msg = f"ComfyUI at {base_url} answered with HTTP {exc.code}."
@@ -122,14 +179,20 @@ def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
         raise BridgeError(msg, "unreachable") from exc
 
     protocols = info.get("protocols") if isinstance(info, dict) else None
+    version = plugin_version(info)
     if not isinstance(protocols, list) or PROTOCOL not in protocols:
-        msg = (
-            f"The AYON plugin on ComfyUI at {base_url} supports protocol(s) "
-            f"{protocols}, but this AYON addon needs protocol {PROTOCOL}. "
-            "Update the AYON ComfyUI plugin on that ComfyUI server to the "
-            "version shipped with this addon."
-        )
+        msg = _incompatible_message(base_url, version, protocols)
         raise BridgeError(msg, "incompatible")
+    log.debug(
+        "ComfyUI at %s has AYON plugin %s (bridge protocols %s, features "
+        "%s); this AYON ComfyUI addon is %s (bridge protocol %s)",
+        base_url,
+        version,
+        protocols,
+        info.get("features"),
+        ADDON_VERSION,
+        PROTOCOL,
+    )
     return info
 
 
@@ -178,6 +241,9 @@ class BridgeClient:
         self.session_id: str | None = None
         # Features the ComfyUI plugin reported (see FEATURES in its relay).
         self.plugin_features: frozenset[str] = frozenset()
+        # Version of the ComfyUI plugin, once connected.
+        self.plugin_version: str | None = None
+        self._warned_version: str | None = None
 
     # --- state ------------------------------------------------------------
 
@@ -419,7 +485,12 @@ class BridgeClient:
         if code in {CLOSE_REJECTED, CLOSE_SUPERSEDED}:
             reason = msg.extra if isinstance(msg.extra, str) else ""
             log.error(
-                "ComfyUI rejected the AYON session (%s): %s", code, reason
+                "ComfyUI rejected the AYON session (%s): %s [AYON ComfyUI "
+                "addon %s, bridge protocol %s]",
+                code,
+                reason,
+                ADDON_VERSION,
+                PROTOCOL,
             )
             self._emit("rejected", {"code": code, "reason": reason})
             return True
@@ -437,9 +508,22 @@ class BridgeClient:
                 for feature in (features if isinstance(features, list) else [])
                 if isinstance(feature, str)
             )
+            self.plugin_version = plugin_version(frame)
             self._registered = True
             self._tab_connected = bool(frame.get("peer", {}).get("connected"))
-            log.info("Connected to ComfyUI at %s", self.base_url)
+            log.info(
+                "Connected to ComfyUI at %s (AYON plugin %s, AYON ComfyUI "
+                "addon %s)",
+                self.base_url,
+                self.plugin_version,
+                ADDON_VERSION,
+            )
+            log.debug(
+                "Bridge protocol %s, plugin features: %s",
+                frame.get("protocol"),
+                sorted(self.plugin_features),
+            )
+            self._check_version()
             self._emit("connected", {"tab_connected": self._tab_connected})
         elif kind == "peer":
             connected = bool(frame.get("connected"))
@@ -463,6 +547,14 @@ class BridgeClient:
             asyncio.get_running_loop().create_task(
                 self._handle_request(ws, frame)
             )
+
+    def _check_version(self) -> None:
+        """Warn once per plugin version that isn't this addon's version."""
+        version = self.plugin_version
+        mismatch = version_mismatch(self.base_url, version)
+        if mismatch and version != self._warned_version:
+            self._warned_version = version
+            log.warning(mismatch)
 
     def _resolve(
         self, request_id: Any, result: Any = None, error: Any = None  # noqa: ANN401

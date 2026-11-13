@@ -92,7 +92,133 @@ function request_ayon_tool(tool_name) {
   return call_ayon("requestToolByName", {tool_name})
 }
 
+// AYON ComfyUI addon versions from before the bridge show ComfyUI in an
+// iframe on a page that AYON serves itself (http://127.0.0.1:5454 by
+// default), which calls into the frame with postMessage requests
+// `{rpc: true, id, method, params}`, polling `pop_process` every 100 ms.
+// This plugin doesn't speak that protocol: when such requests come in, tell
+// the artist that their AYON ComfyUI addon is too old for this ComfyUI.
+const OLD_ADDON_NOTICE_ID = "ayon-old-addon-notice"
+let OLD_ADDON_PAGE = false
+let PLUGIN_VERSION = ""
+
+function old_addon_message() {
+  const versions = PLUGIN_VERSION
+    ? `a newer AYON plugin (${PLUGIN_VERSION}), which needs the matching ` +
+      `AYON ComfyUI addon version (${PLUGIN_VERSION})`
+    : "a newer AYON plugin, which needs the matching AYON ComfyUI addon " +
+      "version"
+  return (
+    `This ComfyUI runs ${versions}. The AYON session that opened this ` +
+    "page uses an older AYON ComfyUI addon, so the AYON tools don't work " +
+    "here. Update the AYON ComfyUI addon (ask your AYON administrator), " +
+    "then launch ComfyUI from AYON again."
+  )
+}
+
+function is_framed() {
+  try {
+    return window.parent !== window
+  } catch {
+    return true
+  }
+}
+
+async function fetch_plugin_version() {
+  try {
+    const response = await fetch(
+      app.api.apiURL("/ayon/info"), {cache: "no-store"}
+    )
+    const info = await response.json()
+    return typeof info?.version === "string" ? info.version : ""
+  } catch {
+    return ""
+  }
+}
+
+function show_old_addon_notice() {
+  if (OLD_ADDON_PAGE) {
+    return
+  }
+  OLD_ADDON_PAGE = true
+
+  const notice = document.createElement("div")
+  notice.id = OLD_ADDON_NOTICE_ID
+  notice.setAttribute("role", "alert")
+  Object.assign(notice.style, {
+    position: "fixed",
+    top: "4rem",
+    left: "50%",
+    transform: "translateX(-50%)",
+    zIndex: "100000",
+    boxSizing: "border-box",
+    width: "min(40rem, calc(100vw - 2rem))",
+    padding: "0.875rem 1rem",
+    borderRadius: "0.75rem",
+    background: "#7f1d1d",
+    color: "#fff",
+    boxShadow: "0 0.5rem 2rem rgba(0, 0, 0, 0.5)",
+    font: "14px/1.4 system-ui, sans-serif",
+  })
+  const title = document.createElement("strong")
+  title.textContent = "AYON: update the AYON ComfyUI addon"
+  title.style.display = "block"
+  title.style.marginBottom = "0.25rem"
+  const text = document.createElement("div")
+  notice.append(title, text)
+  document.body.append(notice)
+
+  const update = () => {
+    text.textContent = old_addon_message()
+    update_status_views()
+  }
+  update()
+  console.error(`AYON: ${old_addon_message()}`)
+  fetch_plugin_version().then((version) => {
+    PLUGIN_VERSION = version
+    update()
+  })
+}
+
+// Answer its requests, so they don't pile up unanswered on that page and
+// the old AYON gets told why its requests fail.
+function answer_old_addon_request(event) {
+  const {id, method} = event.data
+  const reply = method === "pop_process"
+    ? {rpc: true, id, result: null}
+    : {rpc: true, id, error: old_addon_message()}
+  try {
+    event.source.postMessage(reply, event.origin)
+  } catch (err) {
+    console.debug("AYON: unable to answer the old AYON page", err)
+  }
+}
+
+function watch_for_old_addon_page() {
+  if (!is_framed()) {
+    return
+  }
+  window.addEventListener("message", (event) => {
+    const data = event.data
+    if (
+      event.source !== window.parent ||
+      data?.rpc !== true ||
+      typeof data.id !== "string" ||
+      typeof data.method !== "string"
+    ) {
+      return
+    }
+    show_old_addon_notice()
+    answer_old_addon_request(event)
+  })
+}
+
+watch_for_old_addon_page()
+
 function describe_bridge_status(bridge) {
+  if (OLD_ADDON_PAGE && !bridge?.connected) {
+    return {level: "error", text: old_addon_message()}
+  }
   if (!bridge) {
     return {level: "warn", text: "Starting..."}
   }
@@ -133,6 +259,9 @@ function describe_bridge_details(bridge) {
   }
   if (info.addon_version) {
     parts.push(`addon ${info.addon_version}`)
+  }
+  if (bridge.plugin_version) {
+    parts.push(`plugin ${bridge.plugin_version}`)
   }
   parts.push(`bridge protocol ${PROTOCOL}`)
   return parts.join(", ")

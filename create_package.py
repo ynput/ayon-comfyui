@@ -57,6 +57,12 @@ CLIENT_ROOT: str = os.path.join(CURRENT_ROOT, "client")
 VERSION_PY_CONTENT = f'''"""Package declaring AYON addon '{ADDON_NAME}' version."""
 __version__ = "{ADDON_VERSION}"
 '''  # noqa: E501
+# The ComfyUI plugin gets its own copy of the version: on shared ComfyUI
+# servers it is installed without the addon, so it can't import it.
+PLUGIN_VERSION_PATH = ("_comfyui_plugin", "ayon_menu", "version.py")
+PLUGIN_VERSION_PY_CONTENT = f'''"""Version of the AYON ComfyUI addon that ships this ComfyUI plugin."""
+__version__ = "{ADDON_VERSION}"
+'''  # noqa: E501
 
 # Patterns of directories to be skipped for server part of addon
 IGNORE_DIR_PATTERNS: list[Pattern] = [
@@ -201,19 +207,38 @@ def find_files_in_subdir(
     return output
 
 
+def get_client_version_files(addon_client_dir: str) -> dict[str, str]:
+    """Return the client files that hold the addon version, with content.
+
+    Args:
+        addon_client_dir (str): Client directory name.
+
+    Returns:
+        dict[str, str]: Content of the client code's and the ComfyUI
+            plugin's `version.py`, by path.
+
+    """
+    client_dir: str = os.path.join(CLIENT_ROOT, addon_client_dir)
+    return {
+        os.path.join(client_dir, "version.py"): VERSION_PY_CONTENT,
+        os.path.join(
+            client_dir, *PLUGIN_VERSION_PATH
+        ): PLUGIN_VERSION_PY_CONTENT,
+    }
+
+
 def update_client_version(addon_client_dir: str, log: logging.Logger) -> None:
-    """Update version in client code if version.py is present."""
+    """Write the addon version into the client code and ComfyUI plugin."""
     if not addon_client_dir:
         return
 
-    version_path: str = os.path.join(
-        CLIENT_ROOT, addon_client_dir, "version.py"
-    )
-    if not os.path.exists(version_path):
-        log.debug("Creating version.py in client directory")
-
     log.info("Updating client version")
-    Path(version_path).write_text(VERSION_PY_CONTENT, encoding="utf-8")
+    for version_path, content in get_client_version_files(
+        addon_client_dir
+    ).items():
+        if not os.path.exists(version_path):
+            log.debug("Creating %s", version_path)
+        Path(version_path).write_text(content, encoding="utf-8")
 
 
 def build_frontend() -> None:
