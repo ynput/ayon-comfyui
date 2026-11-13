@@ -1049,9 +1049,14 @@ app.registerExtension({
             if (ayon_info?.container_uuid !== ayon_info_update.container_uuid) {
               continue
             }
+            updated = true
+            if (info_widget.value === data.container_json) {
+              // Unchanged (the host sends every container on an update):
+              // don't queue a preview run for nothing.
+              continue
+            }
             info_widget.value = data.container_json
             preview_load_node(node)
-            updated = true
           }
           if (updated) {
             app.graph.setDirtyCanvas(true, true)
