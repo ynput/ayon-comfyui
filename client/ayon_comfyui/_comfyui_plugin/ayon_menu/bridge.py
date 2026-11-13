@@ -78,8 +78,9 @@ PAIR_PAGE = """<!DOCTYPE html>
   try {
     var code = new URLSearchParams(location.hash.slice(1)).get("code");
     if (code) {
+      // The tab trades it for a credential once ComfyUI loaded; a
+      // credential it already has stays until the code is accepted.
       sessionStorage.setItem("ayon.bridge.pair_code", code);
-      sessionStorage.removeItem("ayon.bridge.credential");
     }
   } catch (err) {
     console.error("AYON: unable to store pairing code", err);
