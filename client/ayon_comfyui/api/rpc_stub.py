@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import inspect
 import json
 import logging
@@ -16,7 +18,7 @@ from ayon_core.pipeline import get_current_context
 from ayon_comfyui.api.consts import LOG_LEVEL
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, MutableMapping
+    from collections.abc import Callable, Iterator, MutableMapping
 
     from ayon_comfyui.api.bridge_client import BridgeClient
 
@@ -24,6 +26,40 @@ logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
 log = logging.getLogger("ayon_comfyui")
 
 DEFAULT_CALL_TIMEOUT = 20.0
+
+# The ComfyUI workflow (tab) the tab calls act on, see `target_workflow`.
+_TARGET: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "ayon_comfyui_workflow_target", default=None
+)
+
+
+@contextlib.contextmanager
+def target_workflow(target: dict | None) -> Iterator[None]:
+    """Make the tab calls in this block act on the workflow `target`.
+
+    By default a tab call acts on the active ComfyUI workflow (tab). Within
+    this block it acts on the workflow `target` (`{workflow_key,
+    workflow_label}`, see `RPCStub.get_workflow_target`) instead, also when
+    the artist switched to another tab meanwhile: e.g. publishing keeps
+    acting on the workflow it collected. Calls that need the live graph
+    (adding nodes, converting it to a prompt) then fail with code
+    `workflow_inactive` while it isn't active, and every call fails with
+    `workflow_closed` once its tab is closed.
+
+    `None` acts on the active workflow again. Keep the block to the calls:
+    what the Qt event loop runs meanwhile (e.g. a nested loop) would act on
+    `target` too.
+    """
+    token = _TARGET.set(dict(target) if target else None)
+    try:
+        yield
+    finally:
+        _TARGET.reset(token)
+
+
+def current_workflow_target() -> dict | None:
+    """Return the workflow the tab calls act on now, None for the active."""
+    return _TARGET.get()
 
 
 def tab_method(*, timeout: float | None = DEFAULT_CALL_TIMEOUT) -> Callable:
@@ -42,6 +78,12 @@ def tab_method(*, timeout: float | None = DEFAULT_CALL_TIMEOUT) -> Callable:
             bound.apply_defaults()
             params = dict(bound.arguments)
             params.pop("self")
+            target = _TARGET.get()
+            if target:
+                params.setdefault("workflow_key", target.get("workflow_key"))
+                params.setdefault(
+                    "workflow_label", target.get("workflow_label")
+                )
             return self.client.call(func.__name__, params, timeout=timeout)
 
         return _call
@@ -146,12 +188,33 @@ class RPCClientStub:  # noqa: PLR0904
 
     @tab_method()
     def finishSaveWorkfile(  # noqa: N802, ANN201
-        self, *, comfy_workflow_path: str | None = None
+        self,
+        *,
+        comfy_workflow_path: str | None = None,
+        snapshot: bool = False,
     ):
         """Call finishSaveWorkfile.
 
         Saves the ComfyUI workflow internally so it's no longer flagged as
-        modified. Returns whether it was saved.
+        modified. Returns whether it was saved. With `snapshot`, only when
+        the workflow still is exactly what `getApiPrompt(snapshot=True)`
+        collected (the host wrote that to the workfile).
+        """
+
+    @tab_method()
+    def getWorkflowTarget(self) -> dict:  # noqa: N802
+        """Call getWorkflowTarget.
+
+        Returns `{workflow_key, workflow_label}` of the active workflow, or
+        of the targeted one.
+        """
+
+    @tab_method()
+    def getQueueExtraData(self) -> dict:  # noqa: N802
+        """Call getQueueExtraData.
+
+        Returns the `extra_data` the tab adds when it queues a prompt
+        (Comfy.org credentials: never store or log it).
         """
 
     @tab_method()
@@ -320,14 +383,17 @@ class RPCClientStub:  # noqa: PLR0904
         """
 
     @tab_method(timeout=60.0)
-    def getApiPrompt(self) -> dict:  # noqa: N802
+    def getApiPrompt(self, *, snapshot: bool = False) -> dict:  # noqa: N802
         """Call getApiPrompt.
 
-        Returns the active workflow converted to an API-format prompt by
-        the frontend (`prompt`), the UI workflow (`workflow`), the tab's
-        ComfyUI client id (`client_id`), workflow path (`workflow_path`)
-        and the `extra_data` the tab would queue it with (`extra_data`,
-        including its Comfy.org credentials: never store or log it).
+        Returns the workflow converted to an API-format prompt by the
+        frontend (`prompt`), the UI workflow (`workflow`), the tab's
+        ComfyUI client id (`client_id`), the workflow's identity
+        (`workflow_key`, `workflow_label`, `workflow_id`,
+        `workflow_path`), its AYON workfile (`workfile_path`, and
+        `workfile_open_in`: another tab with it open) and the `extra_data`
+        the tab would queue it with (`extra_data`, including its Comfy.org
+        credentials: never store or log it).
         """
 
     @tab_method()
@@ -434,14 +500,74 @@ class RPCClientStub:  # noqa: PLR0904
         return context
 
 
+def _publisher_scoped(func: Callable) -> Callable:
+    """Act on the workflow whose instances the Publisher shows.
+
+    See `RPCStub.pin_publisher_workflow`. An explicit `target_workflow`
+    still wins.
+    """
+
+    @wraps(func)
+    def _wrapper(self: RPCStub, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        with self.publisher_target():
+            return func(self, *args, **kwargs)
+
+    return _wrapper
+
+
 class RPCStub:  # noqa : PLR0904
     """Wrapper to expose client functionality.
 
     Exposes client calls in a sane way to the plugin.
     """
 
+    target_workflow = staticmethod(target_workflow)
+
     def __init__(self, client: BridgeClient) -> None:  # noqa: D107
         self.client_stub = RPCClientStub(client)
+        # The workflow whose instances the Publisher shows, see
+        # `pin_publisher_workflow`.
+        self.publisher_workflow: dict | None = None
+
+    def get_workflow_target(self) -> dict | None:
+        """Return `{workflow_key, workflow_label}` of the active workflow.
+
+        Or of the targeted one (see `target_workflow`). None when the tab
+        can't tell (an older frontend without a workflow store).
+        """
+        result = self.client_stub.getWorkflowTarget()
+        if not isinstance(result, dict) or not result.get("workflow_key"):
+            return None
+        return {
+            "workflow_key": result["workflow_key"],
+            "workflow_label": result.get("workflow_label"),
+        }
+
+    def pin_publisher_workflow(self) -> dict | None:
+        """Pin the active workflow for the Publisher's instances.
+
+        Called when a Publisher (CreateContext) resets: until it resets
+        again, reading and writing its instances and context data acts on
+        this workflow, also after the artist switched tabs, rather than
+        writing them into another workflow.
+        """
+        try:
+            with target_workflow(None):
+                target = self.get_workflow_target()
+        except Exception:  # noqa: BLE001
+            log.debug("Unable to get the active workflow", exc_info=True)
+            target = None
+        self.publisher_workflow = target
+        return target
+
+    @contextlib.contextmanager
+    def publisher_target(self) -> Iterator[None]:
+        """Target the Publisher's workflow, unless a target is set already."""
+        if _TARGET.get() is not None or not self.publisher_workflow:
+            yield
+            return
+        with target_workflow(self.publisher_workflow):
+            yield
 
     def query_workfile(self) -> str:
         """Query workfile.
@@ -457,6 +583,7 @@ class RPCStub:  # noqa : PLR0904
         log.debug("load_workfile")
         self.client_stub.do_load_workfile(path)
 
+    @_publisher_scoped
     def imprint_context(self, data: dict) -> None:
         """Query imprint contect operation."""
         log.debug(f"imprint_context\n{data}")  # noqa: G004
@@ -533,11 +660,38 @@ class RPCStub:  # noqa : PLR0904
                 exc_info=True,
             )
 
+    def save_workfile_snapshot(self, path: str, workflow: dict) -> None:
+        """Write a collected workflow to its AYON workfile `path`.
+
+        `workflow` is what `get_api_prompt(snapshot=True)` returned for the
+        targeted workflow (see `target_workflow`). Its tab is then saved
+        in ComfyUI too when it still shows exactly that, so it's no longer
+        flagged as modified; changes made since stay unsaved in the tab.
+        """
+        log.debug("save_workfile_snapshot: %s", path)
+        Path(path).write_text(
+            json.dumps(workflow, ensure_ascii=False), encoding="utf-8"
+        )
+        try:
+            self.client_stub.finishSaveWorkfile(snapshot=True)
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "Saved workfile to disk, but failed to save the workflow "
+                "inside ComfyUI.",
+                exc_info=True,
+            )
+
     def get_workfile_path(self) -> str | None:
-        """Return the AYON workfile path of the active workflow, or None."""
+        """Return the AYON workfile path of the active workflow, or None.
+
+        Or of the targeted workflow (see `target_workflow`); then a closed
+        workflow raises.
+        """
         try:
             return self.client_stub.getWorkfilePath() or None
-        except Exception:  # noqa: BLE001
+        except Exception as exc:
+            if getattr(exc, "code", None) == "workflow_closed":
+                raise
             # E.g. no browser connected (yet); treat as 'unsaved'
             log.warning("Unable to query workfile path.", exc_info=True)
             return None
@@ -566,7 +720,10 @@ class RPCStub:  # noqa : PLR0904
         # imprinting it. (e.g. Loader plugin)
         if not context_json_raw:
             context = get_current_context()
-            self.imprint_context(context)
+            # Not `imprint_context`: into the workflow read from.
+            self.client_stub.do_context_imprint(
+                imprint_info=json.dumps(context)
+            )
             context_json_raw = self.client_stub.do_context_retrieve()
 
         log.debug(context_json_raw)
@@ -576,6 +733,7 @@ class RPCStub:  # noqa : PLR0904
             else {}
         )
 
+    @_publisher_scoped
     def load_context(self) -> MutableMapping | None:
         """Query load context, return only the context.
 
@@ -588,6 +746,7 @@ class RPCStub:  # noqa : PLR0904
             return context_json_raw["context"]
         return None
 
+    @_publisher_scoped
     def list_instances(self) -> list[MutableMapping] | None:
         """Query load context.
 
@@ -659,6 +818,7 @@ class RPCStub:  # noqa : PLR0904
 
         return clean
 
+    @_publisher_scoped
     def add_instance(self, instances_to_add: dict | list[dict]) -> None:
         """Add instances ensuring no duplicates."""
         instances = self.list_instances()
@@ -675,6 +835,7 @@ class RPCStub:  # noqa : PLR0904
 
         self._imprint_instances(instances)
 
+    @_publisher_scoped
     def remove_instance(self, instances_to_remove: list[dict] | dict) -> None:
         """Remove instance(s)."""
         instances = self.list_instances()
@@ -702,6 +863,7 @@ class RPCStub:  # noqa : PLR0904
 
         self._imprint_instances(instances)
 
+    @_publisher_scoped
     def update_instance(self, instances_to_update: list[dict] | dict) -> None:
         """Update instance(s) on hash collision, if hash not present, add."""
         instances = self.list_instances()
@@ -846,6 +1008,7 @@ class RPCStub:  # noqa : PLR0904
                 container_json=container_json
             )
 
+    @_publisher_scoped
     def create_publish_node(
         self,
         instance_to_create: dict,
@@ -859,6 +1022,7 @@ class RPCStub:  # noqa : PLR0904
             instance_json=json_data, node_type=publish_type.value
         )
 
+    @_publisher_scoped
     def remove_publish_nodes(
         self,
         instances_to_remove: dict | list,
@@ -943,24 +1107,38 @@ class RPCStub:  # noqa : PLR0904
         """Let the tab's AYON pickers reload their lists."""
         self.client_stub.pickerInvalidate()
 
-    def get_api_prompt(self) -> dict:
+    def get_api_prompt(self, *, snapshot: bool = False) -> dict:
         """Return the active workflow as an API-format prompt.
 
         The conversion is done by the ComfyUI frontend itself
         (`app.graphToPrompt`), so bypassed nodes, subgraphs, reroutes and
         primitives are handled exactly like when the artist runs the graph.
+        A targeted workflow (see `target_workflow`) must be the active one.
+
+        Args:
+            snapshot: This is what will be published: the tab remembers it
+                for `save_workfile_snapshot`.
 
         Returns:
-            Dict with `prompt`, `workflow`, `client_id`, `workflow_path`
-            and `extra_data` (see `publish_lib.split_api_prompt`).
+            Dict with `prompt`, `workflow`, `client_id`, the workflow's
+            identity and workfile, and `extra_data` (see
+            `RPCClientStub.getApiPrompt`, `publish_lib.split_api_prompt`).
         """
-        result = self.client_stub.getApiPrompt()
+        result = self.client_stub.getApiPrompt(snapshot=snapshot)
         if not isinstance(result, dict) or not isinstance(
             result.get("prompt"), dict
         ):
             msg = "The ComfyUI tab didn't return the workflow's prompt."
             raise RuntimeError(msg)
         return result
+
+    def get_queue_extra_data(self) -> dict:
+        """Return the `extra_data` the tab would queue a prompt with.
+
+        Includes the artist's Comfy.org credentials: never store or log it.
+        """
+        result = self.client_stub.getQueueExtraData()
+        return result if isinstance(result, dict) else {}
 
     def get_queued_prompts(self) -> list[dict]:
         """Return the prompts the paired tab queued, newest first.

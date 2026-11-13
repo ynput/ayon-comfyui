@@ -33,6 +33,8 @@ def split_api_prompt(api_prompt: dict) -> tuple[dict, dict]:
 #: ComfyUI plugin feature the host-driven publish needs (see the relay's
 #: `FEATURES` in `_comfyui_plugin/ayon_menu/bridge.py`).
 PUBLISH_FEATURE = "publish-v1"
+#: ... and to act on the published workflow while it isn't the active tab.
+WORKFLOWS_FEATURE = "workflows-v1"
 
 
 def missing_plugin_feature(feature: str) -> str | None:
@@ -66,10 +68,10 @@ class RenderWait:
     would otherwise freeze the Publisher (and make Windows report it as not
     responding), and its Stop button only acts between plugins. While
     waiting, a small window shows the render's progress with a "Cancel
-    render" button. It is application-modal: everything repaints, but only
-    that window takes input, so nothing else runs in the middle of the
-    publish. Without a Qt application (e.g. a headless publish) it just
-    sleeps.
+    render" button. It's modal to the Publisher only: the publish works
+    from the workflow it collected, so the artist may keep using ComfyUI
+    and the other AYON tools meanwhile. Without a Qt application (e.g. a
+    headless publish) it just sleeps.
 
     Use as a context manager; pass `sleep` and `progress` to
     `comfy_publish.wait_for_prompt`.
@@ -90,11 +92,26 @@ class RenderWait:
         app = QtWidgets.QApplication.instance()
         if app is None or QtCore.QThread.currentThread() != app.thread():
             return self
+        # Modal to the Publisher, which runs the publish. Without one, to
+        # everything.
+        parent = next(
+            (
+                widget
+                for widget in app.topLevelWidgets()
+                if type(widget).__name__ == "PublisherWindow"
+                and widget.isVisible()
+            ),
+            None,
+        )
         dialog = QtWidgets.QProgressDialog(
-            self._text, "Cancel render", 0, 0, app.activeWindow()
+            self._text, "Cancel render", 0, 0, parent
         )
         dialog.setWindowTitle("AYON - ComfyUI")
-        dialog.setWindowModality(QtCore.Qt.ApplicationModal)
+        dialog.setWindowModality(
+            QtCore.Qt.WindowModal
+            if parent is not None
+            else QtCore.Qt.ApplicationModal
+        )
         # Closing it must not quit an application that has no other window.
         dialog.setAttribute(QtCore.Qt.WA_QuitOnClose, False)
         dialog.setMinimumDuration(0)

@@ -1,5 +1,14 @@
 import { app } from "../../scripts/app.js";
 import { AyonBridge, PROTOCOL, bridge_ws_url } from "./lib/ayon_bridge.js";
+import {
+  WorkflowKeys,
+  read_stored_context,
+  stored_state,
+  stored_state_changed,
+  workflow_error,
+  workflow_label,
+  write_stored_context,
+} from "./lib/ayon_workflows.js";
 
 const AYON_EXTENSION_NAME = "AYON.ComfyMenu"
 const AYON_SAVE_WORKFILE_COMMAND_ID = "AYON.SaveWorkfile"
@@ -427,6 +436,76 @@ function get_root_graph() {
   return app.rootGraph ?? app.graph
 }
 
+// The AYON key of each open workflow (tab), see `ayon_workflows.js`.
+const WORKFLOW_KEYS = new WorkflowKeys()
+// The change tracker state of a workflow when AYON collected it for
+// publishing, to tell whether the tab still shows exactly what was
+// published (see `finishSaveWorkfile`).
+const SNAPSHOTS = new WeakMap()
+
+// The workflow (tab) a host call is for: the one the host pinned with
+// `data.workflow_key` (e.g. the one being published, or whose instances the
+// Publisher shows), otherwise the active one. Returns `{workflow, active}`;
+// without a workflow store (older frontends) `workflow` is null and the
+// live graph is used.
+function target_workflow(data) {
+  const store = get_workflow_store()
+  if (!store) {
+    return {workflow: null, active: true}
+  }
+  const key = data?.workflow_key
+  if (!key) {
+    return {workflow: store.activeWorkflow ?? null, active: true}
+  }
+  const workflow = WORKFLOW_KEYS.find(store.openWorkflows ?? [], key)
+  if (!workflow) {
+    const label = data.workflow_label ? `'${data.workflow_label}' ` : ""
+    throw workflow_error(
+      "workflow_closed",
+      `The ComfyUI workflow ${label}that AYON is working on was closed.`
+    )
+  }
+  return {workflow, active: store.isActive(workflow)}
+}
+
+// Only the active workflow has a live graph to add or remove nodes in, or
+// to convert to a prompt.
+function require_active(target, action) {
+  if (target.active) {
+    return
+  }
+  const active = workflow_label(get_workflow_store()?.activeWorkflow)
+  throw workflow_error(
+    "workflow_inactive",
+    `To ${action}, switch to the ComfyUI workflow '${workflow_label(target.workflow)}'` +
+    (active ? ` (the active one is '${active}').` : ".")
+  )
+}
+
+// `graph.extra[AYON]` of the target workflow (see `target_workflow`).
+function target_ayon_extra(target) {
+  if (target.active) {
+    return get_ayon_extra()
+  }
+  return stored_state(target.workflow).extra?.[AYON_EXTRA_KEY] ?? null
+}
+
+function set_target_ayon_extra(target, values) {
+  if (target.active) {
+    set_ayon_extra(values)
+    sync_change_tracker(target.workflow)
+    return
+  }
+  const state = stored_state(target.workflow)
+  state.extra ??= {}
+  state.extra[AYON_EXTRA_KEY] = {...(state.extra[AYON_EXTRA_KEY] ?? {}), ...values}
+  stored_state_changed(target.workflow)
+}
+
+function serialize_target(target) {
+  return target.active ? serialize_graph() : JSON.stringify(stored_state(target.workflow))
+}
+
 // The JSON an AYON node stores in `widget`, or null for a node that has
 // none yet (e.g. added from the node library, nothing picked) or invalid.
 function parse_node_json(node, widget) {
@@ -577,17 +656,22 @@ async function rename_workflow(store, workflow, name, workfile_path) {
 // Returns `{error}` instead when the active workflow must not be saved.
 async function begin_save_workfile(data) {
   const store = get_workflow_store()
-  const workflow = store?.activeWorkflow ?? null
+  // A workflow pinned by the host (e.g. versioning up the published one) is
+  // saved whether it's active or not; otherwise the active one is.
+  const pinned = Boolean(data.workflow_key)
+  const target = target_workflow(data)
+  const workflow = target.workflow
   const warnings = []
 
-  // Saving in place: the host asked for the active workflow's workfile path
-  // earlier, so make sure the user didn't switch tabs since.
-  if (data.in_place && !same_workfile_path(claimed_workfile_path(workflow, get_ayon_extra()), data.workfile_path)) {
+  // Saving in place: the host asked for the workflow's workfile path
+  // earlier, so make sure it still is (e.g. the user switched tabs since).
+  if (data.in_place && !same_workfile_path(claimed_workfile_path(workflow, target_ayon_extra(target)), data.workfile_path)) {
     return {
-      error: (
-        `The active ComfyUI workflow is no longer the AYON workfile ` +
-        `'${data.workfile_path}'. Switch back to its tab and try again.`
-      ),
+      error: pinned
+        ? `The ComfyUI workflow '${workflow_label(workflow)}' is no longer ` +
+          `the AYON workfile '${data.workfile_path}'.`
+        : `The active ComfyUI workflow is no longer the AYON workfile ` +
+          `'${data.workfile_path}'. Switch back to its tab and try again.`,
     }
   }
 
@@ -611,16 +695,19 @@ async function begin_save_workfile(data) {
 
   let renamed = true
   if (data.workflow_name) {
+    // Keep the workflow's AYON key with its new path (see `WorkflowKeys`).
+    WORKFLOW_KEYS.key(workflow)
     try {
       await rename_workflow(store, workflow, data.workflow_name, data.workfile_path)
+      WORKFLOW_KEYS.key(workflow)
     } catch (err) {
       renamed = false
       console.warn("AYON: Failed to rename workflow:", err)
       warnings.push(`The ComfyUI tab was not renamed: ${err?.message ?? err}`)
     }
     // Renaming waits for ComfyUI's server, the user may have switched tabs
-    // in the meantime. Only the active workflow's graph can be serialized.
-    if (!store.isActive(workflow)) {
+    // in the meantime. Then only a pinned workflow is still saved.
+    if (!pinned && !store.isActive(workflow)) {
       return {
         error: (
           `The active ComfyUI tab changed while saving the AYON workfile ` +
@@ -630,14 +717,14 @@ async function begin_save_workfile(data) {
     }
   }
 
-  set_ayon_extra({
+  const current = {workflow, active: store.isActive(workflow)}
+  set_target_ayon_extra(current, {
     workfile_path: data.workfile_path,
     comfy_workflow_path: workflow.path,
   })
-  sync_change_tracker(workflow)
 
   return {
-    workfile: serialize_graph(),
+    workfile: serialize_target(current),
     // Only when the tab is named after the workfile do we also want
     // to save it inside ComfyUI (see `finishSaveWorkfile`)
     comfy_workflow_path: renamed ? workflow.path : null,
@@ -874,12 +961,21 @@ function remember_queued_prompt(prompt_id, workflow) {
   }
 }
 
-// The active workflow's identity: graph id and ComfyUI path.
-function active_workflow_identity() {
+// A workflow's identity: its AYON key (unique per tab within this browser
+// tab, `workflow_page`), its graph id and ComfyUI path. `graph` is its live
+// graph, so `workflow` must be active.
+function workflow_identity(workflow, graph = get_root_graph()) {
   return {
-    workflow_id: get_root_graph()?.id ?? null,
-    workflow_path: get_workflow_store()?.activeWorkflow?.path ?? null,
+    workflow_key: WORKFLOW_KEYS.key(workflow),
+    workflow_page: WORKFLOW_KEYS.page_id(),
+    workflow_label: workflow_label(workflow),
+    workflow_id: graph?.id ?? null,
+    workflow_path: workflow?.path ?? null,
   }
+}
+
+function active_workflow_identity() {
+  return workflow_identity(get_workflow_store()?.activeWorkflow ?? null)
 }
 
 // The Comfy.org credentials of this tab's last own run. The frontend only
@@ -1137,17 +1233,61 @@ app.registerExtension({
           show_toast("warn", event.detail, 10000)
         })
 
-        // The API-format prompt of the active workflow, made by the
+        // The API-format prompt of the target workflow, made by the
         // frontend's own conversion (bypass, subgraphs, reroutes,
-        // primitives), for the AYON host to queue when publishing.
-        bridge.register('getApiPrompt', async () => {
+        // primitives), for the AYON host to queue when publishing. Only
+        // the active workflow can be converted. With `snapshot`, AYON
+        // publishes exactly this: remember the state, see
+        // `finishSaveWorkfile`.
+        bridge.register('getApiPrompt', async (data) => {
+          const store = get_workflow_store()
+          const target = target_workflow(data)
+          require_active(target, "publish it")
+          const tracker = target.workflow?.changeTracker
+          if (data?.snapshot && target.workflow) {
+            capture_tracker_state(tracker)
+          }
+          const state = tracker?.activeState
           const {output, workflow} = await app.graphToPrompt()
+          if (target.workflow && !store.isActive(target.workflow)) {
+            throw workflow_error(
+              "workflow_inactive",
+              `The active ComfyUI tab changed while AYON read the workflow ` +
+              `'${workflow_label(target.workflow)}'. Switch back to it and try again.`
+            )
+          }
+          if (data?.snapshot && target.workflow) {
+            SNAPSHOTS.set(target.workflow, state)
+          }
+          const workfile_path = claimed_workfile_path(target.workflow, get_ayon_extra())
+          const shared = workfile_path && store
+            ? find_tab_with_workfile(store, workfile_path, target.workflow)
+            : null
           return {
             prompt: output,
             workflow,
             client_id: app.api.clientId ?? app.api.initialClientId ?? null,
-            ...active_workflow_identity(),
+            ...workflow_identity(target.workflow),
+            workfile_path,
+            // Another tab that has the same AYON workfile open.
+            workfile_open_in: shared ? workflow_label(shared) : null,
             extra_data: queue_extra_data(),
+          }
+        })
+
+        // What the frontend adds when it queues a prompt (Comfy.org
+        // login, preview method), for a run AYON queues itself.
+        bridge.register('getQueueExtraData', () => {
+          return queue_extra_data()
+        })
+
+        // The AYON key and name of the target (by default: the active)
+        // workflow, so the host can pin it.
+        bridge.register('getWorkflowTarget', (data) => {
+          const {workflow} = target_workflow(data)
+          return {
+            workflow_key: WORKFLOW_KEYS.key(workflow),
+            workflow_label: workflow_label(workflow),
           }
         })
 
@@ -1158,6 +1298,10 @@ app.registerExtension({
 
 
         bridge.register('getWorkfile', (data) => {
+          const target = target_workflow(data)
+          if (!target.active) {
+            return serialize_target(target)
+          }
           // Serialize the live graph so the result always reflects the
           // current state, instead of ComfyUI's debounced storage drafts.
           const graph = get_root_graph()
@@ -1178,6 +1322,14 @@ app.registerExtension({
         // Allow host to set arbitrary extra metadata on the current graph
         bridge.register('setGraphExtra', (data) => {
           const extra = typeof data.extra_json === 'string' ? JSON.parse(data.extra_json) : data.extra_json
+          const target = target_workflow(data)
+          if (!target.active) {
+            const state = stored_state(target.workflow)
+            state.extra ??= {}
+            merge_into_extra(state.extra, extra)
+            stored_state_changed(target.workflow)
+            return true
+          }
           const graph = get_root_graph()
           graph.extra ??= {}
           merge_into_extra(graph.extra, extra)
@@ -1187,18 +1339,24 @@ app.registerExtension({
 
         // Return graph.extra (stringified JSON), optionally a single key.
         bridge.register('getGraphExtra', (data) => {
-          const extra = get_root_graph()?.extra ?? {}
+          const target = target_workflow(data)
+          const extra = (
+            target.active
+              ? get_root_graph()?.extra
+              : stored_state(target.workflow).extra
+          ) ?? {}
           if (data && data.key) {
             return JSON.stringify(extra[data.key] ?? null)
           }
           return JSON.stringify(extra)
         })
 
-        // Return the AYON workfile path the current workflow was saved to or
-        // opened from, or null when it is not (or no longer) an AYON workfile.
+        // Return the AYON workfile path the target (by default: the active)
+        // workflow was saved to or opened from, or null when it is not (or no
+        // longer) an AYON workfile.
         bridge.register('getWorkfilePath', (data) => {
-          const active = get_workflow_store()?.activeWorkflow ?? null
-          return claimed_workfile_path(active, get_ayon_extra())
+          const target = target_workflow(data)
+          return claimed_workfile_path(target.workflow, target_ayon_extra(target))
         })
 
         // See `begin_save_workfile`. Errors and warnings are also shown in
@@ -1215,27 +1373,71 @@ app.registerExtension({
         // Step two of saving an AYON workfile: after the host wrote the file
         // to disk, also save the workflow in ComfyUI so the tab is no longer
         // flagged as modified.
+        // With `snapshot`, the host wrote the state it collected for
+        // publishing (`getApiPrompt`) to the target workflow's workfile:
+        // only save the tab when it still shows exactly that.
         bridge.register('finishSaveWorkfile', async (data) => {
           const store = get_workflow_store()
-          if (!store || !data.comfy_workflow_path) {
+          // Only when the tab is named after the workfile (see
+          // `begin_save_workfile`) is it saved inside ComfyUI too.
+          if (!store || (!data.snapshot && !data.comfy_workflow_path)) {
             return false
           }
-          const workflow = store.getWorkflowByPath(data.comfy_workflow_path)
-          if (!workflow || !store.isActive(workflow)) {
-            // User switched tabs in the meantime; do not save another tab.
+          let workflow = null
+          if (data.workflow_key) {
+            workflow = WORKFLOW_KEYS.find(store.openWorkflows ?? [], data.workflow_key)
+          } else if (data.comfy_workflow_path) {
+            workflow = store.getWorkflowByPath(data.comfy_workflow_path)
+            if (workflow && !store.isActive(workflow)) {
+              // User switched tabs in the meantime; do not save another tab.
+              workflow = null
+            }
+          }
+          if (!workflow) {
             return false
           }
+          if (data.comfy_workflow_path && workflow.path !== data.comfy_workflow_path) {
+            return false
+          }
+          const active = store.isActive(workflow)
           const tracker = workflow.changeTracker
-          if (typeof tracker?.prepareForSave === "function") {
-            tracker.prepareForSave()
-          } else {
-            capture_tracker_state(tracker)
+          if (data.snapshot) {
+            if (active) {
+              capture_tracker_state(tracker)
+            }
+            const snapshot = SNAPSHOTS.get(workflow)
+            if (snapshot && tracker && snapshot !== tracker.activeState) {
+              // Changed since (maybe saved meanwhile, e.g. by "Save
+              // Workfile"): the file now holds the snapshot, so flag the
+              // tab as modified compared to that.
+              try {
+                tracker.initialState = structuredClone(snapshot)
+                tracker.updateModified?.()
+              } catch (err) {
+                console.warn("AYON: Unable to flag the workflow as modified", err)
+              }
+              return false
+            }
+            const ayon = target_ayon_extra({workflow, active})
+            if (!snapshot || ayon?.comfy_workflow_path !== workflow.path) {
+              // Not collected here, or the tab isn't named after the workfile.
+              return false
+            }
           }
+          if (active) {
+            if (typeof tracker?.prepareForSave === "function") {
+              tracker.prepareForSave()
+            } else {
+              capture_tracker_state(tracker)
+            }
+          }
+          // Saves a workflow that isn't active from its stored state.
           await store.saveWorkflow(workflow)
           return true
         })
 
         bridge.register('addPublishNode', (data) => {
+          require_active(target_workflow(data), "add its AYON save node")
           console.log("adding node...")
           const nodeType = data.node_type
           const save_node = addNodeAtCenter(nodeType)
@@ -1260,6 +1462,7 @@ app.registerExtension({
 
 
         bridge.register('removePublishNodes', (data) => {
+          require_active(target_workflow(data), "remove its AYON save nodes")
           const nodeType = data.node_type
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           
@@ -1367,6 +1570,11 @@ app.registerExtension({
 
 
         bridge.register('setImprintContext', (data) => {
+          const target = target_workflow(data)
+          if (!target.active) {
+            write_stored_context(target.workflow, data.imprint_info)
+            return true
+          }
           console.log("setting context...", data)
           const imprint_node = ensureAyonContextNode()
           console.log(imprint_node)
@@ -1384,6 +1592,10 @@ app.registerExtension({
 
 
         bridge.register('getImprintContext', (data) => {
+          const target = target_workflow(data)
+          if (!target.active) {
+            return read_stored_context(stored_state(target.workflow))
+          }
           console.log("getting context...", data)
           const imprint_node = ensureAyonContextNode()
           console.log(imprint_node)

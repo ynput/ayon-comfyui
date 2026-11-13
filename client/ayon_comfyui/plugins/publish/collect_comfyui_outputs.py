@@ -16,7 +16,6 @@ from ayon_comfyui.api.publish_lib import (
     PUBLISH_FEATURE,
     get_comfy_http,
     missing_plugin_feature,
-    split_api_prompt,
 )
 
 if TYPE_CHECKING:
@@ -24,13 +23,13 @@ if TYPE_CHECKING:
 
 
 class CollectComfyUIPrompt(pyblish.api.ContextPlugin):
-    """Get the active workflow as an API prompt from the ComfyUI tab.
+    """Prepare publishing the outputs of the collected workflow.
 
-    The ComfyUI frontend converts the graph itself, exactly like when the
-    artist runs it. A prompt id is chosen up front, so everything about the
-    run that will produce the outputs is known while collecting; the render
-    gets the prompt again once the workfile is saved, in case the graph
-    changed since.
+    `CollectComfyUIWorkflow` got the workflow as an API prompt, converted
+    by the ComfyUI frontend itself, exactly like when the artist runs it. A
+    prompt id is chosen up front, so everything about the run that will
+    produce the outputs is known while collecting. Also gets the prompts
+    the tab queued, to find earlier runs.
     """
 
     order = pyblish.api.CollectorOrder + 0.1
@@ -43,17 +42,16 @@ class CollectComfyUIPrompt(pyblish.api.ContextPlugin):
         if outdated:
             raise KnownPublishError(outdated)
         host: ComfyUIHost = registered_host()
+        api_prompt = context.data["comfyuiApiPrompt"]
         try:
-            api_prompt, _extra = split_api_prompt(host.stub.get_api_prompt())
             tab_prompts = host.stub.get_queued_prompts()
         except (BridgeError, RuntimeError) as exc:
             msg = (
-                "Unable to get the workflow from the ComfyUI tab, which is "
-                f"needed to publish its outputs: {exc}"
+                "Unable to get the runs of the ComfyUI tab, which are "
+                f"needed to publish the outputs of earlier runs: {exc}"
             )
             raise KnownPublishError(msg) from exc
 
-        context.data["comfyuiApiPrompt"] = api_prompt
         context.data["comfyuiPromptId"] = comfy_publish.new_prompt_id()
         context.data["comfyuiTabPrompts"] = tab_prompts
         self.log.debug(
@@ -68,7 +66,7 @@ class CollectComfyUIOutputs(pyblish.api.InstancePlugin):
     """Decide which ComfyUI run makes the outputs of an AYON save node.
 
     - "Recook on publish" on (the node's toggle): the outputs will be made
-      by running the current workflow, limited to the save nodes being
+      by running the collected workflow, limited to the save nodes being
       published (see `ExtractComfyUIRender`).
     - Off: the newest finished run of this save node that this AYON session
       or its ComfyUI tab queued from this workflow is published as-is.
@@ -99,7 +97,8 @@ class CollectComfyUIOutputs(pyblish.api.InstancePlugin):
                 "outputs": [],
             }
             self.log.info(
-                "'%s' will be rendered from the current workflow (node %s).",
+                "'%s' will be rendered from the collected workflow "
+                "(node %s).",
                 product_name, node.node_id,
             )
         else:
@@ -131,9 +130,9 @@ class CollectComfyUIOutputs(pyblish.api.InstancePlugin):
         node = save_nodes.get(instance_id)
         if node is None:
             msg = (
-                f"The AYON save node of '{product_name}' isn't part of the "
-                "active ComfyUI workflow, or it is bypassed or muted. Enable "
-                "it, or disable this instance in the Publisher."
+                f"The AYON save node of '{product_name}' isn't part of "
+                "the published ComfyUI workflow, or it is bypassed or muted. "
+                "Enable it, or disable this instance in the Publisher."
             )
             raise KnownPublishError(msg)
         return node

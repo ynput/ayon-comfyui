@@ -86,6 +86,9 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         return ls()
 
     def get_context_data(self):
+        # Called when the Publisher (a CreateContext) resets: it works on
+        # the active workflow's instances until it resets again.
+        self.stub.pin_publisher_workflow()
         return self.stub.load_context()
 
     def update_context_data(self, data, changes):
@@ -93,6 +96,8 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
 
     def get_current_workfile(self) -> str | None:
         """Return the AYON workfile path of the active ComfyUI workflow.
+
+        Or of the targeted workflow, see `RPCStub.target_workflow`.
 
         ComfyUI has no notion of files on disk, so we store the AYON workfile
         path in the graph (`extra.AYON.workfile_path`) on open and save.
@@ -102,7 +107,13 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         only trusted when AYON opened or saved it in this session, or when
         it's a `.json` file inside the current project's folders.
         """
-        path = self.stub.get_workfile_path()
+        return self.trusted_workfile_path(self.stub.get_workfile_path())
+
+    def trusted_workfile_path(self, path: str | None) -> str | None:
+        """Return `path`, a workfile path stored in a workflow, if trusted.
+
+        See `get_current_workfile`.
+        """
         if not path:
             return None
         if not self._is_trusted_workfile(path):

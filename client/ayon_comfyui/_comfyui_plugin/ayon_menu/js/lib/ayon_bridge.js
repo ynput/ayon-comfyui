@@ -307,7 +307,9 @@ export class AyonBridge extends EventTarget {
         reply.result = result === undefined ? null : result
       } catch (err) {
         console.error(`AYON: '${frame.method}' failed`, err)
-        reply.error = {code: "error", message: String(err?.message ?? err)}
+        // A handler may give its error a `code` the host can act on.
+        const code = typeof err?.code === "string" && err.code ? err.code : "error"
+        reply.error = {code, message: String(err?.message ?? err)}
       }
     }
     if (ws.readyState === WebSocket.OPEN) {

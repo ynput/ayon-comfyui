@@ -494,7 +494,6 @@ class FakeBridge:
 
         self.client = Client()
         self.main_thread_calls: list = []
-        self.while_busy: list[bool] = []
         self.applied = threading.Event()
         self.applied_from: str | None = None
         self.applied_args: tuple | None = None
@@ -512,9 +511,8 @@ class FakeBridge:
 
         self.stub = Stub()
 
-    def run_in_main_thread(self, func, *, while_busy=False) -> None:
+    def run_in_main_thread(self, func) -> None:
         self.main_thread_calls.append(func)
-        self.while_busy.append(while_busy)
 
 
 class HandlerTests(unittest.TestCase):
@@ -539,9 +537,7 @@ class HandlerTests(unittest.TestCase):
         self.assertTrue(FakeLoader.built[-1]["thread"].startswith(
             "AYON-ComfyUI-picker-load"))
         # ...and the result goes to the tab from the Qt main thread (here
-        # the test's thread), where the AYON Context node is written, also
-        # while a publish waits for its render.
-        self.assertEqual(bridge.while_busy, [False, True])
+        # the test's thread), where the AYON Context node is written.
         self.assertFalse(bridge.applied.is_set())
         bridge.main_thread_calls[1]()
         self.assertEqual(
@@ -641,8 +637,9 @@ def import_bridge() -> types.ModuleType:
         return importlib.import_module("ayon_comfyui.api.bridge")
 
 
-class BusyBridgeTests(unittest.TestCase):
-    """Picks while the bridge is busy, e.g. a publish waiting for a render.
+class BridgeRequestTests(unittest.TestCase):
+    """What the tab asks for runs right away, e.g. while a publish waits
+    for its render: a publish acts on the workflow it collected.
     """
 
     @classmethod
@@ -697,53 +694,57 @@ class BusyBridgeTests(unittest.TestCase):
         self.pickers[name] = value
         self.addCleanup(self.pickers.__setitem__, name, original)
 
-    def test_picks_are_applied_while_busy(self) -> None:
+    def test_requests_and_picks_run_right_away(self) -> None:
         saves: list = []
         with mock.patch.object(
             self.module, "save_current_workfile", lambda: saves.append(True)
         ):
-            with self.bridge.busy():
-                # Both clicked in the tab while busy. "Save Workfile" waits
-                # until the bridge is no longer busy...
-                self.handlers["requestSaveWorkfile"]({})
-                self.assertEqual(
-                    self.handlers["picker.apply"](dict(APPLY)),
-                    {"scheduled": True},
-                )
-                # ...but the pick is loaded into its node right away.
-                deadline = time.monotonic() + 5
-                while not self.calls:
-                    self.assertLess(time.monotonic(), deadline)
-                    time.sleep(0.01)
-                    process_events()
-                [(method, params)] = self.calls
-                self.assertEqual(method, "pickerApplied")
-                self.assertEqual(params["token"], "tok1")
-                self.assertIsNone(params["error"])
-                container = json.loads(params["container_json"])
-                self.assertEqual(container["representation"], R2)
-                self.assertEqual(saves, [])
-            process_events()
-            self.assertEqual(saves, [True])
-
-    def test_loader_opens_when_no_longer_busy(self) -> None:
-        browse = {"token": "tok2", "node_type": "AYON Load Image"}
-        with self.bridge.busy():
+            self.handlers["requestSaveWorkfile"]({})
             self.assertEqual(
-                self.handlers["picker.browse"](browse), {"scheduled": True})
-            process_events()
-            self.assertEqual(self.opened, [])
-            self.assertIsNone(self.pickers["get_load_target"]())
+                self.handlers["picker.apply"](dict(APPLY)),
+                {"scheduled": True},
+            )
+            deadline = time.monotonic() + 5
+            while not self.calls:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+                process_events()
+        self.assertEqual(saves, [True])
+        [(method, params)] = self.calls
+        self.assertEqual(method, "pickerApplied")
+        self.assertEqual(params["token"], "tok1")
+        self.assertIsNone(params["error"])
+        container = json.loads(params["container_json"])
+        self.assertEqual(container["representation"], R2)
+
+    def test_requests_act_on_the_active_workflow(self) -> None:
+        # Never on a workflow that code on the Qt thread targets meanwhile.
+        stub_globals = self.module.RPCStub.__init__.__globals__
+        seen: list = []
+        with stub_globals["target_workflow"]({"workflow_key": "k"}):
+            self.bridge._run_callable(
+                lambda: seen.append(stub_globals["current_workflow_target"]())
+            )
+            self.assertEqual(
+                stub_globals["current_workflow_target"](),
+                {"workflow_key": "k"},
+            )
+        self.assertEqual(seen, [None])
+
+    def test_loader_opens(self) -> None:
+        browse = {"token": "tok2", "node_type": "AYON Load Image"}
+        self.assertEqual(
+            self.handlers["picker.browse"](browse), {"scheduled": True})
         process_events()
         self.assertEqual(self.opened, [True])
         self.assertEqual(self.pickers["get_load_target"]()["token"], "tok2")
 
     def test_loader_not_opened_for_a_node_that_stopped_waiting(self) -> None:
         browse = {"token": "tok3", "node_type": "AYON Load Image"}
-        with self.bridge.busy():
-            self.handlers["picker.browse"](browse)
-            # Busy for longer than the node waits for the Loader.
-            self.set_picker_global("LOAD_TARGET_TTL", -1.0)
+        self.handlers["picker.browse"](browse)
+        # The Qt main thread was blocked for longer than the node waits for
+        # the Loader.
+        self.set_picker_global("LOAD_TARGET_TTL", -1.0)
         process_events()
         self.assertEqual(self.opened, [])
         self.assertIsNone(self.pickers["_load_target"])

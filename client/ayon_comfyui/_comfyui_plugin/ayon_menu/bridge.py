@@ -59,7 +59,10 @@ PROTOCOL = PROTOCOLS[-1]
 #   `getQueuedPrompts` (host-driven publishing).
 # - "paths-v1": `/ayon/paths/check` and load nodes reading AYON rootless
 #   path references.
-FEATURES: tuple[str, ...] = ("publish-v1", "paths-v1")
+# - "workflows-v1": tab calls take a `workflow_key` to act on a workflow
+#   (tab) other than the active one; `getApiPrompt(snapshot)`,
+#   `getQueueExtraData`, `getWorkflowTarget`.
+FEATURES: tuple[str, ...] = ("publish-v1", "paths-v1", "workflows-v1")
 
 HELLO_TIMEOUT = 10.0
 HEARTBEAT = 30.0

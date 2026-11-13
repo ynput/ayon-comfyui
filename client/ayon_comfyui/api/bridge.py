@@ -15,7 +15,6 @@ ComfyUI process when AYON launched it, and the lifetime of the session:
 from __future__ import annotations
 
 import concurrent.futures
-import contextlib
 import logging
 import os
 import socket
@@ -41,10 +40,10 @@ from ayon_comfyui.api.menu_actions import (
     show_tool_by_name,
 )
 from ayon_comfyui.api.pickers import register_picker_handlers
-from ayon_comfyui.api.rpc_stub import RPCStub
+from ayon_comfyui.api.rpc_stub import RPCStub, target_workflow
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +114,6 @@ class ComfyUIBridge(QtCore.QObject):
     """
 
     _sig_call = QtCore.Signal(object)
-    _sig_call_while_busy = QtCore.Signal(object)
     _sig_event = QtCore.Signal(str, object)
 
     def __init__(  # noqa: PLR0913
@@ -164,12 +162,7 @@ class ComfyUIBridge(QtCore.QObject):
         self._shutting_down = False
         # Startup failed and the artist is being told; ignore late events.
         self._failed = False
-        # While busy, actions requested by the tab wait (see `busy`).
-        self._busy = 0
-        self._deferred: list[Callable[[], Any]] = []
-
         self._sig_call.connect(self._run_callable)
-        self._sig_call_while_busy.connect(self._run_callable_while_busy)
         self._sig_event.connect(self._handle_event)
         # After connecting `_sig_call`: registering warms the loaders on the
         # Qt main thread through it.
@@ -503,62 +496,25 @@ class ComfyUIBridge(QtCore.QObject):
 
     # --- requests from the tab (bridge worker thread) ---------------------
 
-    def run_in_main_thread(
-        self, func: Callable[[], Any], *, while_busy: bool = False
-    ) -> None:
+    def run_in_main_thread(self, func: Callable[[], Any]) -> None:
         """Run `func` on the Qt main thread, from any thread.
 
         Doesn't wait for it to run. Tab request handlers run on a worker
         thread; use this for anything that touches Qt or host state, and
         answer the tab right away.
 
-        Args:
-            func: What to run.
-            while_busy: Run it also while `busy`, instead of after. Only
-                for what the busy operation doesn't depend on and that
-                doesn't open windows, e.g. putting a picked container on
-                the node that asked for it.
+        Also runs while a publish waits for a render (that wait processes Qt
+        events): what the artist asks for doesn't wait for it, and a publish
+        acts on the workflow it collected, not the active one.
         """
-        if while_busy:
-            self._sig_call_while_busy.emit(func)
-        else:
-            self._sig_call.emit(func)
-
-    @contextlib.contextmanager
-    def busy(self) -> Iterator[None]:
-        """Hold back actions requested by the ComfyUI tab until done.
-
-        For long operations on the Qt main thread that keep processing
-        events, e.g. waiting for a render while publishing: otherwise e.g.
-        "AYON > Save Workfile" clicked in the tab would run in the middle of
-        it. The tab still gets its answer right away. Use on the Qt main
-        thread.
-
-        What is sent with `run_in_main_thread(..., while_busy=True)` still
-        runs meanwhile.
-        """
-        self._busy += 1
-        try:
-            yield
-        finally:
-            self._busy -= 1
-            if not self._busy and self._deferred:
-                deferred, self._deferred = self._deferred, []
-                for func in deferred:
-                    self.run_in_main_thread(func)
+        self._sig_call.emit(func)
 
     def _run_callable(self, func: Callable[[], Any]) -> None:
-        if self._busy:
-            self._deferred.append(func)
-            return
         try:
-            func()
-        except Exception:
-            log.exception("Error while running %s", func)
-
-    def _run_callable_while_busy(self, func: Callable[[], Any]) -> None:
-        try:
-            func()
+            # On the active workflow: never on one some code on the Qt
+            # thread targets meanwhile (see `rpc_stub.target_workflow`).
+            with target_workflow(None):
+                func()
         except Exception:
             log.exception("Error while running %s", func)
 
