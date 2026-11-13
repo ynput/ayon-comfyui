@@ -146,7 +146,6 @@ class ComfyUIBridge(QtCore.QObject):
             "requestSaveWorkfile", self._handle_request_save
         )
         self.client.register_handler("pingAyonMenu", self._handle_ping)
-        register_picker_handlers(self)
 
         self._started_at = time.monotonic()
         self._ever_connected = False
@@ -168,6 +167,9 @@ class ComfyUIBridge(QtCore.QObject):
 
         self._sig_call.connect(self._run_callable)
         self._sig_event.connect(self._handle_event)
+        # After connecting `_sig_call`: registering warms the loaders on the
+        # Qt main thread through it.
+        register_picker_handlers(self)
 
         self._window = SessionWindow(self)
         self._timer = QtCore.QTimer(self)
