@@ -609,8 +609,45 @@ function active_workflow_identity() {
 // sets them on the api object while it queues a prompt, from internal
 // stores, so they're captured there; kept in memory only, never stored.
 let LAST_QUEUE_CREDENTIALS = null
-// Comfy.org (Firebase) login tokens expire after an hour.
+// Comfy.org (Firebase) login tokens expire after an hour; used when a
+// token's own expiry can't be read.
 const AUTH_TOKEN_MAX_AGE_MS = 50 * 60 * 1000
+// Set while AYON queues a load node preview itself: that's not the
+// artist's run, so it neither counts as one nor says anything about the
+// artist's Comfy.org login.
+let QUEUEING_PREVIEW = false
+
+// When a Comfy.org login token (a JWT) expires, in ms, or null.
+function token_expiry(token) {
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")
+    const exp = JSON.parse(atob(payload)).exp
+    return typeof exp === "number" ? exp * 1000 : null
+  } catch (err) {
+    return null
+  }
+}
+
+function capture_credentials(api) {
+  const auth_token = api?.authToken ?? null
+  const api_key = api?.apiKey ?? null
+  if (!auth_token && !api_key) {
+    // Logged out (or never logged in): forget an earlier login.
+    LAST_QUEUE_CREDENTIALS = null
+    return
+  }
+  const previous = LAST_QUEUE_CREDENTIALS
+  const same_token = previous && previous.auth_token === auth_token
+  LAST_QUEUE_CREDENTIALS = {
+    auth_token,
+    api_key,
+    // Keep when the token was first seen, so a token left on the api object
+    // can't look fresh forever.
+    expires: same_token
+      ? previous.expires
+      : (auth_token && token_expiry(auth_token)) || Date.now() + AUTH_TOKEN_MAX_AGE_MS,
+  }
+}
 
 // Record every prompt this tab queues (Run, Queue, partial runs), with the
 // workflow it was queued from.
@@ -620,14 +657,11 @@ function track_queued_prompts(api) {
     return
   }
   const tracked = async function (...args) {
-    const workflow = active_workflow_identity()
-    if (this?.authToken || this?.apiKey) {
-      LAST_QUEUE_CREDENTIALS = {
-        auth_token: this.authToken ?? null,
-        api_key: this.apiKey ?? null,
-        at: Date.now(),
-      }
+    if (QUEUEING_PREVIEW) {
+      return original.apply(this, args)
     }
+    const workflow = active_workflow_identity()
+    capture_credentials(this)
     const result = await original.apply(this, args)
     remember_queued_prompt(result?.prompt_id, workflow)
     return result
@@ -645,7 +679,8 @@ function queue_extra_data() {
   if (credentials?.api_key) {
     extra.api_key_comfy_org = credentials.api_key
   }
-  if (credentials?.auth_token && Date.now() - credentials.at < AUTH_TOKEN_MAX_AGE_MS) {
+  // A minute of margin for the time until ComfyUI uses it.
+  if (credentials?.auth_token && Date.now() < credentials.expires - 60 * 1000) {
     extra.auth_token_comfy_org = credentials.auth_token
   }
   const preview_method = app.extensionManager?.setting?.get?.("Comfy.Execution.PreviewMethod")
@@ -663,7 +698,12 @@ async function execute_single_node(node) {
   if (!prompt.output[id]) {
     return
   }
-  await app.api.queuePrompt(0, {output: {[id]: prompt.output[id]}})
+  QUEUEING_PREVIEW = true
+  try {
+    await app.api.queuePrompt(0, {output: {[id]: prompt.output[id]}})
+  } finally {
+    QUEUEING_PREVIEW = false
+  }
 }
 
 function preview_load_node(node) {

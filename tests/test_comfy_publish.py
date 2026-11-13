@@ -500,5 +500,48 @@ class RobustnessTests(unittest.TestCase):
         self.assertIn(("POST", "/api/jobs/theirs/cancel", {}), http.calls)
 
 
+class ReviewFixTests(unittest.TestCase):
+    def no_jobs_api(self):
+        error = BridgeError("HTTP 404", "http_404")
+        error.status = 404
+        error.body = None  # no route, unlike {"error": "Job not found"}
+        return error
+
+    def test_fallback_cancel_only_interrupts_our_run(self):
+        someone_else = {"queue_running": [[0, "theirs", {}, {}, []]],
+                        "queue_pending": []}
+        http = FakeHttp({
+            ("POST", "/api/jobs/abc/cancel"): self.no_jobs_api(),
+            ("POST", "/queue"): {},
+            ("GET", "/queue"): someone_else,
+        })
+        cp.cancel_prompt(http, "abc")
+        paths = [path for _m, path, _k in http.calls]
+        self.assertNotIn("/interrupt", paths)
+
+        ours = {"queue_running": [[0, "abc", {}, {}, []]],
+                "queue_pending": []}
+        http = FakeHttp({
+            ("POST", "/api/jobs/abc/cancel"): self.no_jobs_api(),
+            ("POST", "/queue"): {},
+            ("GET", "/queue"): ours,
+            ("POST", "/interrupt"): {},
+        })
+        self.assertTrue(cp.cancel_prompt(http, "abc"))
+        self.assertIn("/interrupt", [path for _m, path, _k in http.calls])
+
+    def test_view_params_refuses_streams(self):
+        with self.assertRaises(cp.PublishError):
+            cp.view_params({"filename": "a.png:secret", "type": "output"})
+
+    def test_run_files_must_be_in_their_run_folder(self):
+        for subfolder in (f"AYON/{INSTANCE}", f"AYON/{INSTANCE}/p1/deeper"):
+            entry = history_entry("p1", files=[{
+                "filename": "a.png", "subfolder": subfolder,
+                "type": "output"}])
+            with self.assertRaises(cp.PublishError, msg=subfolder):
+                cp.run_from_history("p1", entry, "2", INSTANCE)
+
+
 if __name__ == "__main__":
     unittest.main()
