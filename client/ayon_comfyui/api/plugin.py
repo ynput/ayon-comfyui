@@ -155,8 +155,11 @@ class ComfyUILoader(LoaderPlugin):
 
     hosts: ClassVar[list[str]] = ["comfyui"]
     settings_category = "comfyui"
+    # A base class: discovery finds it in every plugin module importing it.
+    skip_discovery = True
 
-    load_type: ClassVar[LoadType] = LoadType.IMAGE
+    # The node type the loader puts its containers on.
+    load_type: ClassVar[LoadType | None] = None
 
     @property
     def stub(self) -> RPCStub:

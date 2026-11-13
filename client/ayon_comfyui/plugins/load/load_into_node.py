@@ -7,6 +7,7 @@ from typing import ClassVar
 from ayon_core.pipeline.load import LoadError
 
 from ayon_comfyui.api.pickers import (
+    artist_error,
     get_load_target,
     loaders_by_node_type,
     take_load_target,
@@ -56,15 +57,27 @@ class LoadIntoComfyUINode(ComfyUILoader):
                 "Use 'Open AYON Loader...' on the node again."
             )
             raise LoadError(msg)
-        loader_cls = loaders_by_node_type().get(target["node_type"])
-        if loader_cls is None or not loader_cls.is_compatible_loader(context):
-            msg = f"An {target['node_type']} node can't load this."
+        try:
+            loader_cls = loaders_by_node_type().get(target["node_type"])
+            if loader_cls is None or not loader_cls.is_compatible_loader(
+                context
+            ):
+                msg = f"An {target['node_type']} node can't load this."
+                raise LoadError(msg)  # noqa: TRY301
+            container = loader_cls(context).build_container(
+                context,
+                name=context["product"]["name"],
+                namespace=context["folder"]["name"],
+                container_uuid=target["container_uuid"],
+                version_mode="pinned",
+            )
+        except Exception as exc:
+            # Let the waiting node stop waiting.
+            self.stub.picker_applied(target["token"], error=artist_error(exc))
+            raise
+        if not self.stub.picker_applied(target["token"], container=container):
+            msg = (
+                "The ComfyUI node that opened the AYON Loader is gone, or "
+                "its workflow was closed; nothing was loaded into it."
+            )
             raise LoadError(msg)
-        container = loader_cls(context).build_container(
-            context,
-            name=context["product"]["name"],
-            namespace=context["folder"]["name"],
-            container_uuid=target["container_uuid"],
-            version_mode="pinned",
-        )
-        self.stub.picker_applied(target["token"], container=container)

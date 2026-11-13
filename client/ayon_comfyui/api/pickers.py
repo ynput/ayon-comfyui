@@ -53,10 +53,13 @@ VERSION_MODES = frozenset({"latest", "pinned"})
 CACHE_TTL = 60.0
 MAX_STATUS_ITEMS = 500
 MAX_NAME_LENGTH = 255
-# Loads (uploads) a tab may start per minute, and at most one at a time
-# per node.
+# Queries a tab may make per minute, and how often it may bypass the cache.
+MAX_QUERIES_PER_MINUTE = 600
+MIN_REFRESH_INTERVAL = 5.0
+# Loads (uploads) a tab may start per minute, how many may be queued or
+# running at once (they run on the Qt main thread), one per node.
 MAX_APPLIES_PER_MINUTE = 30
-APPLIED_CALL_TIMEOUT = 10.0
+MAX_APPLIES_IN_FLIGHT = 2
 
 _ENTITY_ID = re.compile(r"^[0-9a-f]{32}$")
 _CONTAINER_UUID = re.compile(
@@ -133,24 +136,43 @@ def _default_representation_context(project_name: str, repre: dict) -> dict:
     return get_representation_context(project_name, repre)
 
 
+def pick_node_loaders(loaders: Any) -> dict[str, type]:  # noqa: ANN401
+    """Return the loader plugin of each load node type among `loaders`.
+
+    Discovery also returns base classes imported into plugin modules (they
+    are subclasses of LoaderPlugin too), so skip anything that isn't a
+    concrete loader for a node type.
+    """
+    result = {}
+    for loader in loaders:
+        if loader.__dict__.get("skip_discovery") is True:
+            continue
+        node_type = getattr(getattr(loader, "load_type", None), "value", None)
+        if node_type not in LOAD_NODE_TYPES or not hasattr(
+            loader, "build_container"
+        ):
+            continue
+        product_filter = (
+            getattr(loader, "product_base_types", None)
+            or getattr(loader, "product_types", None)
+        )
+        if not product_filter or not getattr(loader, "representations", None):
+            continue
+        result.setdefault(node_type, loader)
+    return result
+
+
 def _default_loaders() -> dict[str, type]:
     """Return the ComfyUI loader plugin for each load node type."""
     from ayon_core.pipeline.load import (  # noqa: PLC0415
         discover_loader_plugins,
     )
 
-    loaders = {}
-    for loader in discover_loader_plugins():
-        load_type = getattr(loader, "load_type", None)
-        node_type = getattr(load_type, "value", None)
-        if node_type in LOAD_NODE_TYPES and hasattr(
-            loader, "build_container"
-        ):
-            loaders.setdefault(node_type, loader)
-    return loaders
+    return pick_node_loaders(discover_loader_plugins())
 
 
-_loaders_cache = _Cache()
+# Loader plugins don't change during a session.
+_loaders_cache = _Cache(ttl=3600.0)
 
 
 def loaders_by_node_type() -> dict[str, type]:
@@ -241,12 +263,39 @@ class PickerService:
         self._apply_times: deque[float] = deque()
         self._applying: set[str] = set()
         self._last_browse = 0.0
+        self._query_lock = threading.Lock()
+        self._query_times: deque[float] = deque()
+        self._last_refresh: dict[str, float] = {}
 
     def clear_cache(self) -> None:
         """Forget cached query results, e.g. after a context change."""
         self._cache.clear()
 
     # --- helpers ----------------------------------------------------------
+
+    def _admit_query(self, method: str, params: dict) -> bool:
+        """Rate limit queries; return whether to bypass the cache.
+
+        Raises:
+            PickerError: Too many queries in the last minute.
+        """
+        now = time.monotonic()
+        with self._query_lock:
+            times = self._query_times
+            while times and now - times[0] > 60:
+                times.popleft()
+            if len(times) >= MAX_QUERIES_PER_MINUTE:
+                msg = "Too many AYON queries in a short time, try again soon."
+                raise PickerError(msg)
+            times.append(now)
+            if not params.get("refresh"):
+                return False
+            if now - self._last_refresh.get(method, -1e9) < (
+                MIN_REFRESH_INTERVAL
+            ):
+                return False
+            self._last_refresh[method] = now
+            return True
 
     def _project(self) -> str:
         project_name = self._project_name()
@@ -293,6 +342,7 @@ class PickerService:
 
     def folders(self, params: dict) -> dict:
         """Folders that have products, by path."""
+        refresh = self._admit_query("folders", params)
         project_name = self._project()
 
         def _query() -> list[dict]:
@@ -308,9 +358,7 @@ class PickerService:
             return folders
 
         folders = self._cache.get(
-            ("folders", project_name),
-            _query,
-            refresh=bool(params.get("refresh")),
+            ("folders", project_name), _query, refresh=refresh
         )
         return {"project_name": project_name, "folders": folders}
 
@@ -321,12 +369,12 @@ class PickerService:
         Params: `node_type`, `folder_id`, optional `product_id` and
         `version_id` (the latest version when not given), `refresh`.
         """
+        refresh = self._admit_query("options", params)
         project_name = self._project()
         node_type = _node_type(params)
         folder_id = _entity_id(params, "folder_id")
         product_id = _entity_id(params, "product_id", required=False)
         version_id = _entity_id(params, "version_id", required=False)
-        refresh = bool(params.get("refresh"))
         loader = self._loader(node_type)
 
         products = self._cache.get(
@@ -388,8 +436,11 @@ class PickerService:
         if version_id is None:
             version_id = versions[0]["id"]
         elif not any(version["id"] == version_id for version in versions):
-            msg = "The version doesn't belong to the product."
-            raise PickerError(msg)
+            # E.g. the product's hero version, which isn't listed.
+            version = self._api.get_version_by_id(project_name, version_id)
+            if not version or version.get("productId") != product_id:
+                msg = "The version doesn't belong to the product."
+                raise PickerError(msg)
         result["version_id"] = version_id
 
         representations = self._cache.get(
@@ -417,6 +468,7 @@ class PickerService:
         product's latest version, or `missing` naming the first entity
         that no longer exists.
         """
+        self._admit_query("status", params)
         project_name = self._project()
         ids = params.get("representation_ids")
         if not isinstance(ids, list) or len(ids) > MAX_STATUS_ITEMS:
@@ -511,9 +563,6 @@ class PickerService:
         ):
             msg = "Invalid container_uuid."
             raise PickerError(msg)
-        title = params.get("title")
-        if not isinstance(title, str):
-            title = ""
         node_type = _node_type(params)
         now = time.monotonic()
         with self._apply_lock:
@@ -525,7 +574,6 @@ class PickerService:
             "token": token,
             "node_type": node_type,
             "container_uuid": container_uuid,
-            "title": title[:MAX_NAME_LENGTH],
         }
 
     def validate_apply(self, params: dict) -> dict:
@@ -577,6 +625,9 @@ class PickerService:
                 self._apply_times.popleft()
             if len(self._apply_times) >= MAX_APPLIES_PER_MINUTE:
                 msg = "Too many AYON loads in a short time, try again soon."
+                raise PickerError(msg)
+            if len(self._applying) >= MAX_APPLIES_IN_FLIGHT:
+                msg = "AYON is busy loading, try again in a moment."
                 raise PickerError(msg)
             if key in self._applying:
                 msg = "AYON is still loading into this node."
@@ -655,6 +706,20 @@ LOADER_TARGET_REPLACED = "The AYON Loader was opened for another node."
 LOADER_CLOSED = "The AYON Loader was closed."
 
 
+_CLOSE_FILTER_PROPERTY = "ayon_comfyui_picker_close_filter"
+
+
+def artist_error(exc: Exception) -> str:
+    """Return what to tell the ComfyUI tab about a failed load.
+
+    Only our own messages are passed on; anything else can contain file
+    paths or server addresses, which stay in the AYON log.
+    """
+    if isinstance(exc, PickerError) or type(exc).__name__ == "LoadError":
+        return str(exc)
+    return "Loading failed, see the AYON log for details."
+
+
 def open_loader() -> Any:  # noqa: ANN401
     """Show the AYON Loader (on the Qt main thread); return its window."""
     from ayon_core.tools.utils import host_tools  # noqa: PLC0415
@@ -677,15 +742,20 @@ def register_picker_handlers(
             except PickerError:
                 raise
             except Exception as exc:
+                # The details (server URL, paths) stay in the AYON log.
                 log.warning("AYON picker query failed", exc_info=True)
-                msg = f"AYON query failed: {exc}"
+                msg = "The AYON query failed, see the AYON log for details."
                 raise PickerError(msg) from exc
 
         return _handler
 
     def _apply(params: dict) -> dict:
         request = service.validate_apply(params)
-        bridge.run_in_main_thread(partial(_run_apply, request))
+        try:
+            bridge.run_in_main_thread(partial(_run_apply, request))
+        except Exception:
+            service.release(request)
+            raise
         return {"scheduled": True}
 
     def _run_apply(request: dict) -> None:
@@ -693,11 +763,9 @@ def register_picker_handlers(
         error = None
         try:
             container = service.apply(request)
-        except PickerError as exc:
-            error = str(exc)
         except Exception as exc:  # noqa: BLE001
+            error = artist_error(exc)
             log.warning("AYON picker load failed", exc_info=True)
-            error = f"Loading failed: {exc}"
         finally:
             service.release(request)
         try:
@@ -735,15 +803,13 @@ def register_picker_handlers(
         except Exception as exc:  # noqa: BLE001
             log.warning("Unable to open the AYON Loader", exc_info=True)
             take_load_target(request["token"])
-            _notify(request["token"], f"Unable to open the Loader: {exc}")
+            _notify(request["token"], artist_error(exc))
             return
         _watch_loader_close(window)
 
-    watched: list = []
-
     def _watch_loader_close(window: Any) -> None:  # noqa: ANN401
         """End the load target when the Loader window closes."""
-        if window is None or any(item is window for item in watched):
+        if window is None or window.property(_CLOSE_FILTER_PROPERTY):
             return
         from qtpy import QtCore  # noqa: PLC0415
 
@@ -756,7 +822,7 @@ def register_picker_handlers(
                 return False
 
         window.installEventFilter(_CloseFilter(window))
-        watched.append(window)
+        window.setProperty(_CLOSE_FILTER_PROPERTY, True)
 
     client.register_handler("picker.browse", _browse)
 

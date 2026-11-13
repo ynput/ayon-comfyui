@@ -38,6 +38,8 @@ const CONTEXT_WIDGET = "ayon_context_info"
 const QUERY_TIMEOUT_MS = 15000
 // How long AYON may take to upload a picked representation.
 const APPLY_TIMEOUT_MS = 5 * 60 * 1000
+// How long AYON keeps a node waiting for the Loader (LOAD_TARGET_TTL).
+const LOADER_TARGET_TTL_MS = 30 * 60 * 1000
 const LATEST = "latest"
 const STATUS_BATCH_MS = 30
 const REFRESH_DEBOUNCE_MS = 50
@@ -280,6 +282,7 @@ export class LoadPicker {
   // Reload the lists and what the node loads from AYON.
   async refresh({force = false} = {}) {
     const generation = ++this.generation
+    this.hub.pickers.add(this)
     if (this.applying) {
       return
     }
@@ -290,16 +293,29 @@ export class LoadPicker {
     const container = this.container()
     this.set_state("busy", "loading AYON lists")
     try {
-      const [folders, status] = await Promise.all([
-        this.hub.folders({force}),
-        container?.representation
-          ? this.hub.status_of(container.representation)
-          : null,
-      ])
+      const folders = await this.hub.folders({force})
       if (generation !== this.generation) {
         return
       }
       this.lists.folders = folders
+      // E.g. loaded from a library project with the AYON Loader: the
+      // pickers only browse the session's project.
+      const loaded_project =
+        container?.project_name ?? container?.selection?.project_name
+      const project = this.hub.project_name
+      if (container?.representation && loaded_project && project &&
+          loaded_project !== project) {
+        this.render()
+        this.set_state("idle",
+          `Loaded from project ${loaded_project}; pick to load from ${project}`)
+        return
+      }
+      const status = container?.representation
+        ? await this.hub.status_of(container.representation)
+        : null
+      if (generation !== this.generation) {
+        return
+      }
       let warning = ""
       if (status?.missing) {
         warning = `The loaded ${status.missing} no longer exists in AYON`
@@ -378,6 +394,7 @@ export class LoadPicker {
 
   // A pick in one of the combos.
   async on_pick(key, value) {
+    this.hub.pickers.add(this)
     if (this.applying) {
       this.render()
       return
@@ -582,6 +599,13 @@ export class LoadPicker {
     this.browse_token = token
     this.hub.pending.set(token, {picker: this, root: root_graph_of(this.node)})
     this.set_state("busy", WAITING_FOR_LOADER)
+    setTimeout(() => {
+      if (this.browse_token === token) {
+        this.hub.pending.delete(token)
+        this.browse_token = null
+        this.refresh()
+      }
+    }, LOADER_TARGET_TTL_MS)
     try {
       await this.hub.call("picker.browse", {
         token,
@@ -615,6 +639,11 @@ export class LoadPicker {
   applied(token, container) {
     if (!this.take_token(token)) {
       return false
+    }
+    // The node got what it loads; stop waiting for the Loader as well.
+    if (this.browse_token) {
+      this.hub.pending.delete(this.browse_token)
+      this.browse_token = null
     }
     const widget = find_widget(this.node, CONTAINER_WIDGET)
     if (!widget) {
@@ -668,11 +697,24 @@ export class LoadPicker {
     this.refresh({force: true})
   }
 
+  // The node was removed. `live_pickers` stops refreshing it; a node that
+  // is still in use (e.g. moved into a subgraph) registers again when used.
   dispose() {
     this.generation += 1
+    for (const token of [this.applying, this.browse_token]) {
+      if (token) {
+        this.hub.pending.delete(token)
+      }
+    }
     this.applying = null
     this.browse_token = null
     this.hub.forget(this)
+  }
+
+  // AYON disconnected: nothing will answer pending requests.
+  abandon_requests() {
+    this.take_token(this.applying)
+    this.take_token(this.browse_token)
   }
 }
 
@@ -724,6 +766,8 @@ export class PickerHub {
     this.pickers = new Set()
     this.pending = new Map()
     this.folders_promise = null
+    // The session's project, as reported with the folders.
+    this.project_name = null
     this.status_batch = null
     this.refresh_queue = new Set()
     this.refresh_timer = null
@@ -756,6 +800,13 @@ export class PickerHub {
       return
     }
     this.was_connected = connected
+    if (!connected) {
+      // Answers to pending loads won't arrive anymore.
+      for (const {picker} of this.pending.values()) {
+        picker.abandon_requests()
+      }
+      this.pending.clear()
+    }
     this.invalidate()
     this.refresh_all()
   }
@@ -793,7 +844,10 @@ export class PickerHub {
   folders({force = false} = {}) {
     if (force || !this.folders_promise) {
       const promise = this.call("picker.folders", {refresh: force})
-        .then((result) => result.folders ?? [])
+        .then((result) => {
+          this.project_name = result.project_name ?? null
+          return result.folders ?? []
+        })
       promise.catch(() => {
         if (this.folders_promise === promise) {
           this.folders_promise = null
