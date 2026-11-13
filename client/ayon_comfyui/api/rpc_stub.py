@@ -817,8 +817,11 @@ class RPCStub:  # noqa : PLR0904
 
         self._imprint_containers(containers)
 
-        # Update all nodes.
-        for container in containers:
+        # Update the nodes of the updated containers only: every update
+        # re-previews (re-queues) the nodes it touches.
+        if isinstance(containers_to_update, dict):
+            containers_to_update = [containers_to_update]
+        for container in containers_to_update:
             container_json = json.dumps(container)
             self.client_stub.updateLoadProductNode(
                 container_json=container_json
