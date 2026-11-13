@@ -20,6 +20,7 @@ files below the roots the server's owner chose.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -32,7 +33,7 @@ ROOTS_ENV = "AYON_COMFYUI_ROOTS"
 SESSION_HEADER = "X-AYON-Session"
 ROOTS_FILE = os.path.join("__ayon", "roots.json")
 _ROOTLESS = re.compile(r"^\{root\[([A-Za-z0-9_-]+)\]\}(.*)$", re.DOTALL)
-MAX_CHECK_PATHS = 100_000
+MAX_CHECK_PATHS = 20_000
 
 _cache: dict = {"key": None, "roots": {}}
 
@@ -54,11 +55,18 @@ def _read_roots(source: str) -> dict:
     if not isinstance(data, dict):
         msg = "AYON roots must be a JSON object of root name to path"
         raise TypeError(msg)
-    return {
-        str(name): os.path.abspath(str(path))
-        for name, path in data.items()
-        if isinstance(path, str) and path
-    }
+    roots = {}
+    for name, path in data.items():
+        if not isinstance(path, str) or not path:
+            continue
+        path = os.path.abspath(path)  # noqa: PLW2901
+        if os.path.dirname(path) == path:
+            # A whole drive or filesystem would open up every file on it.
+            log.warning("Ignoring AYON root '%s': %s is a filesystem root",
+                        name, path)
+            continue
+        roots[str(name)] = path
+    return roots
 
 
 def configured_roots() -> dict[str, str]:
@@ -148,14 +156,23 @@ async def handle_check(request):  # noqa: ANN001, ANN201
     paths = body.get("paths") if isinstance(body, dict) else None
     if not isinstance(paths, list) or len(paths) > MAX_CHECK_PATHS:
         return web.json_response({"error": "invalid paths"}, status=400)
-    exists = []
-    for path in paths:
-        resolved = resolve_rootless(path)
-        exists.append(bool(resolved) and os.path.isfile(resolved))
+    # Checking many files on a network share takes a while: keep ComfyUI's
+    # server (and everyone's websocket) responsive meanwhile.
+    exists = await asyncio.get_running_loop().run_in_executor(
+        None, _paths_exist, paths
+    )
     return web.json_response(
         {"roots": sorted(configured_roots()), "exists": exists},
         headers={"Cache-Control": "no-store"},
     )
+
+
+def _paths_exist(paths: list) -> list[bool]:
+    exists = []
+    for path in paths:
+        resolved = resolve_rootless(path)
+        exists.append(bool(resolved) and os.path.isfile(resolved))
+    return exists
 
 
 def add_routes(routes) -> None:  # noqa: ANN001

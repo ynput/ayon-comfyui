@@ -43,13 +43,29 @@ BROWSER_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 # What each load node may read. A container can be edited by anyone who can
 # edit the workflow, so nodes never read other kinds of files.
+# The media extensions the AYON loaders offer (ayon-core's
+# `IMAGE_EXTENSIONS`/`VIDEO_EXTENSIONS`, which this plugin can't import as it
+# runs inside ComfyUI), plus a few common ones they lack.
 IMAGE_EXTENSIONS = FULL_PRECISION_EXTENSIONS | BROWSER_IMAGE_EXTENSIONS | {
-    ".jpe", ".jfif", ".tga", ".psd", ".avif", ".heic", ".heif", ".jxl",
-    ".ppm", ".pgm", ".pbm",
+    ".ani", ".anim", ".apng", ".art", ".bpg", ".bsave", ".cal", ".cin",
+    ".cpc", ".cpt", ".dds", ".dng", ".ecw", ".fits", ".flic", ".flif",
+    ".fpx", ".hdri", ".hevc", ".icer", ".icns", ".ico", ".cur", ".ics",
+    ".ilbm", ".jbig", ".jbig2", ".jng", ".2000", ".kra", ".logluv", ".mng",
+    ".miff", ".nrrd", ".ora", ".pam", ".pbm", ".pgm", ".ppm", ".pnm",
+    ".pcx", ".pgf", ".pictor", ".psd", ".psb", ".psp", ".qtvr", ".ras",
+    ".rgbe", ".sgi", ".sxr", ".tga", ".ufo", ".ufp", ".wbmp", ".xr",
+    ".xt", ".xbm", ".xcf", ".xpm", ".xwd",
+    ".jpe", ".jfif", ".avif", ".heic", ".heif", ".jxl",
 }
 VIDEO_EXTENSIONS = {
-    ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mxf", ".gif",
+    ".3g2", ".3gp", ".amv", ".asf", ".avi", ".drc", ".f4a", ".f4b", ".f4p",
+    ".f4v", ".flv", ".gif", ".gifv", ".m2v", ".m4p", ".m4v", ".mkv",
+    ".mng", ".mov", ".mp2", ".mp4", ".mpe", ".mpeg", ".mpg", ".mpv",
+    ".mxf", ".nsv", ".ogg", ".ogv", ".qt", ".rm", ".rmvb", ".roq", ".svi",
+    ".vob", ".webm", ".wmv", ".yuv",
 }
+# A node shows at most this many of its uploaded images as preview.
+MAX_PREVIEWS = 8
 MODEL_EXTENSIONS = {
     ".gltf", ".glb", ".obj", ".fbx", ".stl", ".spz", ".splat", ".ply",
     ".ksplat",
@@ -347,7 +363,7 @@ def preview(
             ui.SavedResult(
                 info["name"], info.get("subfolder", ""), io.FolderType.input
             )
-            for info in uploads
+            for info in uploads[:MAX_PREVIEWS]
         ]).as_dict()
     return ui.PreviewImage(images[:1].clamp(0, 1), cls=cls).as_dict()
 
