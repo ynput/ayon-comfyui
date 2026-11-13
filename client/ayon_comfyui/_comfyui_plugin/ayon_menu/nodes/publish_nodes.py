@@ -147,14 +147,18 @@ def prune_old_runs(instance_folder: str, keep: str) -> None:
         log.debug("AYON: Removed old outputs %s", entry.path)
 
 
-def file_stem(creator_attrs: dict) -> str:
-    """Return the file name stem chosen in the creator attributes."""
-    stem = safe_file_stem(creator_attrs.get("prefix"))
-    if creator_attrs.get("use_unique_name"):
-        unique = safe_file_stem(creator_attrs.get("unique_name"), "")
-        if unique:
-            stem = f"{stem}_{unique}"
-    return stem
+def file_stem(ayon_json: dict) -> str:
+    """Return the file name stem chosen in the creator attributes.
+
+    The prefix and unique name are both optional (PR #40); without either,
+    the product name is used.
+    """
+    creator_attrs = ayon_json["creator_attributes"]
+    parts = [safe_file_stem(creator_attrs.get("prefix"), "")]
+    if creator_attrs.get("use_unique_name", True):
+        parts.append(safe_file_stem(creator_attrs.get("unique_name"), ""))
+    stem = "_".join(part for part in parts if part)
+    return stem or safe_file_stem(ayon_json.get("productName"))
 
 
 def unique_filename(folder: str, filename: str) -> str:
@@ -238,7 +242,7 @@ class AyonSaveNode(io.ComfyNode):
 
         keep_metadata = bool(creator_attrs.get("keep_metadata", True))
         compress_level = int(creator_attrs.get("compression_level", 4))
-        stem = file_stem(creator_attrs)
+        stem = file_stem(ayon_json)
 
         folder, subfolder, instance_id, prompt_id = staging_folder(ayon_json)
 
@@ -320,7 +324,7 @@ class AyonSaveVideoNode(io.ComfyNode):
         creator_attrs = ayon_json["creator_attributes"]
 
         keep_metadata = bool(creator_attrs.get("keep_metadata", True))
-        stem = file_stem(creator_attrs)
+        stem = file_stem(ayon_json)
 
         # mp4/h264 | webm/vp9 | webm/av1
         formatcodec: str = creator_attrs.get("formatcodec", "mp4/h264")
@@ -563,7 +567,7 @@ class AyonSave3DModelNode(io.ComfyNode):
             model_format = safe_file_stem(mesh.format, "glb").lower()
         else:
             model_format = fallback_format
-        stem = f"{file_stem(creator_attrs)}_{model_format}"
+        stem = f"{file_stem(ayon_json)}_{model_format}"
 
         folder, subfolder, instance_id, prompt_id = staging_folder(ayon_json)
 

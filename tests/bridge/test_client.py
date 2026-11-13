@@ -30,7 +30,7 @@ def load(name, path):
 REPO = Path(__file__).resolve().parents[2]
 RELAY_PATH = REPO / "client/ayon_comfyui/_comfyui_plugin/ayon_menu/bridge.py"
 CLIENT_PATH = REPO / "client/ayon_comfyui/api/bridge_client.py"
-if len(sys.argv) > 2:
+if __name__ == "__main__" and len(sys.argv) > 2:
     RELAY_PATH, CLIENT_PATH = Path(sys.argv[1]), Path(sys.argv[2])
 
 relay = load("relay", RELAY_PATH)
@@ -314,6 +314,11 @@ def main():
 
     print("FAILURES:", FAILS or "none")
     return 1 if FAILS else 0
+
+
+def test_client():
+    """Run all client checks (for pytest)."""
+    assert main() == 0, FAILS
 
 
 if __name__ == "__main__":

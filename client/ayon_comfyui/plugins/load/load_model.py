@@ -18,16 +18,18 @@ class ModelLoader(ComfyUILoader):
     """
 
     product_types: ClassVar[set[str]] = {"model"}
-    representations: ClassVar[set[str]] = {
-        ".gltf",
-        ".glb",
-        ".obj",
-        ".fbx",
-        ".stl",
-        ".spz",
-        ".splat",
-        ".ply",
-        ".ksplat",
+    # Published representations are named by their extension, without dot.
+    representations: ClassVar[set[str]] = {"*"}
+    extensions: ClassVar[set[str]] = {
+        "gltf",
+        "glb",
+        "obj",
+        "fbx",
+        "stl",
+        "spz",
+        "splat",
+        "ply",
+        "ksplat",
     }
     label = "Load model into current graph."
     icon = "robot"

@@ -5,7 +5,7 @@ ComfyUI runs. Referencing files in place is opt-in per load. It avoids
 copying large plates and follows files that change in place (hero
 versions), but only when the ComfyUI server can read the files under its
 own mapping of the AYON roots (see `_comfyui_plugin/ayon_menu/paths.py`).
-When it can't, files are uploaded after all.
+When it can't, files are uploaded after all, and the artist is told why.
 """
 
 from __future__ import annotations
@@ -15,10 +15,15 @@ import hmac
 import json
 import logging
 import os
+import re
+from typing import TYPE_CHECKING, Any
 
 from ayon_comfyui.api.bridge_client import BridgeError
 from ayon_comfyui.api.comfy_http import ComfyHttp
 from ayon_comfyui.api.upload_util import upload_input_images
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +33,9 @@ ROOTS_ENV = "AYON_COMFYUI_ROOTS"
 PROJECTS_ENV = "AYON_COMFYUI_PROJECTS"
 #: ComfyUI plugin feature for reading files by path.
 PATHS_FEATURE = "paths-v1"
+#: Why the ComfyUI plugin ignores a root that is a whole drive or share
+#: (`WHOLE_DRIVE` in `_comfyui_plugin/ayon_menu/paths.py`).
+WHOLE_DRIVE = "whole_drive"
 
 
 def site_roots(project_name: str) -> dict[str, str]:
@@ -104,15 +112,19 @@ def rootless_paths(
 
 #: Header the ComfyUI plugin authenticates `/ayon/paths/check` with.
 SESSION_HEADER = "X-AYON-Session"
+_ROOT_NAME = re.compile(r"^\{root\[([A-Za-z0-9_-]+)\]\}")
 
 
-def server_can_read(
+def server_read_problem(
     comfy_url: str, rootless: list[str], session_secret: str
-) -> bool:
-    """Return whether the ComfyUI server can read all `rootless` paths.
+) -> str | None:
+    """Return why the ComfyUI server can't read all `rootless` paths.
 
     The check is only answered for AYON sessions registered on the bridge,
     so it is authenticated with this session's secret.
+
+    Returns:
+        None when it can read them all.
     """
     try:
         answer = ComfyHttp(comfy_url).http_json(
@@ -122,17 +134,83 @@ def server_can_read(
             headers={SESSION_HEADER: session_proof(session_secret)},
         )
     except BridgeError as exc:
-        log.info("ComfyUI can't check paths (%s).", exc)
-        return False
+        return f"ComfyUI couldn't check whether it can read them ({exc})."
+    return check_answer_problem(rootless, answer)
+
+
+def check_answer_problem(rootless: list[str], answer: Any) -> str | None:  # noqa: ANN401
+    """Return why a `/ayon/paths/check` answer refuses `rootless`, or None."""
     exists = answer.get("exists") if isinstance(answer, dict) else None
+    if not isinstance(exists, list) or len(exists) != len(rootless):
+        return "ComfyUI gave an invalid answer when checking the files."
+    missing = [path for path, found in zip(rootless, exists) if not found]
+    if not missing:
+        return None
+
+    roots = answer.get("roots")
+    roots = roots if isinstance(roots, list) else []
+    ignored = answer.get("ignored_roots")
+    ignored = ignored if isinstance(ignored, dict) else {}
+    for path in missing:
+        match = _ROOT_NAME.match(path)
+        name = match.group(1) if match else None
+        if name is None or name in roots:
+            continue
+        refused = ignored.get(name)
+        if not isinstance(refused, dict):
+            return (
+                f"ComfyUI has no AYON root '{name}' (see {ROOTS_ENV} on "
+                "that server)."
+            )
+        if refused.get("reason") == WHOLE_DRIVE:
+            return (
+                f"ComfyUI ignores its AYON root '{name}' "
+                f"({refused.get('path')}): a whole drive or share is only "
+                f"used while {PROJECTS_ENV} limits it to project folders. "
+                "AYON sets that when it launches ComfyUI; for another "
+                "ComfyUI, ask its administrator."
+            )
+        return f"ComfyUI ignores its AYON root '{name}'."
     return (
-        isinstance(exists, list)
-        and len(exists) == len(rootless)
-        and all(exists)
+        f"ComfyUI can't find {len(missing)} of the {len(rootless)} file(s) "
+        "below its AYON roots: they point elsewhere on that server, or "
+        f"{PROJECTS_ENV} doesn't include this project."
     )
 
 
-def container_files(
+def _reference_problem(  # noqa: PLR0913
+    comfy_url: str,
+    project_name: str,
+    filepaths: list[str],
+    session_secret: str,
+    plugin_features: frozenset[str] | None,
+) -> tuple[list[str] | None, str | None]:
+    """Return the rootless paths to reference, or None and why not."""
+    if plugin_features is not None and PATHS_FEATURE not in plugin_features:
+        return None, (
+            "The AYON plugin on ComfyUI can't read files by path (it is "
+            "older than this addon)."
+        )
+    rootless = rootless_paths(project_name, filepaths)
+    if rootless is None:
+        return None, (
+            f"The files aren't below an AYON root of project "
+            f"'{project_name}'."
+        )
+    problem = server_read_problem(comfy_url, rootless, session_secret)
+    if problem:
+        return None, problem
+    return rootless, None
+
+
+def _log_fallback(reason: str) -> None:
+    log.warning(
+        "Uploading the files to ComfyUI instead of referencing them. %s",
+        reason,
+    )
+
+
+def container_files(  # noqa: PLR0913
     comfy_url: str,
     project_name: str,
     filepaths: list[str],
@@ -141,40 +219,38 @@ def container_files(
     reference: bool = False,
     session_secret: str = "",
     plugin_features: frozenset[str] | None = None,
+    on_fallback: Callable[[str], None] | None = None,
 ) -> dict:
     """Return the container's file entries for `filepaths`.
+
+    Args:
+        comfy_url: The ComfyUI server.
+        project_name: The files' project.
+        filepaths: The files to load.
+        subfolder: The input subfolder to upload to.
+        reference: Reference the files in place, when the server can.
+        session_secret: This session's bridge secret.
+        plugin_features: What the AYON plugin on ComfyUI supports.
+        on_fallback: Called with why, when `reference` was asked but the
+            files are uploaded instead. Without it that's logged.
 
     Returns:
         `{"path_reference": {"files": [...]}, "image_upload_info": []}`
         when referencing by path, else `{"path_reference": None,
         "image_upload_info": [...]}` after uploading the files.
     """
-    if reference and plugin_features is not None and (
-        PATHS_FEATURE not in plugin_features
-    ):
-        log.warning(
-            "The AYON plugin on ComfyUI can't read files by path (it is "
-            "older than this addon); uploading them instead."
-        )
-        reference = False
     if reference:
-        rootless = rootless_paths(project_name, filepaths)
-        if rootless is None:
-            log.warning(
-                "The files aren't below an AYON root of '%s'; uploading "
-                "them to ComfyUI instead of referencing them.", project_name,
-            )
-        elif server_can_read(comfy_url, rootless, session_secret):
+        rootless, reason = _reference_problem(
+            comfy_url, project_name, filepaths, session_secret,
+            plugin_features,
+        )
+        if rootless is not None:
             log.info("Referencing %s file(s) on ComfyUI.", len(rootless))
             return {
                 "path_reference": {"files": rootless},
                 "image_upload_info": [],
             }
-        else:
-            log.warning(
-                "ComfyUI can't read the files at their AYON root (its AYON "
-                "roots are not configured for them); uploading instead."
-            )
+        (on_fallback or _log_fallback)(reason)
     return {
         "path_reference": None,
         "image_upload_info": upload_input_images(

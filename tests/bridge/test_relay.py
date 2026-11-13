@@ -18,7 +18,7 @@ from aiohttp import web
 
 REPO = Path(__file__).resolve().parents[2]
 RELAY_PATH = REPO / "client/ayon_comfyui/_comfyui_plugin/ayon_menu/bridge.py"
-if len(sys.argv) > 1:
+if __name__ == "__main__" and len(sys.argv) > 1:
     RELAY_PATH = Path(sys.argv[1])
 
 spec = importlib.util.spec_from_file_location("bridge", RELAY_PATH)
@@ -284,6 +284,11 @@ async def main():
     await runner.cleanup()
     print("FAILURES:", FAILS or "none")
     return 1 if FAILS else 0
+
+
+def test_relay():
+    """Run all relay checks (for pytest)."""
+    assert asyncio.run(main()) == 0, FAILS
 
 
 if __name__ == "__main__":

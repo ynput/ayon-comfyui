@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import pyblish.api
 from ayon_core.pipeline import registered_host
+from ayon_core.pipeline.publish import KnownPublishError
 
 if TYPE_CHECKING:
     from ayon_comfyui.api.pipeline import ComfyUIHost
@@ -27,12 +28,11 @@ class SaveCurrentScene(pyblish.api.ContextPlugin):
             return
 
         host: ComfyUIHost = registered_host()
-        if host.get_current_workfile() != current_file:
-            msg = (
-                "The active ComfyUI workflow changed during publishing. "
-                f"Expected workfile: {current_file}"
-            )
-            raise RuntimeError(msg)
-
         self.log.debug(f"Saving current file: {current_file}")  # noqa: G004
-        host.save_workfile(current_file)
+        # Fails when the active workflow (tab) no longer is `current_file`,
+        # e.g. because the user switched tabs while publishing, or when the
+        # workfile is open in another tab too.
+        try:
+            host.stub.save_workfile(current_file, in_place=True)
+        except RuntimeError as exc:
+            raise KnownPublishError(str(exc)) from exc
