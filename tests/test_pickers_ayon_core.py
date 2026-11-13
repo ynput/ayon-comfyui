@@ -99,6 +99,16 @@ class DiscoveryTests(unittest.TestCase):
         self.assertTrue(video.is_compatible_loader(
             {"product": PRODUCT, "representation": MOV}))
 
+    def test_model_loader_matches_published_models(self) -> None:
+        # Published model representations are named "glb", without a dot.
+        model = self.loaders["AYON Load 3D Model"]
+        product = {"productType": "model", "name": "modelMain"}
+        glb = {"name": "glb", "context": {"ext": "glb"}}
+        self.assertTrue(model.is_compatible_loader(
+            {"product": product, "representation": glb}))
+        self.assertFalse(model.is_compatible_loader(
+            {"product": product, "representation": PNG}))
+
     def test_load_into_node_action(self) -> None:
         action = next(
             cls for cls in self.plugins
