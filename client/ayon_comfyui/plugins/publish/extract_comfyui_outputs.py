@@ -73,6 +73,16 @@ class ExtractComfyUIOutputs(pyblish.api.InstancePlugin):
         ext = exts.pop()
         product_type = instance.data.get("productType")
         self._check_extension(product_type, ext)
+        if product_type != "image" and len(names) > 1:
+            # Only image sequences are numbered frames; several videos or
+            # models (a list input) don't make one representation.
+            msg = (
+                f"'{instance.data.get('productName')}' got {len(names)} "
+                f"files ({', '.join(sorted(names))}), but a "
+                f"{product_type} product publishes one. Feed its AYON save "
+                "node a single input."
+            )
+            raise KnownPublishError(msg)
 
         representations = instance.data.setdefault("representations", [])
         representation = {
