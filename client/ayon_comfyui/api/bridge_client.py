@@ -246,6 +246,28 @@ class BridgeClient:
             msg = f"ComfyUI didn't answer '{method}' within {timeout} s."
             raise BridgeError(msg, "timeout") from exc
 
+    def call_nowait(
+        self,
+        method: str | None,
+        params: dict | None = None,
+        timeout: float = 30.0,
+    ) -> concurrent.futures.Future:
+        """Start a call without waiting for it, e.g. from the Qt thread.
+
+        `method=None` asks the relay for a pairing code. The returned future
+        holds the result, or the error (also on timeout).
+
+        Raises:
+            BridgeError: When not connected to ComfyUI.
+        """
+        loop = self._loop
+        if loop is None or not self._registered or self._ws is None:
+            msg = "Not connected to ComfyUI."
+            raise BridgeError(msg, "not_connected")
+        return asyncio.run_coroutine_threadsafe(
+            asyncio.wait_for(self._call(method, params or {}), timeout), loop
+        )
+
     def request_pair_code(self, timeout: float = 10.0) -> str:
         """Ask the relay for a one-time code to pair a ComfyUI tab."""
         loop = self._loop
