@@ -21,11 +21,14 @@ from .nodes.publish_nodes import (
     AyonSaveNode,
     AyonSaveVideoNode,
 )
+from .paths import add_routes as add_path_routes
 from .ws_server import run_server
 
 # Routes on ComfyUI's own server that the AYON host and the paired ComfyUI
 # tab connect to.
 BRIDGE.add_routes(PromptServer.instance.routes)
+# Lets AYON check which files this server can read by path.
+add_path_routes(PromptServer.instance.routes)
 
 
 class AyonComfyUIExtension(ComfyExtension):
