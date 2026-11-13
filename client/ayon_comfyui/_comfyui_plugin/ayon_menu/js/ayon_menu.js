@@ -349,7 +349,64 @@ function serialize_graph() {
   return JSON.stringify(get_root_graph().serialize())
 }
 
-async function rename_workflow(store, workflow, name) {
+function same_workfile_path(a, b) {
+  const normalize = (path) => String(path).replace(/\\/g, "/")
+  return Boolean(a) && Boolean(b) && normalize(a) === normalize(b)
+}
+
+// The AYON workfile path that `workflow` (a tab), with AYON extra data
+// `ayon`, belongs to.
+// `graph.extra` is copied along when a user duplicates a workflow or uses
+// ComfyUI's own 'Save As'. So the path is only trusted for the workflow it
+// was recorded for, to never report (and then overwrite) another workflow's
+// AYON workfile.
+function claimed_workfile_path(workflow, ayon) {
+  const path = ayon?.workfile_path
+  if (!path) {
+    return null
+  }
+  if (ayon.comfy_workflow_path && workflow && workflow.path !== ayon.comfy_workflow_path) {
+    return null
+  }
+  return path
+}
+
+// Another open workflow (tab) that belongs to the AYON workfile at `path`.
+// Tabs restored from a previous session that were never shown aren't loaded,
+// so they can't be checked.
+function find_tab_with_workfile(store, path, except_workflow) {
+  const tabs = store.openWorkflows ?? []
+  return tabs.find((tab) => (
+    tab !== except_workflow &&
+    same_workfile_path(
+      claimed_workfile_path(tab, tab.activeState?.extra?.[AYON_EXTRA_KEY]),
+      path
+    )
+  )) ?? null
+}
+
+// Whether the saved file of a (closed) workflow was saved by AYON for the
+// AYON workfile at `path`.
+async function is_saved_for_workfile(workflow, path) {
+  try {
+    // Read the stored file instead of `workflow.load()`, which would also
+    // apply drafts and set up a change tracker for it.
+    const response = await app.api.getUserData(workflow.path)
+    if (!response.ok) {
+      return false
+    }
+    const saved = JSON.parse(await response.text())
+    return same_workfile_path(
+      claimed_workfile_path(workflow, saved?.extra?.[AYON_EXTRA_KEY]),
+      path
+    )
+  } catch (err) {
+    console.warn(`AYON: Unable to read workflow '${workflow.path}':`, err)
+    return false
+  }
+}
+
+async function rename_workflow(store, workflow, name, workfile_path) {
   // Rename the workflow (tab) to `name`, keeping it in its current directory.
   const directory = workflow.directory ?? "workflows"
   const new_path = `${directory}/${name}.json`
@@ -358,14 +415,89 @@ async function rename_workflow(store, workflow, name) {
   }
   const existing = store.getWorkflowByPath(new_path)
   if (existing && existing !== workflow) {
-    if (store.isOpen(existing)) {
-      throw new Error(`Workflow '${new_path}' is already open in another tab.`)
+    // Only replace a closed copy that ComfyUI saved earlier for this same
+    // AYON workfile, the file on disk managed by AYON is the source of
+    // truth. Leave any other workflow at that path untouched.
+    if (store.isOpen(existing) || !await is_saved_for_workfile(existing, workfile_path)) {
+      throw new Error(`A ComfyUI workflow named '${existing.filename ?? name}' already exists.`)
     }
-    // A closed ComfyUI-side copy of this same AYON workfile. The file on
-    // disk managed by AYON is the source of truth, so we replace it.
     await store.deleteWorkflow(existing)
   }
   await store.renameWorkflow(workflow, new_path)
+}
+
+// Step one of saving an AYON workfile: name the tab after the file, record
+// the AYON workfile path and return the serialized graph. The host writes it
+// to disk, then calls `finishSaveWorkfile`.
+// Returns `{error}` instead when the active workflow must not be saved.
+async function begin_save_workfile(data) {
+  const store = get_workflow_store()
+  const workflow = store?.activeWorkflow ?? null
+  const warnings = []
+
+  // Saving in place: the host asked for the active workflow's workfile path
+  // earlier, so make sure the user didn't switch tabs since.
+  if (data.in_place && !same_workfile_path(claimed_workfile_path(workflow, get_ayon_extra()), data.workfile_path)) {
+    return {
+      error: (
+        `The active ComfyUI workflow is no longer the AYON workfile ` +
+        `'${data.workfile_path}'. Switch back to its tab and try again.`
+      ),
+    }
+  }
+
+  if (!workflow) {
+    warnings.push("ComfyUI workflow store is unavailable; tab is not renamed or saved.")
+    set_ayon_extra({workfile_path: data.workfile_path, comfy_workflow_path: null})
+    return {workfile: serialize_graph(), comfy_workflow_path: null, warnings}
+  }
+
+  // An AYON workfile belongs to a single tab, so saving one tab can't
+  // overwrite the file another tab will save to later on.
+  const other = find_tab_with_workfile(store, data.workfile_path, workflow)
+  if (other) {
+    return {
+      error: (
+        `The AYON workfile '${data.workfile_path}' is already open in ` +
+        `ComfyUI tab '${other.filename ?? other.path}'. Close that tab first.`
+      ),
+    }
+  }
+
+  let renamed = true
+  if (data.workflow_name) {
+    try {
+      await rename_workflow(store, workflow, data.workflow_name, data.workfile_path)
+    } catch (err) {
+      renamed = false
+      console.warn("AYON: Failed to rename workflow:", err)
+      warnings.push(`The ComfyUI tab was not renamed: ${err?.message ?? err}`)
+    }
+    // Renaming waits for ComfyUI's server, the user may have switched tabs
+    // in the meantime. Only the active workflow's graph can be serialized.
+    if (!store.isActive(workflow)) {
+      return {
+        error: (
+          `The active ComfyUI tab changed while saving the AYON workfile ` +
+          `'${data.workfile_path}'. Switch back to it and try again.`
+        ),
+      }
+    }
+  }
+
+  set_ayon_extra({
+    workfile_path: data.workfile_path,
+    comfy_workflow_path: workflow.path,
+  })
+  sync_change_tracker(workflow)
+
+  return {
+    workfile: serialize_graph(),
+    // Only when the tab is named after the workfile do we also want
+    // to save it inside ComfyUI (see `finishSaveWorkfile`)
+    comfy_workflow_path: renamed ? workflow.path : null,
+    warnings,
+  }
 }
 
 function ensure_ayon_sidebar_style() {
@@ -920,61 +1052,19 @@ app.registerExtension({
         // Return the AYON workfile path the current workflow was saved to or
         // opened from, or null when it is not (or no longer) an AYON workfile.
         bridge.register('getWorkfilePath', (data) => {
-          const ayon = get_ayon_extra()
-          const path = ayon?.workfile_path
-          if (!path) {
-            return null
-          }
-
-          // `graph.extra` is copied along when a user duplicates a workflow
-          // or uses ComfyUI's own 'Save As'. Only trust the path for the
-          // workflow (tab) it was recorded for, so we never report (and then
-          // overwrite) another workflow's AYON workfile.
-          const active = get_workflow_store()?.activeWorkflow
-          if (ayon.comfy_workflow_path && active && active.path !== ayon.comfy_workflow_path) {
-            console.debug(
-              `AYON: Ignoring workfile path recorded for '${ayon.comfy_workflow_path}' ` +
-              `because the active workflow is '${active.path}'`
-            )
-            return null
-          }
-          return path
+          const active = get_workflow_store()?.activeWorkflow ?? null
+          return claimed_workfile_path(active, get_ayon_extra())
         })
 
-        // Step one of saving an AYON workfile: name the tab after the file,
-        // record the AYON workfile path and return the serialized graph.
-        // The host writes the result to disk, then calls `finishSaveWorkfile`.
+        // See `begin_save_workfile`. Errors and warnings are also shown in
+        // ComfyUI, since e.g. the Workfiles tool doesn't show the reason.
         bridge.register('beginSaveWorkfile', async (data) => {
-          const store = get_workflow_store()
-          const workflow = store?.activeWorkflow ?? null
-          const warnings = []
-          let renamed = true
-
-          if (workflow && data.workflow_name) {
-            try {
-              await rename_workflow(store, workflow, data.workflow_name)
-            } catch (err) {
-              renamed = false
-              console.warn("AYON: Failed to rename workflow:", err)
-              warnings.push(`Unable to rename ComfyUI workflow: ${err}`)
-            }
-          } else if (!workflow) {
-            warnings.push("ComfyUI workflow store is unavailable; tab is not renamed or saved.")
+          const result = await begin_save_workfile(data)
+          if (result.error) {
+            show_toast("error", result.error, 10000)
           }
-
-          set_ayon_extra({
-            workfile_path: data.workfile_path,
-            comfy_workflow_path: workflow?.path ?? null,
-          })
-          sync_change_tracker(workflow)
-
-          return {
-            workfile: serialize_graph(),
-            // Only when the tab is named after the workfile do we also want
-            // to save it inside ComfyUI (see `finishSaveWorkfile`)
-            comfy_workflow_path: renamed ? (workflow?.path ?? null) : null,
-            warnings,
-          }
+          result.warnings?.forEach((warning) => show_toast("warn", warning))
+          return result
         })
 
         // Step two of saving an AYON workfile: after the host wrote the file

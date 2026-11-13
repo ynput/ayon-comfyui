@@ -78,6 +78,8 @@ class RPCClientStub:  # noqa: PLR0904
     def __init__(self, client: BridgeClient) -> None:  # noqa: D107
         self.client = client
 
+    # def do_update_publishnodes(self) -> None: # Never used
+
     @tab_method()
     def getWorkfile(self):  # noqa: N802, ANN201
         """Call getWorkfile."""
@@ -127,14 +129,19 @@ class RPCClientStub:  # noqa: PLR0904
 
     @tab_method()
     def beginSaveWorkfile(  # noqa: N802, ANN201
-        self, *, workfile_path: str, workflow_name: str | None = None
+        self,
+        *,
+        workfile_path: str,
+        workflow_name: str | None = None,
+        in_place: bool = False,
     ):
         """Call beginSaveWorkfile.
 
         Renames the active ComfyUI workflow (tab) to `workflow_name`, stores
         `workfile_path` in the graph and returns a dict with the serialized
         graph (`workfile`), the ComfyUI workflow path (`comfy_workflow_path`)
-        and a list of `warnings`.
+        and a list of `warnings`. Or a dict with an `error` when the active
+        workflow must not be saved to `workfile_path`.
         """
 
     @tab_method()
@@ -453,7 +460,7 @@ class RPCStub:  # noqa : PLR0904
             log.debug(f"set_graph_extra failed: {e}")  # noqa: G004
             return None
 
-    def save_workfile(self, path: str) -> None:
+    def save_workfile(self, path: str, *, in_place: bool = False) -> None:
         """Save the active ComfyUI workflow as AYON workfile to `path`.
 
         The active workflow (tab) is renamed to match the filename, the path
@@ -461,13 +468,25 @@ class RPCStub:  # noqa : PLR0904
         is written to disk and finally saved in ComfyUI as well so the tab
         is no longer flagged as modified.
 
+        Args:
+            path: The workfile path to save to.
+            in_place: Only save when `path` still is the workfile of the
+                active workflow, e.g. because the user may have switched tabs
+                since it was queried.
+
         Raises:
-            RuntimeError: When the graph could not be retrieved from ComfyUI.
+            RuntimeError: When the graph could not be retrieved from ComfyUI
+                or ComfyUI refused to save the active workflow to `path`, e.g.
+                because another tab has that workfile open.
         """
         log.debug(f"save_workfile: {path}")  # noqa: G004
         result = self.client_stub.beginSaveWorkfile(
-            workfile_path=path, workflow_name=Path(path).stem
+            workfile_path=path,
+            workflow_name=Path(path).stem,
+            in_place=in_place,
         )
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
         if not isinstance(result, dict) or not result.get("workfile"):
             msg = (
                 f"Unable to retrieve workflow from ComfyUI to save: {path}\n"

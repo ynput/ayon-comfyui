@@ -13,6 +13,11 @@ python tests/bridge/test_client.py
 ```
 
 Each prints a `PASS`/`FAIL` line per check and exits non-zero on failure.
+They also run under pytest, one test per file:
+
+```shell
+pytest tests
+```
 
 - `test_relay.py`: pairing codes and tab credentials, newest tab wins,
   isolation between AYON sessions, relaying requests and responses (and
