@@ -296,9 +296,13 @@ class ComfyUIBridge(QtCore.QObject):
         """Describe the state of the session for the session window."""
         if not self.client.registered:
             if not self._ever_connected:
-                return (
-                    f"Waiting for ComfyUI at {self.comfy_url} to start..."
-                )
+                text = f"Waiting for ComfyUI at {self.comfy_url} to start..."
+                if self._process is not None:
+                    text += (
+                        " If it doesn't, check the ComfyUI console window "
+                        "for errors."
+                    )
+                return text
             return (
                 f"Lost the connection to ComfyUI at {self.comfy_url}. "
                 "Reconnecting..."
