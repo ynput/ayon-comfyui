@@ -9,8 +9,8 @@ import clique
 
 from ayon_core.lib.transcoding import IMAGE_EXTENSIONS
 
-from ayon_comfyui.api.pipeline import containerise
 from ayon_comfyui.api.plugin import ComfyUILoader
+from ayon_comfyui.api.rpc_stub import LoadType
 
 
 class ImageLoader(ComfyUILoader):
@@ -25,60 +25,11 @@ class ImageLoader(ComfyUILoader):
     icon = "image"
     order = -10
 
-    def load(
-        self,
-        context: dict,
-        name: str | None = None,
-        namespace: str | None = None,
-        options: dict | None = None,
-    ) -> None:
-        """Load asset via database.
+    load_type = LoadType.IMAGE
 
-        Arguments:
-            context (dict): Full parenthood of representation to load
-            name (str, optional): Use pre-defined name
-            namespace (str, optional): Use pre-defined namespace
-            options (dict, optional): Additional settings dictionary
-        """
-        # Retrieve filepath
-        filepaths = self.expand_files_if_sequence(context)
-        self.log.debug(filepaths)
-        folder = f"{namespace}_{name}" if namespace else name
-        files = self.make_files_available(
-            context, filepaths, folder,
-            reference=bool((options or {}).get("reference_files")),
-        )
-
-        # containerizing also adds to context.
-        container: dict = containerise(
-            name=name,
-            namespace=namespace,
-            context=context,
-            loader=self.__class__.__name__,
-            **files,
-        )
-
-        # Create the image loader node with the data on it.
-        self.stub.create_load_node(container)
-
-    def remove(self, container: dict) -> None:
-        """Remove container from context and scene."""
-        self.stub.remove_containers(container)
-        self.stub.remove_load_nodes(container)
-
-    def update(self, container: dict, context: dict) -> None:
-        """Point the container at another version's files.
-
-        Uploads them into the same input subfolder, or references them
-        when the container already did.
-        """
-        filepaths = self.expand_files_if_sequence(context)
-        self.update_files(container, context, filepaths)
-        self.stub.update_containers(container)
-
-    def switch(self, container: dict, context: dict) -> None:
-        """Provide interface for switching calls."""
-        self.update(container=container, context=context)
+    def get_upload_files(self, context: dict) -> list[str]:
+        """Return all images of the sequence, if it is one."""
+        return self.expand_files_if_sequence(context)
 
     def expand_files_if_sequence(self, context: dict) -> list[str]:
         """Return all images in sequence if appliccable."""
