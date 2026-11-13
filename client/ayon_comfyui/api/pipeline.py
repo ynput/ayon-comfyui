@@ -33,6 +33,7 @@ from ayon_core.pipeline import (
 from ayon_comfyui import COMFYUI_ADDON_ROOT
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.bridge import get_stub
+from ayon_comfyui.api.load_util import export_site_roots
 from ayon_comfyui.api.rpc_stub import RPCStub
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
@@ -76,6 +77,10 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         # Pyblish
         pyblish.api.register_host("comfyui")
         pyblish.api.register_plugin_path(PUBLISH_PATH)
+
+        # A ComfyUI that AYON launches next inherits this environment and
+        # can then read loaded files by path when the artist asks for it.
+        export_site_roots(get_current_project_name())
 
     def get_containers(self):
         return ls()
@@ -219,6 +224,7 @@ def containerise(  # noqa: PLR0913, PLR0917
     image_upload_info: dict | list[dict],
     loader: str | None = None,
     suffix: str | None = "_CON",
+    path_reference: dict | None = None,
 ) -> dict:
     """Imprint layer with metadata.
 
@@ -233,6 +239,9 @@ def containerise(  # noqa: PLR0913, PLR0917
                                   gotten back from /upload/image endpoint
         loader (str, optional): Name of loader used to produce this container.
         suffix (str, optional): Suffix of container, defaults to `_CON`.
+        path_reference (dict, optional): `{"files": [rootless paths]}` when
+            the load node reads the files in place on the ComfyUI server
+            instead of uploaded copies.
 
     Returns:
         container (str): Name of container assembly
@@ -250,11 +259,13 @@ def containerise(  # noqa: PLR0913, PLR0917
         "name": name,
         "namespace": namespace,
         "loader": str(loader),
-        "image_upload_info": image_upload_info,
+        "image_upload_info": image_upload_info or [],
         "representation": context["representation"]["id"],
         "container_uuid": str(uuid4()),
         "container_name": container_name,
     }
+    if path_reference:
+        data["path_reference"] = path_reference
     stub = get_stub()
 
     # TODO(@sas): Expand stub logic to keep track of containers separately,

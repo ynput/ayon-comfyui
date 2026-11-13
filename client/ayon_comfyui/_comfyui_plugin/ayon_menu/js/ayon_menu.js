@@ -427,6 +427,22 @@ function get_root_graph() {
   return app.rootGraph ?? app.graph
 }
 
+// The JSON an AYON node stores in `widget`, or null for a node that has
+// none yet (e.g. added from the node library, nothing picked) or invalid.
+function parse_node_json(node, widget) {
+  const text = widget?.value
+  if (typeof text !== "string" || !text) {
+    return null
+  }
+  try {
+    const value = JSON.parse(text)
+    return value && typeof value === "object" ? value : null
+  } catch (err) {
+    console.warn(`AYON: Node ${node.id} has invalid AYON data`, err)
+    return null
+  }
+}
+
 function merge_into_extra(target, extra) {
   Object.keys(extra).forEach((key) => {
     const value = extra[key]
@@ -820,87 +836,167 @@ function register_ayon_sidebar_tab() {
   })
 }
 
+// The prompts this tab queued, newest first, as {prompt_id, workflow_id,
+// workflow_path}. The AYON host only publishes earlier runs ("Recook on
+// publish" off) from these, and only those of the workflow being
+// published, so it never picks up another artist's run, or a duplicated
+// workflow's run, of the same AYON instance. The workflow is identified by
+// its graph id, which survives renames (AYON saves a workfile by renaming
+// the tab) while a duplicated workflow gets a new one. Kept in
+// sessionStorage so they survive reloads of the tab.
+const AYON_QUEUED_PROMPTS_KEY = "ayon.queued_prompts"
+const AYON_QUEUED_PROMPTS_LIMIT = 200
+
+function get_queued_prompts() {
+  try {
+    const entries = JSON.parse(sessionStorage.getItem(AYON_QUEUED_PROMPTS_KEY) ?? "[]")
+    return Array.isArray(entries)
+      ? entries.filter((entry) => typeof entry?.prompt_id === "string")
+      : []
+  } catch (err) {
+    return []
+  }
+}
+
+function remember_queued_prompt(prompt_id, workflow) {
+  if (typeof prompt_id !== "string" || !prompt_id) {
+    return
+  }
+  try {
+    const entries = get_queued_prompts().filter((entry) => entry.prompt_id !== prompt_id)
+    entries.unshift({prompt_id, ...workflow})
+    sessionStorage.setItem(
+      AYON_QUEUED_PROMPTS_KEY,
+      JSON.stringify(entries.slice(0, AYON_QUEUED_PROMPTS_LIMIT))
+    )
+  } catch (err) {
+    console.warn("AYON: Unable to remember queued prompt", err)
+  }
+}
+
+// The active workflow's identity: graph id and ComfyUI path.
+function active_workflow_identity() {
+  return {
+    workflow_id: get_root_graph()?.id ?? null,
+    workflow_path: get_workflow_store()?.activeWorkflow?.path ?? null,
+  }
+}
+
+// The Comfy.org credentials of this tab's last own run. The frontend only
+// sets them on the api object while it queues a prompt, from internal
+// stores, so they're captured there; kept in memory only, never stored.
+let LAST_QUEUE_CREDENTIALS = null
+// Comfy.org (Firebase) login tokens expire after an hour; used when a
+// token's own expiry can't be read.
+const AUTH_TOKEN_MAX_AGE_MS = 50 * 60 * 1000
+// Set while AYON queues a load node preview itself: that's not the
+// artist's run, so it neither counts as one nor says anything about the
+// artist's Comfy.org login.
+let QUEUEING_PREVIEW = false
+
+// When a Comfy.org login token (a JWT) expires, in ms, or null.
+function token_expiry(token) {
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")
+    const exp = JSON.parse(atob(payload)).exp
+    return typeof exp === "number" ? exp * 1000 : null
+  } catch (err) {
+    return null
+  }
+}
+
+function capture_credentials(api) {
+  const auth_token = api?.authToken ?? null
+  const api_key = api?.apiKey ?? null
+  if (!auth_token && !api_key) {
+    // Logged out (or never logged in): forget an earlier login.
+    LAST_QUEUE_CREDENTIALS = null
+    return
+  }
+  const previous = LAST_QUEUE_CREDENTIALS
+  const same_token = previous && previous.auth_token === auth_token
+  LAST_QUEUE_CREDENTIALS = {
+    auth_token,
+    api_key,
+    // Keep when the token was first seen, so a token left on the api object
+    // can't look fresh forever.
+    expires: same_token
+      ? previous.expires
+      : (auth_token && token_expiry(auth_token)) || Date.now() + AUTH_TOKEN_MAX_AGE_MS,
+  }
+}
+
+// Record every prompt this tab queues (Run, Queue, partial runs), with the
+// workflow it was queued from.
+function track_queued_prompts(api) {
+  const original = api?.queuePrompt
+  if (typeof original !== "function" || original.__ayon_tracked) {
+    return
+  }
+  const tracked = async function (...args) {
+    if (QUEUEING_PREVIEW) {
+      return original.apply(this, args)
+    }
+    const workflow = active_workflow_identity()
+    capture_credentials(this)
+    const result = await original.apply(this, args)
+    remember_queued_prompt(result?.prompt_id, workflow)
+    return result
+  }
+  tracked.__ayon_tracked = true
+  api.queuePrompt = tracked
+}
+
+// The `extra_data` the frontend adds when it queues a prompt itself
+// (ComfyApi.queuePrompt): Comfy.org credentials for API nodes, and the
+// preview method. ComfyUI keeps the credentials out of its history.
+function queue_extra_data() {
+  const extra = {}
+  const credentials = LAST_QUEUE_CREDENTIALS
+  if (credentials?.api_key) {
+    extra.api_key_comfy_org = credentials.api_key
+  }
+  // A minute of margin for the time until ComfyUI uses it.
+  if (credentials?.auth_token && Date.now() < credentials.expires - 60 * 1000) {
+    extra.auth_token_comfy_org = credentials.auth_token
+  }
+  const preview_method = app.extensionManager?.setting?.get?.("Comfy.Execution.PreviewMethod")
+  if (preview_method && preview_method !== "default") {
+    extra.preview_method = preview_method
+  }
+  return extra
+}
+
+// Queue just `node` so it shows its preview (load nodes only: they have no
+// inputs to compute).
+async function execute_single_node(node) {
+  const prompt = await app.graphToPrompt()
+  const id = `${node.id}`
+  if (!prompt.output[id]) {
+    return
+  }
+  QUEUEING_PREVIEW = true
+  try {
+    await app.api.queuePrompt(0, {output: {[id]: prompt.output[id]}})
+  } finally {
+    QUEUEING_PREVIEW = false
+  }
+}
+
+function preview_load_node(node) {
+  execute_single_node(node).catch((err) => {
+    console.warn("AYON: Unable to show the load node's preview", err)
+  })
+}
+
 app.registerExtension({
     name: AYON_EXTENSION_NAME,
-    async afterConfigureGraph(graphData) {
-
-        async function execute_single_node(node) {
-          const proompt = await app.graphToPrompt(node.graph);
-          const id = `${node.id}`;
-          const output_obj = {}
-          output_obj[id] = proompt.output[id]
-          
-          const prompt_t = {
-            output: output_obj  
-          };
-          
-          console.log(prompt_t)
-          await app.api.queuePrompt(0,prompt_t);
-        }
-
-        async function generate_thumbnails_loadimage_nodes(){
-          const nodeType = "AYON Load Image"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        async function generate_thumbnails_loadvideo_nodes(){
-          const nodeType = "AYON Load Video"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        async function generate_thumbnails_load3dmodel_nodes(){
-          const nodeType = "AYON 3D Model Save"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        console.log("AYON: Graph loaded.");
-        // generate thumbnails for AYON Load Images / AYON Load Videos
-        requestAnimationFrame(() =>{
-          console.log("animation frame retrieved, cooking Load Image thumbnails")
-          generate_thumbnails_loadimage_nodes()
-          generate_thumbnails_loadvideo_nodes()
-          generate_thumbnails_load3dmodel_nodes() // Don't know if this will actually make UI thumbnails, but it will at least load stuff in memory
-      })
-    },
     async setup() {
         console.log("AYON")
 
-        this.map_images = new Map()
-        this.expecting_id = null
-        this.resolved_id = null
-
         ensure_ayon_sidebar_style()
         register_ayon_sidebar_tab()
-
-        function get_this() {
-          return get_ayon_extension()
-        }
-
-        function reset_expectations(expecting = null) {
-          const local_this = get_this()
-          local_this.expecting_id = expecting
-          local_this.resolved_id = null
-        }
-
-        function predictate_is_resolved(){
-          const local_this = get_this()
-          return local_this.expecting_id == local_this.resolved_id
-        }
+        track_queued_prompts(app.api)
 
         // v2 adapter for newer comfyui
         function get_workfiles_v2(){
@@ -951,86 +1047,6 @@ app.registerExtension({
           const data = JSON.parse(data_str).data
 
           return data
-        }
-
-        app.api.addEventListener("executed", (e) => {
-          console.log("EXECUTED EVENT:", e.detail);
-          const local_this = get_this()
-          // map node id (e.g. '29') to array of output images.
-          local_this.map_images[e.detail.node] = e.detail.output?.images;
-          local_this.resolved_id = e.detail.node
-          console.log(local_this)
-        })
-
-        function waitForFlag(getFlagFn, interval = 100) {
-          return new Promise((resolve) => {
-              const timer = setInterval(() => {
-                  try {
-                      if (getFlagFn()) {
-                          clearInterval(timer);
-                          resolve();
-                      }
-                  } catch (err) {
-                      clearInterval(timer);
-                      throw err; // Stop if condition function throws
-                  }
-              }, interval);
-          });
-        }
-
-        async function execute_single_node(node) {
-          const proompt = await app.graphToPrompt(node.graph);
-          const id = `${node.id}`;
-          const output_obj = {}
-          output_obj[id] = proompt.output[id]
-          
-          const prompt_t = {
-            output: output_obj  
-          };
-          console.log(prompt_t)
-          await app.api.queuePrompt(0,prompt_t);
-        }
-
-        async function execute_node_subgraph(node_out) {
-          const proompt = await app.graphToPrompt(node_out.graph);
-        
-          const subgraph = {};
-          const stack = [node_out.id];
-        
-          while (stack.length) {
-            const id = stack.pop();
-            if (subgraph[id]) continue;
-          
-            const node = proompt.output[id];
-            if (!node) continue;
-          
-            subgraph[id] = node;
-          
-            for (const input of Object.values(node.inputs || {})) {
-              if (Array.isArray(input)) {
-                stack.push(input[0]);
-              }
-            }
-          }
-          console.log(subgraph)
-          return await app.api.queuePrompt(0, {
-            output: subgraph
-          });
-        }
-
-        async function getNodeImages(node,recook) {
-          const local_this = get_this();
-          
-          if (!recook){
-            return local_this.map_images[node.id]
-          }
-
-          reset_expectations(node.id)
-          await execute_node_subgraph(node)
-          await waitForFlag(() => predictate_is_resolved())
-          reset_expectations()
-
-          return local_this.map_images[node.id]
         }
 
         function addNodeAtCenter_v1(type) {
@@ -1108,18 +1124,6 @@ app.registerExtension({
 
         }
 
-        async function nodeRetrieveImages(node, recook) {
-          // Return references to the node's outputs; the AYON host builds
-          // the `/view` URLs to download them from its own ComfyUI URL.
-          // Flatten in case of "animated" output. This outputs a list of arrays.
-          const images = ((await getNodeImages(node, recook)) ?? []).flat()
-          return images.map((image) => ({
-            filename: image.filename,
-            subfolder: (image.subfolder ?? "").replaceAll("\\", "/"),
-            type: image.type,
-          }))
-        }
-
         // Requests from the AYON host arrive over the bridge; the handlers
         // below run them against this tab's graph.
         const bridge = new AyonBridge(bridge_ws_url(app.api))
@@ -1130,8 +1134,28 @@ app.registerExtension({
           notify_bridge_change(bridge)
         })
         bridge.addEventListener("notice", (event) => {
-          show_toast("warn", event.detail)
+          show_toast("warn", event.detail, 10000)
         })
+
+        // The API-format prompt of the active workflow, made by the
+        // frontend's own conversion (bypass, subgraphs, reroutes,
+        // primitives), for the AYON host to queue when publishing.
+        bridge.register('getApiPrompt', async () => {
+          const {output, workflow} = await app.graphToPrompt()
+          return {
+            prompt: output,
+            workflow,
+            client_id: app.api.clientId ?? app.api.initialClientId ?? null,
+            ...active_workflow_identity(),
+            extra_data: queue_extra_data(),
+          }
+        })
+
+        // The prompts this tab queued, newest first.
+        bridge.register('getQueuedPrompts', () => {
+          return {prompts: get_queued_prompts()}
+        })
+
 
         bridge.register('getWorkfile', (data) => {
           // Serialize the live graph so the result always reflects the
@@ -1243,9 +1267,9 @@ app.registerExtension({
           let ayon_remove = [];
 
           foundNodes.forEach(node => {
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_info")
-            const ayon_info = JSON.parse(info_widget.value)
-            if (data.ids_to_remove.includes(ayon_info.instance_id)) {
+            const info_widget = node.widgets?.find(widget => widget.name == "ayon_info")
+            const ayon_info = parse_node_json(node, info_widget)
+            if (ayon_info && data.ids_to_remove.includes(ayon_info.instance_id)) {
               to_remove.push(node)
               ayon_remove.push(ayon_info)
             }
@@ -1259,32 +1283,6 @@ app.registerExtension({
           
           return json_removed
         })
-
-        bridge.register('getPublishNodeImages', async (data) => {
-          const nodeType = data.node_type;
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log("getting publish node images", data)
-          for (const node of foundNodes) {
-
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_info");
-            const ayon_info = JSON.parse(info_widget.value);
-            // let recook = ayon_info.creator_attributes.force_recook_on_publish;
-
-            const recook_widget = node.widgets.find(widget => widget.name == "recook")
-            const recook = recook_widget.value
-
-            console.log(ayon_info, data.id_for_images)
-
-            if (data.id_for_images == ayon_info.instance_id) {
-              console.log("Retrieving images")
-              let imgs = await nodeRetrieveImages(node, recook);
-              console.log(imgs);
-              return JSON.stringify(imgs);
-            }
-  
-            }
-          return JSON.stringify([]); // none found
-        });
 
         bridge.register('addLoadProductNode', (data) => {
           const nodeType = data.node_type
@@ -1298,7 +1296,7 @@ app.registerExtension({
           loadimg_node.color = "#233"
           loadimg_node.bgcolor = "#355"
           app.graph.setDirtyCanvas(true, true);
-          execute_single_node(loadimg_node); // make sure image shows up
+          preview_load_node(loadimg_node)
           return true
         });
 
@@ -1310,9 +1308,9 @@ app.registerExtension({
           let ayon_remove = [];
 
           foundNodes.forEach(node => {
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
-            const ayon_info = JSON.parse(info_widget.value)
-            if (data.ids_to_remove.includes(ayon_info.container_uuid)) {
+            const info_widget = node.widgets?.find(widget => widget.name == "ayon_container_info")
+            const ayon_info = parse_node_json(node, info_widget)
+            if (ayon_info && data.ids_to_remove.includes(ayon_info.container_uuid)) {
               to_remove.push(node)
               ayon_remove.push(ayon_info)
             }
@@ -1327,29 +1325,44 @@ app.registerExtension({
           return json_removed
         })
 
-        bridge.register('updateLoadProductNode', async (data) => {
+        // Write an updated container onto its load node(s). Returns whether
+        // a node with that container was found.
+        bridge.register('updateLoadProductNode', (data) => {
           const nodeType = data.node_type
-          let foundNodes = null
-
-          
-          if (nodeType == "ALL") {
-            const nodes = ["AYON Load Image", "AYON Load Video", "AYON Load 3D Model"]
-            foundNodes = app.graph.nodes.filter((node) => nodes.includes(node.type));
-          } else {
-            foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          }
+          const types = nodeType == "ALL"
+            ? ["AYON Load Image", "AYON Load Video", "AYON Load 3D Model"]
+            : [nodeType]
           const ayon_info_update = JSON.parse(data.container_json)
 
-          foundNodes.forEach(async (node) => {
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
-            const ayon_info = JSON.parse(info_widget.value)
-            if (ayon_info_update.container_uuid == ayon_info.container_uuid) {
-              info_widget.value = data.container_json
-              execute_single_node(node); // make sure image shows up
-              return true
+          let updated = false
+          for (const node of app.graph.nodes) {
+            if (!types.includes(node.type)) {
+              continue
             }
-          });
-          return true
+            const info_widget = node.widgets?.find(widget => widget.name == "ayon_container_info")
+            let ayon_info = null
+            try {
+              ayon_info = JSON.parse(info_widget?.value ?? "null")
+            } catch (err) {
+              console.warn(`AYON: Load node ${node.id} has invalid container data`, err)
+              continue
+            }
+            if (ayon_info?.container_uuid !== ayon_info_update.container_uuid) {
+              continue
+            }
+            updated = true
+            if (info_widget.value === data.container_json) {
+              // Unchanged (the host sends every container on an update):
+              // don't queue a preview run for nothing.
+              continue
+            }
+            info_widget.value = data.container_json
+            preview_load_node(node)
+          }
+          if (updated) {
+            app.graph.setDirtyCanvas(true, true)
+          }
+          return updated
         });
 
 

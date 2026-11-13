@@ -474,6 +474,27 @@ class ComfyUIBridge(QtCore.QObject):
 
         future.add_done_callback(_log_failure)
 
+    def show_notice(self, message: str) -> None:
+        """Show `message` to the artist in the ComfyUI tab, as a warning.
+
+        Doesn't wait for the tab. Without a tab, or with one older than
+        this addon, nothing is shown; log the message as well.
+        """
+        try:
+            future = self.client.call_nowait(
+                "showNotice", {"message": message}
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("Unable to show a notice in ComfyUI", exc_info=True)
+            return
+
+        def _log_failure(done: concurrent.futures.Future) -> None:
+            if not done.cancelled() and done.exception() is not None:
+                log.debug("Unable to show a notice in ComfyUI: %s",
+                          done.exception())
+
+        future.add_done_callback(_log_failure)
+
     # --- requests from the tab (bridge worker thread) ---------------------
 
     def run_in_main_thread(self, func: Callable[[], Any]) -> None:

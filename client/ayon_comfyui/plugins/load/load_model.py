@@ -9,7 +9,6 @@ import clique
 from ayon_comfyui.api.pipeline import containerise
 from ayon_comfyui.api.plugin import ComfyUILoader
 from ayon_comfyui.api.rpc_stub import LoadType
-from ayon_comfyui.api.upload_util import upload_input_images
 
 
 class ModelLoader(ComfyUILoader):
@@ -22,16 +21,18 @@ class ModelLoader(ComfyUILoader):
     """
 
     product_types: ClassVar[set[str]] = {"model"}
-    representations: ClassVar[set[str]] = {
-        ".gltf",
-        ".glb",
-        ".obj",
-        ".fbx",
-        ".stl",
-        ".spz",
-        ".splat",
-        ".ply",
-        ".ksplat",
+    # Published representations are named by their extension, without dot.
+    representations: ClassVar[set[str]] = {"*"}
+    extensions: ClassVar[set[str]] = {
+        "gltf",
+        "glb",
+        "obj",
+        "fbx",
+        "stl",
+        "spz",
+        "splat",
+        "ply",
+        "ksplat",
     }
     label = "Load model into current graph."
     icon = "robot"
@@ -56,18 +57,18 @@ class ModelLoader(ComfyUILoader):
         filepaths = self.filepath_from_context(context=context)
         self.log.debug(filepaths)
         folder = f"{namespace}_{name}" if namespace else name
-        # Upload video to ComfyUI.
 
-        image_upload_info = upload_input_images(
-            [filepaths], self.comfy_url, subfolder=folder
+        files = self.make_files_available(
+            context, [filepaths], folder,
+            reference=bool((options or {}).get("reference_files")),
         )
         # containerizing also adds to context.
         container: dict = containerise(
             name=name,
             namespace=namespace,
             context=context,
-            image_upload_info=image_upload_info,
             loader=self.__class__.__name__,
+            **files,
         )
 
         # Create the video loader node with the data on it.
@@ -79,20 +80,13 @@ class ModelLoader(ComfyUILoader):
         self.stub.remove_load_nodes(container, LoadType.MODEL3D)
 
     def update(self, container: dict, context: dict) -> None:
-        """Update container with new uploded file."""
-        # Retrieve filepaths
-        # filepath = self.filepath_from_context(context=context)
+        """Point the container at another version's files.
+
+        Uploads them into the same input subfolder, or references them
+        when the container already did.
+        """
         filepaths = [self.filepath_from_context(context=context)]
-        # Upload model to ComfyUI.
-        old_subfolder = next(iter(container["image_upload_info"]))["subfolder"]
-
-        image_upload_info = upload_input_images(
-            filepaths, self.comfy_url, subfolder=old_subfolder
-        )
-
-        container["representation"] = context["representation"]["id"]
-        container["image_upload_info"] = image_upload_info
-
+        self.update_files(container, context, filepaths)
         self.stub.update_containers(container)
 
     def switch(self, container: dict, context: dict) -> None:

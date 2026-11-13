@@ -3,6 +3,7 @@ repo_url: https://github.com/ynput/ayon-comfyui
 
 nav:
   - Home: index.md
+  - Publishing and loading: publish_and_load.md
   - License: license.md
 
 theme:

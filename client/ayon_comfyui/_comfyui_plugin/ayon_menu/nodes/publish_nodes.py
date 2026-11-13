@@ -1,12 +1,24 @@
+"""AYON save nodes: write the outputs of a publish instance.
+
+Each node writes into its own staging folder inside ComfyUI's output
+directory, `AYON/<instance id>/<prompt id>/`, so runs of different instances,
+prompts or artists never overwrite each other. Nothing here talks to AYON:
+the AYON host queues the prompt, waits for it in ComfyUI's history and reads
+the files from the node's `ayon` UI output (see `ayon_output_entry`).
+"""
+
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import shutil
 import struct
+import time
+import uuid
 from fractions import Fraction
-from pathlib import Path
 from secrets import token_hex
-from traceback import print_tb
 
 import av
 import av.audio.resampler
@@ -18,24 +30,175 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from torch import Tensor
 
+try:
+    from comfy_execution.utils import get_executing_context
+except ImportError:  # ComfyUI before the execution context existed
+    get_executing_context = None
 
-def get_filename_prefix(ayon_json: dict) -> str:
+log = logging.getLogger(__name__)
 
+# Folder in ComfyUI's output directory that holds all AYON outputs.
+AYON_OUTPUT_ROOT = "AYON"
+# Every run of a save node writes a new folder; keep this many per instance
+# (the newest), so publishing an earlier run still finds its files without
+# the output directory growing forever.
+KEEP_RUNS_PER_INSTANCE = 5
+# ...and never delete runs younger than this (seconds), since copies of a
+# workfile (other artists, on a shared ComfyUI) write to the same folder.
+KEEP_RUNS_MIN_AGE = 24 * 60 * 60
+
+_UNSAFE_ID_CHARS = re.compile(r"[^A-Za-z0-9_-]")
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+_MAX_ID_LENGTH = 64
+
+
+def parse_ayon_info(ayon_info: str) -> dict:
+    """Return the publish instance stored on an AYON save node."""
+    try:
+        data = json.loads(ayon_info)
+    except (TypeError, ValueError) as exc:
+        msg = (
+            "The AYON save node has no valid publish instance data. Recreate "
+            "it with the AYON Creator."
+        )
+        raise ValueError(msg) from exc
+    if not isinstance(data, dict) or not isinstance(
+        data.get("creator_attributes"), dict
+    ):
+        msg = (
+            "The AYON save node's publish instance data is incomplete. "
+            "Recreate it with the AYON Creator."
+        )
+        raise ValueError(msg)
+    return data
+
+
+def _safe_id(value: object) -> str:
+    return _UNSAFE_ID_CHARS.sub("", str(value or ""))[:_MAX_ID_LENGTH]
+
+
+def safe_file_stem(value: object, fallback: str = "ayon") -> str:
+    """Return `value` usable as (the start of) a file name."""
+    stem = _UNSAFE_NAME_CHARS.sub("", str(value or "")).lstrip(".")
+    return stem[:_MAX_ID_LENGTH] or fallback
+
+
+def current_prompt_id() -> str | None:
+    """Return the id of the prompt being executed, if ComfyUI tells us."""
+    if get_executing_context is None:
+        return None
+    context = get_executing_context()
+    if context is None:
+        return None
+    return _safe_id(context.prompt_id) or None
+
+
+def staging_folder(ayon_json: dict) -> tuple[str, str, str, str]:
+    """Return the staging folder of a publish instance for this prompt.
+
+    Returns:
+        Tuple of the absolute folder, its subfolder relative to the output
+        directory (with forward slashes), the instance id and the prompt id.
+    """
+    instance_id = str(ayon_json.get("instance_id") or "")
+    try:
+        valid = str(uuid.UUID(instance_id)) == instance_id
+    except ValueError:
+        valid = False
+    if not valid:
+        msg = (
+            "The AYON save node's publish instance has no valid instance id. "
+            "Recreate it with the AYON Creator."
+        )
+        raise ValueError(msg)
+    prompt_id = current_prompt_id() or f"run-{token_hex(8)}"
+
+    output_dir = os.path.abspath(folder_paths.get_output_directory())
+    subfolder = f"{AYON_OUTPUT_ROOT}/{instance_id}/{prompt_id}"
+    folder = os.path.abspath(os.path.join(output_dir, subfolder))
+    if os.path.commonpath([folder, output_dir]) != output_dir:
+        msg = f"Refusing to write outside the output directory: {folder}"
+        raise ValueError(msg)
+    os.makedirs(folder, exist_ok=True)
+    prune_old_runs(os.path.dirname(folder), keep=folder)
+    return folder, subfolder, instance_id, prompt_id
+
+
+def prune_old_runs(instance_folder: str, keep: str) -> None:
+    """Delete an instance's run folders beyond the newest, once old."""
+    try:
+        runs = [
+            entry for entry in os.scandir(instance_folder)
+            if entry.is_dir(follow_symlinks=False) and entry.path != keep
+        ]
+        runs.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+        cutoff = time.time() - KEEP_RUNS_MIN_AGE
+    except OSError:
+        return
+    for entry in runs[KEEP_RUNS_PER_INSTANCE - 1:]:
+        try:
+            if entry.stat().st_mtime > cutoff:
+                # Recent: e.g. another artist working on a copy of this
+                # workfile may be about to publish it.
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(entry.path, ignore_errors=True)
+        log.debug("AYON: Removed old outputs %s", entry.path)
+
+
+def file_stem(ayon_json: dict) -> str:
+    """Return the file name stem chosen in the creator attributes.
+
+    The prefix and unique name are both optional (PR #40); without either,
+    the product name is used.
+    """
     creator_attrs = ayon_json["creator_attributes"]
-    product_name = ayon_json["productName"]
+    parts = [safe_file_stem(creator_attrs.get("prefix"), "")]
+    if creator_attrs.get("use_unique_name", True):
+        parts.append(safe_file_stem(creator_attrs.get("unique_name"), ""))
+    stem = "_".join(part for part in parts if part)
+    return stem or safe_file_stem(ayon_json.get("productName"))
 
-    file_prefix = creator_attrs.get("prefix", "")
-    use_unique_name = creator_attrs.get("use_unique_name", True)
-    unique_name = creator_attrs.get("unique_name", "")
 
-    if use_unique_name and unique_name:
-        file_prefix = f"{file_prefix}_{unique_name}"
+def unique_filename(folder: str, filename: str) -> str:
+    """Return `filename`, or a numbered variant that doesn't exist yet.
 
-    # if no prefix or unique_name is provided, fallback to the product name
-    if not file_prefix:
-        file_prefix = product_name
+    A node runs more than once per prompt when its input is a list, and all
+    runs write into the same staging folder.
+    """
+    if not os.path.exists(os.path.join(folder, filename)):
+        return filename
+    stem, ext = os.path.splitext(filename)
+    index = 2
+    while os.path.exists(os.path.join(folder, f"{stem}_{index}{ext}")):
+        index += 1
+    return f"{stem}_{index}{ext}"
 
-    return f"AYON/{product_name}/{file_prefix}"
+
+def output_file(filename: str, subfolder: str, role: str = "main") -> dict:
+    """Describe one file a save node wrote, for the AYON host."""
+    return {
+        "filename": filename,
+        "subfolder": subfolder,
+        "type": "output",
+        "role": role,
+    }
+
+
+def ayon_output_entry(
+    instance_id: str, prompt_id: str, files: list[dict]
+) -> dict:
+    """Return the `ayon` UI output entry the AYON host collects.
+
+    The files are nested inside the entry, so ComfyUI doesn't treat them as
+    extra previews.
+    """
+    return {
+        "instance_id": instance_id,
+        "prompt_id": prompt_id,
+        "files": files,
+    }
 
 
 class AyonSaveNode(io.ComfyNode):
@@ -73,83 +236,57 @@ class AyonSaveNode(io.ComfyNode):
         recook: bool,  # Not used in code.
         ayon_info: str,
     ) -> io.NodeOutput:
-        """Main execution function."""
-
-        # parse ayon_info and retrieve settings from there.
-        try:
-            ayon_json = json.loads(ayon_info)
-        except BaseException as e:
-            print_tb(e)
-
+        """Save the images as a numbered PNG sequence."""
+        ayon_json = parse_ayon_info(ayon_info)
         creator_attrs = ayon_json["creator_attributes"]
-        keep_metadata = creator_attrs["keep_metadata"]
-        compress_level = creator_attrs.get("compression_level", 4)
 
-        output_dir = folder_paths.get_output_directory()
+        keep_metadata = bool(creator_attrs.get("keep_metadata", True))
+        compress_level = int(creator_attrs.get("compression_level", 4))
+        stem = file_stem(ayon_json)
 
-        # for:
-        # folder_paths.get_save_image_path(
-        #     filename_prefix = "renders/dragon"
-        #     self.output_dir = "C:/ComfyUI/output"
-        #     width = 1024
-        #     height = 1024
-        # )
+        folder, subfolder, instance_id, prompt_id = staging_folder(ayon_json)
 
-        # full_output_folder = "C:/ComfyUI/output/renders"
-        # filename = "dragon_1024x1024"
-        # counter = 1 <- increments based on files that are already there
-        # subfolder = "renders"
-        # filename_prefix = "dragon"
+        metadata = None
+        if keep_metadata:
+            metadata = PngInfo()
+            if cls.hidden.prompt is not None:
+                metadata.add_text("prompt", json.dumps(cls.hidden.prompt))
+            if (extra_pnginfo := cls.hidden.extra_pnginfo) is not None:
+                for key, value in extra_pnginfo.items():
+                    metadata.add_text(key, json.dumps(value))
 
-        # I'm choosing to ignore the counter, and we're just going to overwrite
-        # the files.
-        full_prefix = get_filename_prefix(ayon_json)
-        full_output_folder, filename, counter, subfolder, filename_prefix = (
-            folder_paths.get_save_image_path(
-                full_prefix,
-                output_dir,
-                images_in[0].shape[1],
-                images_in[0].shape[0],
-            )
+        # A node with a list input runs once per item, all writing into the
+        # same folder, so continue the frame numbers of earlier runs.
+        prefix = f"{stem}_"
+        frame = 1 + sum(
+            1
+            for name in os.listdir(folder)
+            if name.startswith(prefix) and name.endswith(".png")
         )
 
-        images_processed = []
-
-        for idx, image in enumerate(images_in, start=1):
+        previews = []
+        files = []
+        for image in images_in:
             image_data = 255.0 * image.cpu().numpy()
             img_pil = Image.fromarray(
                 np.clip(image_data, 0, 255).astype(np.uint8)
             )
-            # clip to 8 bit PNG. This could need work, png also supports 16
-            # bit, 1 if data needs to exist as float, and we need to export
-            # within OpenEXR, we're screwed if we do this.
-
-            metadata = None
-            if keep_metadata:
-                metadata = PngInfo()
-                if cls.hidden.prompt is not None:
-                    metadata.add_text("prompt", json.dumps(cls.hidden.prompt))
-                if (extra_pnginfo := cls.hidden.extra_pnginfo) is not None:
-                    for info in cls.hidden.extra_pnginfo:
-                        metadata.add_text(
-                            info, json.dumps(extra_pnginfo[info])
-                        )
-
-            filename_out = f"{filename}_{idx:0>4}.png"
-            img_path = os.path.join(full_output_folder, filename_out)
-
-            # ensure path existence.
-
-            Path(img_path).parent.mkdir(parents=True, exist_ok=True)
+            filename = unique_filename(folder, f"{prefix}{frame:04}.png")
+            frame += 1
             img_pil.save(
-                img_path, pnginfo=metadata, compress_level=compress_level
+                os.path.join(folder, filename),
+                pnginfo=metadata,
+                compress_level=compress_level,
             )
-
-            images_processed.append(
-                ui.SavedResult(filename_out, subfolder, io.FolderType.output)
+            previews.append(
+                ui.SavedResult(filename, subfolder, io.FolderType.output)
             )
+            files.append(output_file(filename, subfolder))
 
-        return io.NodeOutput(ui=ui.SavedImages(results=images_processed))
+        return io.NodeOutput(ui={
+            "images": previews,
+            "ayon": [ayon_output_entry(instance_id, prompt_id, files)],
+        })
 
 
 class AyonSaveVideoNode(io.ComfyNode):
@@ -182,121 +319,101 @@ class AyonSaveVideoNode(io.ComfyNode):
 
     @classmethod
     def execute(cls, video_in: io.Video.Type, recook: bool, ayon_info: str):
-        # parse ayon_info and retrieve settings from there.
-        try:
-            ayon_json = json.loads(ayon_info)
-        except BaseException as e:
-            print_tb(e)
-
+        """Save the video plus a PNG thumbnail of its first frame."""
+        ayon_json = parse_ayon_info(ayon_info)
         creator_attrs = ayon_json["creator_attributes"]
 
-        keep_metadata: bool = creator_attrs["keep_metadata"]
+        keep_metadata = bool(creator_attrs.get("keep_metadata", True))
+        stem = file_stem(ayon_json)
 
         # mp4/h264 | webm/vp9 | webm/av1
-        formatcodec: str = creator_attrs["formatcodec"]
-
-        webm_no_audio: bool = creator_attrs["webm_noaudio"]
+        formatcodec: str = creator_attrs.get("formatcodec", "mp4/h264")
+        webm_no_audio = bool(creator_attrs.get("webm_noaudio", False))
         # 0- > 63 (32 middleground), higher better quality
-        webm_crf: float = float(creator_attrs["webm_crf"])
+        webm_crf = float(creator_attrs.get("webm_crf", 32))
 
-        format, codec = [x.strip() for x in formatcodec.split("/")]
-
-        output_dir = folder_paths.get_output_directory()
-
-        full_prefix = get_filename_prefix(ayon_json)
+        container_format, codec = (
+            x.strip() for x in formatcodec.split("/", 1)
+        )
+        if container_format not in {"mp4", "webm"}:
+            msg = f"Unsupported AYON video format: {formatcodec}"
+            raise ValueError(msg)
 
         components = video_in.get_components()
-        images, audio, fps, metadata = (
+        images, audio, fps = (
             components.images,
             components.audio,
             components.frame_rate,
-            components.metadata,
         )
 
-        full_output_folder, filename, counter, subfolder, filename_prefix = (
-            folder_paths.get_save_image_path(
-                full_prefix,
-                output_dir,
-                images[0].shape[1],
-                images[0].shape[0],
-            )
-        )
+        folder, subfolder, instance_id, prompt_id = staging_folder(ayon_json)
 
-        saved_metadata = metadata if metadata else {}
-        if not keep_metadata:
-            metadata = {}
+        # Keep the source video's own metadata, and add the prompt and
+        # workflow like ComfyUI's own save nodes when asked to.
+        saved_metadata = dict(components.metadata or {})
+        if keep_metadata:
             if cls.hidden.extra_pnginfo is not None:
-                metadata.update(cls.hidden.extra_pnginfo)
+                saved_metadata.update(cls.hidden.extra_pnginfo)
             if cls.hidden.prompt is not None:
-                metadata["prompt"] = cls.hidden.prompt
-            if len(metadata) > 0:
-                saved_metadata = metadata
+                saved_metadata["prompt"] = cls.hidden.prompt
 
-        filename_with_ext = f"{filename}.{format}"
-        filename_thumbnail = f"{filename}_{format}_thumb.png"
-
-        # thumbnail
-        thumb_image = images[0]
-        thumb_image_data = 255.0 * thumb_image.cpu().numpy()
-        thumb_img_pil = Image.fromarray(
-            np.clip(thumb_image_data, 0, 255).astype(np.uint8)
+        filename = unique_filename(folder, f"{stem}.{container_format}")
+        video_stem = os.path.splitext(filename)[0]
+        thumbnail = unique_filename(
+            folder, f"{video_stem}_{container_format}_thumb.png"
         )
-        thumb_loc = os.path.join(full_output_folder, filename_thumbnail)
-        thumb_img_pil.save(thumb_loc, compress_level=4)
 
-        video_saved = None
+        thumb_image_data = 255.0 * images[0].cpu().numpy()
+        Image.fromarray(
+            np.clip(thumb_image_data, 0, 255).astype(np.uint8)
+        ).save(os.path.join(folder, thumbnail), compress_level=4)
 
-        if format == "mp4":
+        if container_format == "mp4":
             video_in.save_to(
-                os.path.join(full_output_folder, filename_with_ext),
+                os.path.join(folder, filename),
                 format=Types.VideoContainer.MP4,
                 codec=Types.VideoCodec.H264,
                 metadata=saved_metadata,
             )
-            video_saved = [
-                ui.SavedResult(
-                    filename_with_ext, subfolder, io.FolderType.output
-                )
-            ]
-        elif format == "webm":
-            if webm_no_audio:
-                audio = None
+        else:
+            cls.save_webm(
+                os.path.join(folder, filename),
+                codec,
+                webm_crf,
+                fps,
+                images,
+                None if webm_no_audio else audio,
+                saved_metadata if keep_metadata else None,
+            )
 
-            video_saved = [
-                cls.save_webm(
-                    full_output_folder,
-                    filename + ".webm",
-                    subfolder,
-                    codec,
-                    webm_crf,
-                    fps,
-                    images,
-                    audio,
-                )
-            ]
-
-        return io.NodeOutput(ui=ui.PreviewVideo(video_saved))
+        files = [
+            output_file(filename, subfolder),
+            output_file(thumbnail, subfolder, role="thumbnail"),
+        ]
+        preview = ui.SavedResult(filename, subfolder, io.FolderType.output)
+        return io.NodeOutput(ui={
+            **ui.PreviewVideo([preview]).as_dict(),
+            "ayon": [ayon_output_entry(instance_id, prompt_id, files)],
+        })
 
     @classmethod
-    def save_webm(
+    def save_webm(  # noqa: PLR0913, PLR0917
         cls,
-        full_output_folder: str,
-        file: str,
-        subfolder: str,
+        filepath: str,
         codec: str,
         crf: float,
         fps: float,
         images: ImageInput,
         audio_input: AudioInput | None = None,
-    ):
-        container = av.open(os.path.join(full_output_folder, file), mode="w")
+        metadata: dict | None = None,
+    ) -> None:
+        """Encode `images` (and audio) as a WebM file at `filepath`."""
+        container = av.open(filepath, mode="w")
 
-        if cls.hidden.prompt is not None:
-            container.metadata["prompt"] = json.dumps(cls.hidden.prompt)
-
-        if cls.hidden.extra_pnginfo is not None:
-            for x in cls.hidden.extra_pnginfo:
-                container.metadata[x] = json.dumps(cls.hidden.extra_pnginfo[x])
+        for key, value in (metadata or {}).items():
+            container.metadata[key] = (
+                value if isinstance(value, str) else json.dumps(value)
+            )
 
         # Video
         codec_map = {"vp9": "libvpx-vp9", "av1": "libsvtav1"}
@@ -392,8 +509,6 @@ class AyonSaveVideoNode(io.ComfyNode):
 
         container.close()
 
-        return ui.SavedResult(file, subfolder, io.FolderType.output)
-
 
 class AyonSave3DModelNode(io.ComfyNode):
     @staticmethod
@@ -439,89 +554,63 @@ class AyonSave3DModelNode(io.ComfyNode):
     def execute(
         cls, mesh: Types.MESH | Types.File3D, recook: bool, ayon_info: str
     ) -> io.NodeOutput:
-        # parse ayon_info and retrieve settings from there.
-        try:
-            ayon_json = json.loads(ayon_info)
-        except BaseException as e:
-            print_tb(e)
-
+        """Save the model as-is, or a mesh as GLB/OBJ."""
+        ayon_json = parse_ayon_info(ayon_info)
         creator_attrs = ayon_json["creator_attributes"]
-        keep_metadata = creator_attrs["keep_metadata"]
+
+        keep_metadata = bool(creator_attrs.get("keep_metadata", True))
         fallback_format = creator_attrs.get("fallback_format", "obj")
+        if fallback_format not in {"glb", "obj"}:
+            fallback_format = "obj"
 
-        output_dir = folder_paths.get_output_directory()
-
-        full_prefix = get_filename_prefix(ayon_json)
         if isinstance(mesh, Types.File3D):
-            full_prefix += f"_{mesh.format}"
+            model_format = safe_file_stem(mesh.format, "glb").lower()
         else:
-            full_prefix += f"_{fallback_format}"
+            model_format = fallback_format
+        stem = f"{file_stem(ayon_json)}_{model_format}"
 
-        full_output_folder, filename, counter, subfolder, filename_prefix = (
-            folder_paths.get_save_image_path(
-                full_prefix,
-                output_dir,
-            )
-        )
-
-        results = []
+        folder, subfolder, instance_id, prompt_id = staging_folder(ayon_json)
 
         metadata = {}
         if keep_metadata:
             if cls.hidden.prompt is not None:
                 metadata["prompt"] = json.dumps(cls.hidden.prompt)
             if cls.hidden.extra_pnginfo is not None:
-                for x in cls.hidden.extra_pnginfo:
-                    metadata[x] = json.dumps(cls.hidden.extra_pnginfo[x])
+                for key, value in cls.hidden.extra_pnginfo.items():
+                    metadata[key] = json.dumps(value)
 
+        results = []
         if isinstance(mesh, Types.File3D):
-            # Handle File3D input - save BytesIO data to output folder
-            ext = mesh.format or "glb"
-            f = f"{filename}.{ext}"
-            mesh.save_to(os.path.join(full_output_folder, f))
-
-            results.append(
-                {"filename": f, "subfolder": subfolder, "type": "output"}
-            )
+            filename = unique_filename(folder, f"{stem}.{model_format}")
+            mesh.save_to(os.path.join(folder, filename))
+            results.append(filename)
         else:
-            # Handle Mesh input - save vertices and faces as GLB or OBJ
-            for idx, i in enumerate(range(mesh.vertices.shape[0]), start=1):
+            for idx in range(mesh.vertices.shape[0]):
+                filename = unique_filename(
+                    folder, f"{stem}_{idx + 1:04}.{fallback_format}"
+                )
+                filepath = os.path.join(folder, filename)
                 if fallback_format == "glb":
-                    f = f"{filename}_{idx:0>4}.glb"
                     cls.save_glb(
-                        mesh.vertices[i],
-                        mesh.faces[i],
-                        os.path.join(full_output_folder, f),
-                        metadata,
+                        mesh.vertices[idx], mesh.faces[idx], filepath, metadata
                     )
-                    results.append(
-                        {
-                            "filename": f,
-                            "subfolder": subfolder,
-                            "type": "output",
-                        }
-                    )
-                elif fallback_format == "obj":
-                    f = f"{filename}_{idx:0>4}.obj"
-                    cls.save_obj(
-                        mesh.vertices[i],
-                        mesh.faces[i],
-                        os.path.join(full_output_folder, f),
-                        metadata,
-                    )
-                    results.append(
-                        {
-                            "filename": f,
-                            "subfolder": subfolder,
-                            "type": "output",
-                        }
-                    )
+                else:
+                    cls.save_obj(mesh.vertices[idx], mesh.faces[idx], filepath)
+                results.append(filename)
 
-        # We have to use old dictionary style
-        return io.NodeOutput(ui={"3d": results})
+        previews = [
+            {"filename": name, "subfolder": subfolder, "type": "output"}
+            for name in results
+        ]
+        files = [output_file(name, subfolder) for name in results]
+        # ComfyUI shows `3d` outputs in its 3D viewer.
+        return io.NodeOutput(ui={
+            "3d": previews,
+            "ayon": [ayon_output_entry(instance_id, prompt_id, files)],
+        })
 
     @classmethod
-    def save_glb(vertices, faces, filepath, metadata=None):
+    def save_glb(cls, vertices, faces, filepath, metadata=None):  # noqa: ANN001, ANN206
         """
         Borrowed from ComfyUI/comfy_extras/nodes_hunyuan3d.py
 
@@ -648,7 +737,7 @@ class AyonSave3DModelNode(io.ComfyNode):
         return filepath
 
     @classmethod
-    def save_obj(vertices, faces, filepath):
+    def save_obj(cls, vertices, faces, filepath):  # noqa: ANN001, ANN206
         """
         Save PyTorch tensor vertices and faces as an OBJ file.
 
