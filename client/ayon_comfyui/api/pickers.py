@@ -249,12 +249,23 @@ def get_load_target() -> dict | None:
         return dict(target) if target else None
 
 
-def set_load_target(target: dict | None) -> dict | None:
-    """Replace the load target; return the previous one."""
+def set_load_target(
+    target: dict | None, *, since: float | None = None
+) -> dict | None:
+    """Replace the load target; return the previous one.
+
+    Args:
+        target: The node to load into, None to end the target.
+        since: When the node started waiting (`time.monotonic()`), now by
+            default. The target ends LOAD_TARGET_TTL after it, like the
+            node's wait.
+    """
     global _load_target  # noqa: PLW0603
+    if since is None:
+        since = time.monotonic()
     with _load_target_lock:
         previous = _load_target
-        _load_target = dict(target, at=time.monotonic()) if target else None
+        _load_target = dict(target, at=since) if target else None
     return previous
 
 
@@ -620,6 +631,7 @@ class PickerService:
             "node_type": node_type,
             "container_uuid": container_uuid,
             "reference": reference,
+            "requested_at": now,
         }
 
     def validate_apply(self, params: dict) -> dict:
@@ -878,7 +890,18 @@ def register_picker_handlers(
             log.debug("Unable to notify the ComfyUI tab", exc_info=True)
 
     def _open_loader(request: dict) -> None:
-        previous = set_load_target(request)
+        # Held back while the bridge is busy, e.g. for the length of a
+        # publish render. The node waits LOAD_TARGET_TTL from its request,
+        # so end the target with that wait, and don't let a node that
+        # stopped waiting be loaded into: the tab would drop the result.
+        requested_at = request["requested_at"]
+        if time.monotonic() - requested_at > LOAD_TARGET_TTL:
+            log.info(
+                "Not opening the AYON Loader: the ComfyUI node stopped "
+                "waiting for it."
+            )
+            return
+        previous = set_load_target(request, since=requested_at)
         if previous and previous["token"] != request["token"]:
             _notify(previous["token"], LOADER_TARGET_REPLACED)
         try:

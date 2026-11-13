@@ -472,6 +472,13 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(pickers.get_load_target()["token"], "t1")
         self.assertEqual(pickers.take_load_target("t1")["token"], "t1")
         self.assertIsNone(pickers.get_load_target())
+        # It ends LOAD_TARGET_TTL after the node started waiting.
+        pickers.set_load_target(
+            {"token": "t2", "node_type": "x"},
+            since=time.monotonic() - pickers.LOAD_TARGET_TTL - 1,
+        )
+        self.assertIsNone(pickers.get_load_target())
+        self.assertIsNone(pickers.take_load_target())
 
 
 class FakeBridge:
@@ -730,6 +737,16 @@ class BusyBridgeTests(unittest.TestCase):
         process_events()
         self.assertEqual(self.opened, [True])
         self.assertEqual(self.pickers["get_load_target"]()["token"], "tok2")
+
+    def test_loader_not_opened_for_a_node_that_stopped_waiting(self) -> None:
+        browse = {"token": "tok3", "node_type": "AYON Load Image"}
+        with self.bridge.busy():
+            self.handlers["picker.browse"](browse)
+            # Busy for longer than the node waits for the Loader.
+            self.set_picker_global("LOAD_TARGET_TTL", -1.0)
+        process_events()
+        self.assertEqual(self.opened, [])
+        self.assertIsNone(self.pickers["_load_target"])
 
 
 if __name__ == "__main__":
