@@ -10,6 +10,8 @@ When it can't, files are uploaded after all.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -22,6 +24,8 @@ log = logging.getLogger(__name__)
 
 #: Environment variable the ComfyUI plugin reads its AYON roots from.
 ROOTS_ENV = "AYON_COMFYUI_ROOTS"
+#: ...and the project folders below them it may read.
+PROJECTS_ENV = "AYON_COMFYUI_PROJECTS"
 #: ComfyUI plugin feature for reading files by path.
 PATHS_FEATURE = "paths-v1"
 
@@ -50,6 +54,36 @@ def export_site_roots(project_name: str | None) -> None:
         return
     if roots:
         os.environ[ROOTS_ENV] = json.dumps(roots)
+        # Only this project's folder below each root (by name and code, as
+        # anatomy templates may use either).
+        os.environ.setdefault(
+            PROJECTS_ENV, json.dumps(sorted(project_folders(project_name)))
+        )
+
+
+def project_folders(project_name: str) -> set[str]:
+    """Return the folder names a project may have below a root."""
+    folders = {project_name}
+    try:
+        import ayon_api  # noqa: PLC0415
+
+        project = ayon_api.get_project(project_name, fields={"code"}) or {}
+        if project.get("code"):
+            folders.add(project["code"])
+    except Exception:  # noqa: BLE001
+        log.debug("Unable to get the project code", exc_info=True)
+    return folders
+
+
+def session_proof(secret: str) -> str:
+    """Return what proves knowledge of the bridge session secret.
+
+    Must match `session_proof` in `_comfyui_plugin/ayon_menu/paths.py`,
+    which checks it; the secret itself is never sent over HTTP.
+    """
+    return hmac.new(
+        secret.encode(), b"ayon-paths-check", hashlib.sha256
+    ).hexdigest()
 
 
 def rootless_paths(
@@ -85,7 +119,7 @@ def server_can_read(
             "POST",
             "/ayon/paths/check",
             json={"paths": rootless},
-            headers={SESSION_HEADER: session_secret},
+            headers={SESSION_HEADER: session_proof(session_secret)},
         )
     except BridgeError as exc:
         log.info("ComfyUI can't check paths (%s).", exc)

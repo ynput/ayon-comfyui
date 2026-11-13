@@ -15,12 +15,21 @@ workstation can resolve on a Linux server. Configure it with either:
 - `<ComfyUI user directory>/__ayon/roots.json` with the same object.
 
 Without a configured root nothing resolves, so path references only read
-files below the roots the server's owner chose.
+files below the roots the server's owner chose. Anyone who can queue
+prompts on this ComfyUI can read media files there through an AYON load
+node, so on a shared server map the roots narrowly, and/or limit them to
+projects with:
+
+- `AYON_COMFYUI_PROJECTS`: project folder names (a JSON list, or comma
+  separated), the first folder below a root. AYON sets it to the current
+  project when it launches a local ComfyUI.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -29,7 +38,9 @@ import re
 log = logging.getLogger(__name__)
 
 ROOTS_ENV = "AYON_COMFYUI_ROOTS"
-#: Header with the AYON host's bridge session secret.
+PROJECTS_ENV = "AYON_COMFYUI_PROJECTS"
+#: Header with the AYON host's proof of its bridge session (see
+#: `session_proof`).
 SESSION_HEADER = "X-AYON-Session"
 ROOTS_FILE = os.path.join("__ayon", "roots.json")
 _ROOTLESS = re.compile(r"^\{root\[([A-Za-z0-9_-]+)\]\}(.*)$", re.DOTALL)
@@ -93,10 +104,33 @@ def configured_roots() -> dict[str, str]:
     return roots
 
 
-def resolve_rootless(path: str) -> str | None:
+def allowed_projects() -> set[str] | None:
+    """Return the project folders path references may read, None for all."""
+    raw = os.environ.get(PROJECTS_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        names = json.loads(raw) if raw.startswith("[") else raw.split(",")
+    except ValueError:
+        log.warning("Invalid %s: %s", PROJECTS_ENV, raw)
+        return set()
+    return {
+        os.path.normcase(str(name).strip())
+        for name in names
+        if str(name).strip()
+    }
+
+
+def resolve_rootless(path: str, *, strict: bool = True) -> str | None:
     """Return the local path of an AYON rootless path, or None.
 
-    Only paths below a configured root resolve; `..` can't escape it.
+    Only paths below a configured root (and an allowed project folder, see
+    `AYON_COMFYUI_PROJECTS`) resolve; `..` can't escape it.
+
+    Args:
+        path: AYON rootless path, e.g. `{root[work]}/project/...`.
+        strict: Resolve symlinks (touches the filesystem). Without it the
+            path is only checked lexically, e.g. for a quick validation.
     """
     if not isinstance(path, str):
         return None
@@ -110,8 +144,17 @@ def resolve_rootless(path: str) -> str | None:
     if ":" in relative or "\0" in relative:
         # Drive letters and NTFS alternate data streams.
         return None
-    full = os.path.realpath(os.path.join(root, relative))
-    return full if is_inside(full, os.path.realpath(root)) else None
+    resolve = os.path.realpath if strict else os.path.abspath
+    full = resolve(os.path.join(root, relative))
+    if not is_inside(full, resolve(root)):
+        return None
+    projects = allowed_projects()
+    if projects is not None:
+        below_root = os.path.relpath(full, resolve(root))
+        project = below_root.replace("\\", "/").split("/", 1)[0]
+        if os.path.normcase(project) not in projects:
+            return None
+    return full
 
 
 def is_inside(path: str, directory: str) -> bool:
@@ -123,18 +166,27 @@ def is_inside(path: str, directory: str) -> bool:
     return os.path.normcase(common) == os.path.normcase(directory)
 
 
-def _is_ayon_session(request) -> bool:  # noqa: ANN001
-    """Whether the request comes from a registered AYON session.
+def session_proof(secret: str) -> str:
+    """Return what proves knowledge of a bridge session secret.
 
-    The AYON host sends its session secret, the one it registers with on
-    the bridge websocket.
+    The AYON host sends this (not the secret itself) in `SESSION_HEADER`.
     """
-    from .bridge import BRIDGE, session_id_from_secret  # noqa: PLC0415
+    return hmac.new(
+        secret.encode(), b"ayon-paths-check", hashlib.sha256
+    ).hexdigest()
 
-    secret = request.headers.get(SESSION_HEADER, "")
-    if not 32 <= len(secret) <= 256:  # noqa: PLR2004
+
+def _is_ayon_session(request) -> bool:  # noqa: ANN001
+    """Whether the request comes from a registered AYON session."""
+    from .bridge import BRIDGE  # noqa: PLC0415
+
+    proof = request.headers.get(SESSION_HEADER, "")
+    if len(proof) != 64:  # noqa: PLR2004
         return False
-    return session_id_from_secret(secret) in BRIDGE.sessions
+    return any(
+        hmac.compare_digest(proof, session_proof(session.secret))
+        for session in list(BRIDGE.sessions.values())
+    )
 
 
 async def handle_check(request):  # noqa: ANN001, ANN201

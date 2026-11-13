@@ -98,35 +98,51 @@ def parse_container(ayon_container_info: str) -> dict:
     return container
 
 
-def _input_file(upload_info: dict) -> str:
-    input_dir = os.path.realpath(folder_paths.get_input_directory())
+def _input_file(upload_info: dict, *, strict: bool = True) -> str:
+    resolve = os.path.realpath if strict else os.path.abspath
+    input_dir = resolve(folder_paths.get_input_directory())
     relative = os.path.join(
         str(upload_info.get("subfolder") or ""), str(upload_info.get("name"))
     )
-    path = os.path.realpath(os.path.join(input_dir, relative))
+    path = resolve(os.path.join(input_dir, relative))
     if ":" in relative or not is_inside(path, input_dir):
         msg = f"Refusing to read outside ComfyUI's input directory: {relative}"
         raise ContainerError(msg)
     return path
 
 
-def uploaded_files(container: dict) -> list[str]:
-    """Return the paths of the container's uploaded copies."""
+def _strict(index: int, count: int, check_all: bool) -> bool:  # noqa: FBT001
+    """Whether to check file `index` of `count` on the filesystem."""
+    return check_all or index in {0, count - 1}
+
+
+def uploaded_files(container: dict, *, check_all: bool = True) -> list[str]:
+    """Return the paths of the container's uploaded copies.
+
+    Without `check_all`, only the first and last are resolved on the
+    filesystem (symlinks); the others are only checked lexically.
+    """
     upload_infos = container.get("image_upload_info") or []
     if isinstance(upload_infos, dict):
         upload_infos = [upload_infos]
-    return [
-        _input_file(info)
-        for info in upload_infos
+    upload_infos = [
+        info for info in upload_infos
         if isinstance(info, dict) and info.get("name")
+    ]
+    return [
+        _input_file(info, strict=_strict(i, len(upload_infos), check_all))
+        for i, info in enumerate(upload_infos)
     ]
 
 
-def referenced_files(container: dict) -> list[str] | None:
+def referenced_files(
+    container: dict, *, check_all: bool = True
+) -> list[str] | None:
     """Return the container's path references resolved on this server.
 
     Returns None when the container has none, or when not all of them
-    resolve to existing files here.
+    resolve to existing files here. Without `check_all`, only the first and
+    last are checked on the filesystem.
     """
     reference = container.get("path_reference")
     if not isinstance(reference, dict):
@@ -134,26 +150,41 @@ def referenced_files(container: dict) -> list[str] | None:
     rootless = reference.get("files")
     if not isinstance(rootless, list) or not rootless:
         return None
-    paths = [resolve_rootless(path) for path in rootless]
-    if all(path and os.path.isfile(path) for path in paths):
+    count = len(rootless)
+    paths = [
+        resolve_rootless(path, strict=_strict(i, count, check_all))
+        for i, path in enumerate(rootless)
+    ]
+    if not all(paths):
+        return None
+    if all(
+        os.path.isfile(path)
+        for i, path in enumerate(paths)
+        if _strict(i, count, check_all)
+    ):
         return paths
     return None
 
 
-def container_files(container: dict, extensions: set[str]) -> list[str]:
+def container_files(
+    container: dict, extensions: set[str], *, check_all: bool = True
+) -> list[str]:
     """Return the files to read for a container.
 
     Args:
         container: The node's AYON container.
         extensions: File extensions the node may read.
+        check_all: Check every file on the filesystem. Without it only the
+            first and last are, which keeps validating a long sequence on
+            a network share quick; running the node checks them all.
 
     Raises:
         ContainerError: When there are none, some don't exist, or some are
             of a kind the node doesn't read.
     """
-    paths = referenced_files(container)
+    paths = referenced_files(container, check_all=check_all)
     if paths is None:
-        paths = uploaded_files(container)
+        paths = uploaded_files(container, check_all=check_all)
         if not paths and container.get("path_reference"):
             msg = (
                 "The files of this AYON load node are referenced by path, "
@@ -179,7 +210,10 @@ def container_files(container: dict, extensions: set[str]) -> list[str]:
             f"{', '.join(unsupported)}. Load them with the matching loader."
         )
         raise ContainerError(msg)
-    missing = [path for path in paths if not os.path.isfile(path)]
+    missing = [
+        path for i, path in enumerate(paths)
+        if _strict(i, len(paths), check_all) and not os.path.isfile(path)
+    ]
     if missing:
         msg = (
             f"{len(missing)} file(s) of this AYON load node are missing, "
@@ -213,7 +247,9 @@ def fingerprint(ayon_container_info: str, extensions: set[str]) -> str:
 def validate(ayon_container_info: str, extensions: set[str]) -> bool | str:
     """`validate_inputs` of the load nodes."""
     try:
-        container_files(parse_container(ayon_container_info), extensions)
+        container_files(
+            parse_container(ayon_container_info), extensions, check_all=False
+        )
     except ContainerError as exc:
         return str(exc)
     return True
