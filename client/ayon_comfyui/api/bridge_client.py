@@ -176,6 +176,8 @@ class BridgeClient:
         self._registered = False
         self._tab_connected = False
         self.session_id: str | None = None
+        # Features the ComfyUI plugin reported (see FEATURES in its relay).
+        self.plugin_features: frozenset[str] = frozenset()
 
     # --- state ------------------------------------------------------------
 
@@ -429,6 +431,12 @@ class BridgeClient:
         kind = frame.get("type")
         if kind == "welcome":
             self.session_id = frame.get("session")
+            features = frame.get("features")
+            self.plugin_features = frozenset(
+                feature
+                for feature in (features if isinstance(features, list) else [])
+                if isinstance(feature, str)
+            )
             self._registered = True
             self._tab_connected = bool(frame.get("peer", {}).get("connected"))
             log.info("Connected to ComfyUI at %s", self.base_url)

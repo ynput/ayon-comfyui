@@ -46,6 +46,10 @@ log = logging.getLogger(__name__)
 
 PROTOCOLS = (1,)
 PROTOCOL = PROTOCOLS[-1]
+# What this plugin offers beyond the bridge protocol itself (e.g. nodes or
+# tab methods a publish needs), so AYON can tell an outdated plugin apart
+# before relying on them. Reported by `/ayon/info` and in the host welcome.
+FEATURES: tuple[str, ...] = ()
 
 HELLO_TIMEOUT = 10.0
 HEARTBEAT = 30.0
@@ -143,7 +147,11 @@ class Bridge:
     async def handle_info(self, request: web.Request) -> web.Response:
         """Let AYON check the plugin is installed and compatible."""
         return web.json_response(
-            {"name": "ayon-comfyui", "protocols": list(PROTOCOLS)},
+            {
+                "name": "ayon-comfyui",
+                "protocols": list(PROTOCOLS),
+                "features": list(FEATURES),
+            },
             headers={"Cache-Control": "no-store"},
         )
 
@@ -238,6 +246,7 @@ class Bridge:
             "type": "welcome",
             "protocol": PROTOCOL,
             "session": session.id,
+            "features": list(FEATURES),
             "peer": {"connected": session.tab is not None},
         })
         await _send(session.tab, {

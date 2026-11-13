@@ -84,7 +84,8 @@ async def main():
     async with aiohttp.ClientSession() as s:
         r = await s.get(URL + "/ayon/info")
         info = await r.json()
-        check(info == {"name": "ayon-comfyui", "protocols": [1]}, "info")
+        check(info == {"name": "ayon-comfyui", "protocols": [1],
+                       "features": []}, "info")
         r = await s.get(URL + "/ayon/pair")
         page = await r.text()
         check("ayon.bridge.pair_code" in page
@@ -93,7 +94,8 @@ async def main():
         secret = secrets.token_urlsafe(32)
         host, welcome = await host_connect(s, secret, {"user": "alice"})
         check(welcome["type"] == "welcome"
-              and welcome["peer"]["connected"] is False, "host welcome")
+              and welcome["peer"]["connected"] is False
+              and welcome["features"] == [], "host welcome")
         sid = welcome["session"]
 
         # request without a tab

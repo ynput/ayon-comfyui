@@ -194,6 +194,7 @@ def main():
     check(client.ws_url == f"ws://127.0.0.1:{PORT}/sub/ayon/ws", "ws url")
     client.start()
     check(wait_for(lambda: client.registered), "client registered")
+    check(client.plugin_features == frozenset(), "plugin features")
     check(("connected", {"tab_connected": False}) in events,
           "connected event")
 
