@@ -199,23 +199,6 @@ class ComfyUILoader(LoaderPlugin):
             session_secret=get_bridge().client.secret,
         )
 
-    def update_files(
-        self, container: dict, context: dict, filepaths: list[str]
-    ) -> None:
-        """Make the files of a new version available, the same way."""
-        files = self.make_files_available(
-            context,
-            filepaths,
-            self.upload_subfolder(container, container.get("name") or "AYON"),
-            reference=bool(container.get("path_reference")),
-        )
-        container["representation"] = context["representation"]["id"]
-        container["image_upload_info"] = files["image_upload_info"]
-        if files["path_reference"]:
-            container["path_reference"] = files["path_reference"]
-        else:
-            container.pop("path_reference", None)
-
     @staticmethod
     def upload_subfolder(container: dict, default: str) -> str:
         """Return the input subfolder a container's files were uploaded to."""
