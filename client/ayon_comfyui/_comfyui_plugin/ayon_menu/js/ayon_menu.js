@@ -3,11 +3,12 @@ import "../../../../extensions/ayon_menu/lib/wsrpc.js";
 import {RPCServer} from "../../../../extensions/ayon_menu/lib/rpc_server.js"
 import {AYON_ORIGIN_ADRESS} from "../../../../extensions/ayon_menu/lib/consts.js"
 
-const AYON_EXTENSION_NAME = "comfy_ayon_menu"
+const AYON_EXTENSION_NAME = "AYON.ComfyMenu"
+const AYON_SAVE_WORKFILE_COMMAND_ID = "AYON.SaveWorkfile"
 const AYON_SIDEBAR_TAB_ID = "ayon"
 const AYON_SIDEBAR_ICON_CLASS = "ayon-sidebar-icon"
 const AYON_SIDEBAR_STYLE_ID = "ayon-sidebar-style"
-const AYON_ICON_URL = new URL("./assets/ayon-icon.png?v=20260506-ayon-icon", import.meta.url).href
+const AYON_ICON_URL = new URL("./assets/ayon-icon.png", import.meta.url).href
 const AYON_TOOL_ACTIONS = [
   {
     id: "showPublisher",
@@ -38,12 +39,27 @@ const AYON_TOOL_ACTIONS = [
     label: "Scene Inventory",
     tool_name: "sceneinventory",
     description: "Inspect AYON scene inventory items."
+  },
+  {
+    id: "showScriptEditor",
+    label: "Script Editor",
+    tool_name: "scripteditor",
+    description: "Open AYON Script Editor."
   }
 ]
 
 function get_ayon_extension() {
   const exts = app.extensions;
   return exts.find((el) => el.name == AYON_EXTENSION_NAME)
+}
+
+function show_toast(severity, detail, life = 6000) {
+  const toast = app.extensionManager?.toast
+  if (toast?.add) {
+    toast.add({severity, summary: "AYON", detail, life})
+  } else {
+    console.warn(`AYON: ${detail}`)
+  }
 }
 
 function push_ayon_queue(function_name, args) {
@@ -56,7 +72,6 @@ function push_ayon_queue(function_name, args) {
 }
 
 function request_ayon_tool(tool_name) {
-  console.log(app.extensions);
   push_ayon_queue("ayonComfyUI.requestToolByName", {"tool_name": tool_name})
 }
 
@@ -108,6 +123,234 @@ function create_ayon_tool_panel(container) {
 
   root.append(header, actions)
   container.replaceChildren(root)
+}
+
+// --- ComfyUI workflow (tab) management -------------------------------------
+//
+// We deliberately go through the *public* ComfyUI frontend extension API
+// (`app.extensionManager.workflow`, typed as `ExtensionManager.workflow` in
+// the frontend's `extensionTypes.ts`) and only use the workflow store's
+// actions (`renameWorkflow`, `saveWorkflow`, ...). That way the workflow
+// manager keeps its own bookkeeping (tabs, drafts, bookmarks, thumbnails)
+// consistent and we do not duplicate its internals, which are likely to
+// change. If the store is not available (older frontends) we gracefully
+// degrade: files still save to disk, but tabs are not renamed/saved.
+
+const AYON_EXTRA_KEY = "AYON"
+
+function get_workflow_store() {
+  try {
+    return app.extensionManager?.workflow ?? null
+  } catch (err) {
+    console.warn("AYON: Unable to access ComfyUI workflow store:", err)
+    return null
+  }
+}
+
+function get_root_graph() {
+  return app.rootGraph ?? app.graph
+}
+
+function merge_into_extra(target, extra) {
+  Object.keys(extra).forEach((key) => {
+    const value = extra[key]
+    const current = target[key]
+    if (
+      value !== null && typeof value === "object" && !Array.isArray(value) &&
+      current !== null && typeof current === "object" && !Array.isArray(current)
+    ) {
+      target[key] = {...current, ...value}
+    } else {
+      target[key] = value
+    }
+  })
+  return target
+}
+
+function get_ayon_extra() {
+  return get_root_graph()?.extra?.[AYON_EXTRA_KEY] ?? null
+}
+
+function set_ayon_extra(values) {
+  const graph = get_root_graph()
+  graph.extra ??= {}
+  graph.extra[AYON_EXTRA_KEY] = {...(graph.extra[AYON_EXTRA_KEY] ?? {}), ...values}
+  return graph.extra[AYON_EXTRA_KEY]
+}
+
+function capture_tracker_state(tracker) {
+  // `checkState` was deprecated in favor of `captureCanvasState`
+  if (typeof tracker?.captureCanvasState === "function") {
+    tracker.captureCanvasState()
+  } else {
+    tracker?.checkState?.()
+  }
+}
+
+function sync_change_tracker(workflow = null) {
+  // Make ComfyUI's change tracker pick up direct graph mutations
+  // (like `graph.extra`) so that drafts and saves include them.
+  const tracker = (workflow ?? get_workflow_store()?.activeWorkflow)?.changeTracker
+  try {
+    capture_tracker_state(tracker)
+  } catch (err) {
+    console.warn("AYON: Failed to sync change tracker:", err)
+  }
+}
+
+function serialize_graph() {
+  return JSON.stringify(get_root_graph().serialize())
+}
+
+function same_workfile_path(a, b) {
+  const normalize = (path) => String(path).replace(/\\/g, "/")
+  return Boolean(a) && Boolean(b) && normalize(a) === normalize(b)
+}
+
+// The AYON workfile path that `workflow` (a tab), with AYON extra data
+// `ayon`, belongs to.
+// `graph.extra` is copied along when a user duplicates a workflow or uses
+// ComfyUI's own 'Save As'. So the path is only trusted for the workflow it
+// was recorded for, to never report (and then overwrite) another workflow's
+// AYON workfile.
+function claimed_workfile_path(workflow, ayon) {
+  const path = ayon?.workfile_path
+  if (!path) {
+    return null
+  }
+  if (ayon.comfy_workflow_path && workflow && workflow.path !== ayon.comfy_workflow_path) {
+    return null
+  }
+  return path
+}
+
+// Another open workflow (tab) that belongs to the AYON workfile at `path`.
+// Tabs restored from a previous session that were never shown aren't loaded,
+// so they can't be checked.
+function find_tab_with_workfile(store, path, except_workflow) {
+  const tabs = store.openWorkflows ?? []
+  return tabs.find((tab) => (
+    tab !== except_workflow &&
+    same_workfile_path(
+      claimed_workfile_path(tab, tab.activeState?.extra?.[AYON_EXTRA_KEY]),
+      path
+    )
+  )) ?? null
+}
+
+// Whether the saved file of a (closed) workflow was saved by AYON for the
+// AYON workfile at `path`.
+async function is_saved_for_workfile(workflow, path) {
+  try {
+    // Read the stored file instead of `workflow.load()`, which would also
+    // apply drafts and set up a change tracker for it.
+    const response = await app.api.getUserData(workflow.path)
+    if (!response.ok) {
+      return false
+    }
+    const saved = JSON.parse(await response.text())
+    return same_workfile_path(
+      claimed_workfile_path(workflow, saved?.extra?.[AYON_EXTRA_KEY]),
+      path
+    )
+  } catch (err) {
+    console.warn(`AYON: Unable to read workflow '${workflow.path}':`, err)
+    return false
+  }
+}
+
+async function rename_workflow(store, workflow, name, workfile_path) {
+  // Rename the workflow (tab) to `name`, keeping it in its current directory.
+  const directory = workflow.directory ?? "workflows"
+  const new_path = `${directory}/${name}.json`
+  if (workflow.path === new_path) {
+    return
+  }
+  const existing = store.getWorkflowByPath(new_path)
+  if (existing && existing !== workflow) {
+    // Only replace a closed copy that ComfyUI saved earlier for this same
+    // AYON workfile, the file on disk managed by AYON is the source of
+    // truth. Leave any other workflow at that path untouched.
+    if (store.isOpen(existing) || !await is_saved_for_workfile(existing, workfile_path)) {
+      throw new Error(`A ComfyUI workflow named '${existing.filename ?? name}' already exists.`)
+    }
+    await store.deleteWorkflow(existing)
+  }
+  await store.renameWorkflow(workflow, new_path)
+}
+
+// Step one of saving an AYON workfile: name the tab after the file, record
+// the AYON workfile path and return the serialized graph. The host writes it
+// to disk, then calls `finishSaveWorkfile`.
+// Returns `{error}` instead when the active workflow must not be saved.
+async function begin_save_workfile(data) {
+  const store = get_workflow_store()
+  const workflow = store?.activeWorkflow ?? null
+  const warnings = []
+
+  // Saving in place: the host asked for the active workflow's workfile path
+  // earlier, so make sure the user didn't switch tabs since.
+  if (data.in_place && !same_workfile_path(claimed_workfile_path(workflow, get_ayon_extra()), data.workfile_path)) {
+    return {
+      error: (
+        `The active ComfyUI workflow is no longer the AYON workfile ` +
+        `'${data.workfile_path}'. Switch back to its tab and try again.`
+      ),
+    }
+  }
+
+  if (!workflow) {
+    warnings.push("ComfyUI workflow store is unavailable; tab is not renamed or saved.")
+    set_ayon_extra({workfile_path: data.workfile_path, comfy_workflow_path: null})
+    return {workfile: serialize_graph(), comfy_workflow_path: null, warnings}
+  }
+
+  // An AYON workfile belongs to a single tab, so saving one tab can't
+  // overwrite the file another tab will save to later on.
+  const other = find_tab_with_workfile(store, data.workfile_path, workflow)
+  if (other) {
+    return {
+      error: (
+        `The AYON workfile '${data.workfile_path}' is already open in ` +
+        `ComfyUI tab '${other.filename ?? other.path}'. Close that tab first.`
+      ),
+    }
+  }
+
+  let renamed = true
+  if (data.workflow_name) {
+    try {
+      await rename_workflow(store, workflow, data.workflow_name, data.workfile_path)
+    } catch (err) {
+      renamed = false
+      console.warn("AYON: Failed to rename workflow:", err)
+      warnings.push(`The ComfyUI tab was not renamed: ${err?.message ?? err}`)
+    }
+    // Renaming waits for ComfyUI's server, the user may have switched tabs
+    // in the meantime. Only the active workflow's graph can be serialized.
+    if (!store.isActive(workflow)) {
+      return {
+        error: (
+          `The active ComfyUI tab changed while saving the AYON workfile ` +
+          `'${data.workfile_path}'. Switch back to it and try again.`
+        ),
+      }
+    }
+  }
+
+  set_ayon_extra({
+    workfile_path: data.workfile_path,
+    comfy_workflow_path: workflow.path,
+  })
+  sync_change_tracker(workflow)
+
+  return {
+    workfile: serialize_graph(),
+    // Only when the tab is named after the workfile do we also want
+    // to save it inside ComfyUI (see `finishSaveWorkfile`)
+    comfy_workflow_path: renamed ? workflow.path : null,
+    warnings,
+  }
 }
 
 function ensure_ayon_sidebar_style() {
@@ -229,7 +472,7 @@ function register_ayon_sidebar_tab() {
 }
 
 app.registerExtension({
-    name: "comfy_ayon_menu",
+    name: AYON_EXTENSION_NAME,
     async afterConfigureGraph(graphData) {
 
         async function execute_single_node(node) {
@@ -544,7 +787,7 @@ app.registerExtension({
 
         function retrieve_latest_procqueue() {
           const exts = app.extensions;
-          const ext = exts.find((el) => el.name == "comfy_ayon_menu")
+          const ext = exts.find((el) => el.name == AYON_EXTENSION_NAME)
           if (ext.PROC_QUEUE.length > 0)
             return ext.PROC_QUEUE.pop()
           return null
@@ -566,23 +809,81 @@ app.registerExtension({
 
 
         this.IFRAMERPC.register('getWorkfile', (data) => {
-          // Fetch clientId from session storage,
+          // Serialize the live graph so the result always reflects the
+          // current state, instead of ComfyUI's debounced storage drafts.
+          const graph = get_root_graph()
+          if (graph?.serialize) {
+            return serialize_graph()
+          }
+
+          // Legacy fallback: fetch from session storage,
           // because workflows are saved as workflow:<id>
           const client = window.sessionStorage.getItem("clientId")
-          const workflow_key = `workflow:${client}`
-          let workfile = window.sessionStorage.getItem(workflow_key)
+          let workfile = window.sessionStorage.getItem(`workflow:${client}`)
           if (workfile == null){
-            // overwrite workfile in case of new API for this. Gets current tab.
             workfile = get_workfiles_v2()
           }
-          console.log("workfile requested", workfile)
           return workfile
         })
 
-        this.IFRAMERPC.register('updateTab', (data) => {
-          console.log(data);
-          app.loadGraphData(app.graph.serialize(), true, true, data.new_name);
-          return true;
+        // Allow host to set arbitrary extra metadata on the current graph
+        this.IFRAMERPC.register('setGraphExtra', (data) => {
+          const extra = typeof data.extra_json === 'string' ? JSON.parse(data.extra_json) : data.extra_json
+          const graph = get_root_graph()
+          graph.extra ??= {}
+          merge_into_extra(graph.extra, extra)
+          sync_change_tracker()
+          return true
+        })
+
+        // Return graph.extra (stringified JSON), optionally a single key.
+        this.IFRAMERPC.register('getGraphExtra', (data) => {
+          const extra = get_root_graph()?.extra ?? {}
+          if (data && data.key) {
+            return JSON.stringify(extra[data.key] ?? null)
+          }
+          return JSON.stringify(extra)
+        })
+
+        // Return the AYON workfile path the current workflow was saved to or
+        // opened from, or null when it is not (or no longer) an AYON workfile.
+        this.IFRAMERPC.register('getWorkfilePath', (data) => {
+          const active = get_workflow_store()?.activeWorkflow ?? null
+          return claimed_workfile_path(active, get_ayon_extra())
+        })
+
+        // See `begin_save_workfile`. Errors and warnings are also shown in
+        // ComfyUI, since e.g. the Workfiles tool doesn't show the reason.
+        this.IFRAMERPC.register('beginSaveWorkfile', async (data) => {
+          const result = await begin_save_workfile(data)
+          if (result.error) {
+            show_toast("error", result.error, 10000)
+          }
+          result.warnings?.forEach((warning) => show_toast("warn", warning))
+          return result
+        })
+
+        // Step two of saving an AYON workfile: after the host wrote the file
+        // to disk, also save the workflow in ComfyUI so the tab is no longer
+        // flagged as modified.
+        this.IFRAMERPC.register('finishSaveWorkfile', async (data) => {
+          const store = get_workflow_store()
+          if (!store || !data.comfy_workflow_path) {
+            return false
+          }
+          const workflow = store.getWorkflowByPath(data.comfy_workflow_path)
+          if (!workflow || !store.isActive(workflow)) {
+            // User switched tabs in the meantime; do not save another tab.
+            return false
+          }
+          const tracker = workflow.changeTracker
+          if (typeof tracker?.prepareForSave === "function") {
+            tracker.prepareForSave()
+          } else {
+            capture_tracker_state(tracker)
+          }
+          await store.saveWorkflow(workflow)
+          return true
         })
 
         this.IFRAMERPC.register('addPublishNode', (data) => {
@@ -726,7 +1027,6 @@ app.registerExtension({
           return true
         });
 
-        
 
         this.IFRAMERPC.register('setImprintContext', (data) => {
           console.log("setting context...", data)
@@ -759,24 +1059,39 @@ app.registerExtension({
           }
         })
 
-        this.IFRAMERPC.register('loadWorkfile', (data) => {
-          console.log("loading from passed in Workfile")
-          const workfile_parse = JSON.parse(data.workfile_json)
-          try {
-            if (data.workfile_name) {
-              app.loadGraphData(workfile_parse, true, true, data.workfile_name)
-            } else {
-              app.loadGraphData(workfile_parse)
+        this.IFRAMERPC.register('loadWorkfile', async (data) => {
+          const graph_data = JSON.parse(data.workfile_json)
+          if (data.workfile_path) {
+            // Record the AYON workfile path *before* loading, so that it
+            // is part of the loaded state (no race with a separate call).
+            graph_data.extra ??= {}
+            graph_data.extra[AYON_EXTRA_KEY] = {
+              ...(graph_data.extra[AYON_EXTRA_KEY] ?? {}),
+              workfile_path: data.workfile_path,
+              comfy_workflow_path: null,
             }
-              
-          } catch (error) {
-            console.log(error)
-            return false
+          }
+
+          await app.loadGraphData(graph_data, true, true, data.workfile_name || null)
+
+          // Record which ComfyUI workflow (tab) this AYON workfile lives in
+          // and make that the change tracker baseline, so the freshly opened
+          // tab is not flagged as modified.
+          const workflow = get_workflow_store()?.activeWorkflow
+          if (data.workfile_path && workflow) {
+            set_ayon_extra({comfy_workflow_path: workflow.path})
+            const tracker = workflow.changeTracker
+            try {
+              capture_tracker_state(tracker)
+              tracker?.reset?.()
+              tracker?.updateModified?.()
+            } catch (err) {
+              console.warn("AYON: Failed to reset change tracker:", err)
+            }
           }
           return true
         })
 
-      
         //this.RPC.connect();
     },
     commands: [
@@ -785,11 +1100,6 @@ app.registerExtension({
       label: "Ping Ayon Plugin Websocket RPC server", 
       function: () => {
         push_ayon_queue("ayonComfyUI.pingAyonMenu", {"message": "Ping from web"})
-        // ext.RPC.call('ayonComfyUI.pingAyonMenu', {"message" :`Ping from web`}).then(function (data) {
-        // console.log('pong: ', data);
-        // }, function (error) {
-        //   alert(error);
-        // });
       } 
     },
     ...AYON_TOOL_ACTIONS.map((action) => ({
@@ -799,127 +1109,24 @@ app.registerExtension({
         request_ayon_tool(action.tool_name)
       }
     })),
-
     {
-      id: "saveLocal",
-      label: "Ayon Save Workfile",
+      id: AYON_SAVE_WORKFILE_COMMAND_ID,
+      label: "Save Workfile",
       function: () => {
-        function showToast(text, duration = 2000) {
-          const el = document.createElement("div");
-          el.textContent = text;
-              
-          Object.assign(el.style, {
-              position: "fixed",
-              top: "10px",
-              left: "10px",
-              background: "#249b9b",
-              color: "white",
-              padding: "8px 12px",
-              borderRadius: "6px",
-              zIndex: 9999,
-              fontSize: "14px",
-              fontFamily: "sans-serif",
-              boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
-              opacity: "1",
-              transition: "opacity 0.3s ease"
-          });
-        
-          // attach to ComfyUI root instead of body if possible
-          (app.canvasElRef?.parentElement || document.body).appendChild(el);
-        
-          setTimeout(() => {
-              el.style.opacity = "0";
-              setTimeout(() => el.remove(), 300);
-          }, duration);
-        }
-
-        // v2 adapter for newer comfyui
-        function get_workfiles_save() {
-          // Attempt OpenPaths first.
-          const clientId = window.sessionStorage.getItem("clientId");
-          const openpath_str = window.sessionStorage.getItem(`Comfy.Workflow.OpenPaths:${clientId}`)
-          let path_str = null
-          if (openpath_str !== null) {
-            const openpath_parse = JSON.parse(openpath_str)
-            path_str = openpath_parse.paths[openpath_parse.activeIndex]
-          } else {
-            path_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
-            if (!path_str) {
-              return null;
-            }
-            path_str = JSON.parse(path_str).path;
-          }
-          const path = path_str
-
-          if (!path) {
-            return null;
-          }
-
-          const draftindex_str = window.localStorage.getItem("Comfy.Workflow.DraftIndex.v2:personal");
-          if (!draftindex_str) {
-            return null;
-          }
-
-          const draftindex = JSON.parse(draftindex_str);
-          const keys = Object.keys(draftindex.entries);
-
-          const personal_key = keys.filter((key) => {
-            if (draftindex.entries[key].path == path) {
-              return true;
-            }
-          })[0]
-
-          if (personal_key === undefined){
-            return null;
-          }
-
-          const data_str = window.localStorage.getItem(`Comfy.Workflow.Draft.v2:personal:${personal_key}`);
-          
-          if (!data_str) {
-            return null;
-          }
-          // workfiles data as a string
-          const data = JSON.parse(data_str).data
-
-          return data
-        }
-        
-        console.log("called save local")
-        // Attempt OpenPaths first, to get current tab.  
-        const clientId = window.sessionStorage.getItem("clientId");
-        const openpath_str = window.sessionStorage.getItem(`Comfy.Workflow.OpenPaths:${clientId}`)
-        let path_str = null
-        if (openpath_str !== null) {
-          const openpath_parse = JSON.parse(openpath_str)
-          path_str = openpath_parse.paths[openpath_parse.activeIndex]
-        } else {
-          const activepath_str = window.sessionStorage.getItem(`Comfy.Workflow.ActivePath:${clientId}`);
-          path_str = JSON.parse(activepath_str).path;
-          if (!path_str) {
-            return null;
-          }
-        }
-        const path = path_str
-
-        const formatted_path = path.replace(".json","").replace("workflows/","")
-      
-
-        const workfile = get_workfiles_save()
-
-        push_ayon_queue("ayonComfyUI.requestSaveByName", {"file_name": `${formatted_path}`, "workfile_contents": `${workfile}`})
-
-        showToast("Ayon Saved!")
-        
+        // Saves to the current AYON workfile path, or opens the
+        // Workfiles tool when the workflow isn't an AYON workfile yet.
+        push_ayon_queue("ayonComfyUI.requestSaveWorkfile", {})
       }
-
-
     },
   ],
   // Add commands to menu
   menuCommands: [
     { 
       path: ["AYON"],
-      commands: AYON_TOOL_ACTIONS.map((action) => action.id) 
+      commands: [
+        AYON_SAVE_WORKFILE_COMMAND_ID,
+        ...AYON_TOOL_ACTIONS.map((action) => action.id)
+      ]
     },
   ]
 })
