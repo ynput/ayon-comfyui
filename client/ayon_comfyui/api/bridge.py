@@ -388,6 +388,7 @@ class ComfyUIBridge(QtCore.QObject):
             self._no_tab_since = now
             self._tab_grace = TAB_GRACE_SECONDS
         elif event == "rejected":
+            self._failed = True
             self._timer.stop()
             QtWidgets.QMessageBox.critical(
                 None,
