@@ -868,6 +868,9 @@ app.registerExtension({
           update_status_views()
           notify_bridge_change(bridge)
         })
+        bridge.addEventListener("notice", (event) => {
+          show_toast("warn", event.detail)
+        })
 
         bridge.register('getPublishNodes', (data) => {
           const nodeType = data.node_type

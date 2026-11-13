@@ -33,7 +33,11 @@ if TYPE_CHECKING:
     from qtpy.QtWidgets import QApplication
 
 from ayon_comfyui.api.bridge import ComfyUIBridge
-from ayon_comfyui.api.bridge_client import BridgeError, check_plugin
+from ayon_comfyui.api.bridge_client import (
+    BridgeError,
+    check_plugin,
+    check_url,
+)
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.deduce_python import (
     deduce_default_python_executable,
@@ -357,6 +361,10 @@ def launch_local(
 ) -> None:
     """Launch ComfyUI as a subprocess and connect to it."""
     url = profile.comfy_local_url
+    try:
+        check_url(url)
+    except BridgeError as exc:
+        _fail(str(exc))
     process = None
     state, reason = _probe_comfyui(url)
     if state == "ayon":

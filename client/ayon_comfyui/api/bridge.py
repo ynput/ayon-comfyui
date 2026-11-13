@@ -55,6 +55,7 @@ TAB_GRACE_AFTER_RECONNECT_SECONDS = 60.0
 # Pairing codes expire on the ComfyUI side after 10 minutes; show a fresh
 # one well before that.
 PAIRING_CODE_MAX_AGE_SECONDS = 300.0
+PAIRING_CODE_RETRY_SECONDS = 30.0
 
 _BRIDGE: ComfyUIBridge | None = None
 
@@ -234,12 +235,17 @@ class ComfyUIBridge(QtCore.QObject):
         """Get a fresh one-time pairing code and link."""
         if not self.client.registered:
             return False
+        # Also counts as an attempt, so a failing relay isn't asked (and
+        # the UI blocked) every second.
+        self._pairing_code_at = time.monotonic()
         try:
-            self._pairing_code = self.client.request_pair_code()
+            self._pairing_code = self.client.request_pair_code(timeout=5)
         except BridgeError as exc:
             log.warning("Unable to get a pairing code: %s", exc)
+            self._pairing_code = ""
+            self._pairing_url = ""
+            self._window.update_view()
             return False
-        self._pairing_code_at = time.monotonic()
         self._pairing_url = self.client.pairing_url(self._pairing_code)
         self._window.update_view()
         return True
@@ -247,13 +253,16 @@ class ComfyUIBridge(QtCore.QObject):
     def ensure_pairing_code(self) -> None:
         """Make sure the session window shows a pairing code still valid."""
         age = time.monotonic() - self._pairing_code_at
-        if not self._pairing_code or age > PAIRING_CODE_MAX_AGE_SECONDS:
+        if age > PAIRING_CODE_MAX_AGE_SECONDS or (
+            not self._pairing_code and age > PAIRING_CODE_RETRY_SECONDS
+        ):
             self.new_pairing_code()
 
     def _forget_pairing_code(self) -> None:
-        # A tab used it (or it expires soon); don't show it again.
+        # A tab used it, or ComfyUI forgot it; get a new one when needed.
         self._pairing_code = ""
         self._pairing_url = ""
+        self._pairing_code_at = 0.0
 
     # --- state --------------------------------------------------------------
 
@@ -381,6 +390,7 @@ class ComfyUIBridge(QtCore.QObject):
             self._no_tab_since = now
             self._tab_grace = TAB_GRACE_SECONDS
         elif event == "rejected":
+            self._failed = True
             self._timer.stop()
             QtWidgets.QMessageBox.critical(
                 None,
