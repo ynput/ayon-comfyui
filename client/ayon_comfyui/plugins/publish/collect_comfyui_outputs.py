@@ -13,7 +13,9 @@ from ayon_comfyui.api.bridge_client import BridgeError
 from ayon_comfyui.api.publish_lib import (
     COMFYUI_KEY,
     OUTPUT_FAMILIES,
+    PUBLISH_FEATURE,
     get_comfy_http,
+    missing_plugin_feature,
     split_api_prompt,
 )
 
@@ -37,6 +39,9 @@ class CollectComfyUIPrompt(pyblish.api.ContextPlugin):
     families: ClassVar[list[str]] = OUTPUT_FAMILIES
 
     def process(self, context: pyblish.api.Context) -> None:
+        outdated = missing_plugin_feature(PUBLISH_FEATURE)
+        if outdated:
+            raise KnownPublishError(outdated)
         host: ComfyUIHost = registered_host()
         try:
             api_prompt, _extra = split_api_prompt(host.stub.get_api_prompt())

@@ -197,6 +197,7 @@ class ComfyUILoader(LoaderPlugin):
             subfolder=subfolder,
             reference=reference,
             session_secret=get_bridge().client.secret,
+            plugin_features=get_bridge().client.plugin_features,
         )
 
     @staticmethod

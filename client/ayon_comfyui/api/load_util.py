@@ -22,6 +22,8 @@ log = logging.getLogger(__name__)
 
 #: Environment variable the ComfyUI plugin reads its AYON roots from.
 ROOTS_ENV = "AYON_COMFYUI_ROOTS"
+#: ComfyUI plugin feature for reading files by path.
+PATHS_FEATURE = "paths-v1"
 
 
 def site_roots(project_name: str) -> dict[str, str]:
@@ -104,6 +106,7 @@ def container_files(
     subfolder: str,
     reference: bool = False,
     session_secret: str = "",
+    plugin_features: frozenset[str] | None = None,
 ) -> dict:
     """Return the container's file entries for `filepaths`.
 
@@ -112,6 +115,14 @@ def container_files(
         when referencing by path, else `{"path_reference": None,
         "image_upload_info": [...]}` after uploading the files.
     """
+    if reference and plugin_features is not None and (
+        PATHS_FEATURE not in plugin_features
+    ):
+        log.warning(
+            "The AYON plugin on ComfyUI can't read files by path (it is "
+            "older than this addon); uploading them instead."
+        )
+        reference = False
     if reference:
         rootless = rootless_paths(project_name, filepaths)
         if rootless is None:

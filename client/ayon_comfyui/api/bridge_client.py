@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
+import ipaddress
 import itertools
 import json
 import logging
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 PROTOCOL = 1
 MAX_MSG_SIZE = 64 * 1024 * 1024
 HEARTBEAT = 30.0
+HANDSHAKE_TIMEOUT = 30.0
 RECONNECT_DELAYS = (0.5, 1.0, 2.0, 3.0, 5.0)
 
 CLOSE_REJECTED = 4001
@@ -74,6 +76,20 @@ def check_url(base_url: str) -> None:
             f"got '{base_url}'."
         )
         raise BridgeError(msg, "invalid_url")
+
+
+def is_unencrypted_remote(base_url: str) -> bool:
+    """Whether `base_url` is plain http to another machine than this one."""
+    parts = urlsplit(base_url)
+    if parts.scheme != "http":
+        return False
+    host = parts.hostname or ""
+    if host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
 
 
 def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
@@ -160,6 +176,8 @@ class BridgeClient:
         self._registered = False
         self._tab_connected = False
         self.session_id: str | None = None
+        # Features the ComfyUI plugin reported (see FEATURES in its relay).
+        self.plugin_features: frozenset[str] = frozenset()
 
     # --- state ------------------------------------------------------------
 
@@ -329,12 +347,18 @@ class BridgeClient:
         async with aiohttp.ClientSession() as session:
             while not self._stopping:
                 try:
-                    async with session.ws_connect(
-                        self.ws_url,
-                        heartbeat=HEARTBEAT,
-                        max_msg_size=MAX_MSG_SIZE,
-                        **ssl_kwargs,
-                    ) as ws:
+                    # Don't wait forever on a server that accepts the
+                    # connection but never answers the handshake.
+                    ws = await asyncio.wait_for(
+                        session.ws_connect(
+                            self.ws_url,
+                            heartbeat=HEARTBEAT,
+                            max_msg_size=MAX_MSG_SIZE,
+                            **ssl_kwargs,
+                        ),
+                        HANDSHAKE_TIMEOUT,
+                    )
+                    async with ws:
                         self._ws = ws
                         attempt = 0
                         fatal = await self._session(ws)
@@ -407,6 +431,12 @@ class BridgeClient:
         kind = frame.get("type")
         if kind == "welcome":
             self.session_id = frame.get("session")
+            features = frame.get("features")
+            self.plugin_features = frozenset(
+                feature
+                for feature in (features if isinstance(features, list) else [])
+                if isinstance(feature, str)
+            )
             self._registered = True
             self._tab_connected = bool(frame.get("peer", {}).get("connected"))
             log.info("Connected to ComfyUI at %s", self.base_url)
@@ -457,7 +487,9 @@ class BridgeClient:
     ) -> None:
         request_id = frame.get("id")
         method = frame.get("method")
-        handler = self._handlers.get(method)
+        handler = (
+            self._handlers.get(method) if isinstance(method, str) else None
+        )
         response: dict = {"type": "response", "id": request_id}
         if handler is None:
             response["error"] = {

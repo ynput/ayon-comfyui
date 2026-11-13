@@ -10,6 +10,7 @@ from ayon_core.pipeline import registered_host
 from ayon_core.pipeline.publish import KnownPublishError
 
 from ayon_comfyui.api import comfy_publish
+from ayon_comfyui.api.bridge import get_bridge
 from ayon_comfyui.api.bridge_client import BridgeError
 from ayon_comfyui.api.publish_lib import (
     COMFYUI_KEY,
@@ -113,13 +114,16 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
 
         finished = False
         try:
-            entry = comfy_publish.wait_for_prompt(
-                http,
-                prompt_id,
-                timeout=self.timeout,
-                log_progress=self.log.info,
-                sleep=responsive_sleep,
-            )
+            # The wait keeps processing Qt events; hold back what the tab
+            # asks for meanwhile (e.g. "Save Workfile") until it's done.
+            with get_bridge().busy():
+                entry = comfy_publish.wait_for_prompt(
+                    http,
+                    prompt_id,
+                    timeout=self.timeout,
+                    log_progress=self.log.info,
+                    sleep=responsive_sleep,
+                )
             finished = True
         except comfy_publish.PublishError as exc:
             msg = str(exc)

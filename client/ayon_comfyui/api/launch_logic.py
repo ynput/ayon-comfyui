@@ -37,6 +37,7 @@ from ayon_comfyui.api.bridge_client import (
     BridgeError,
     check_plugin,
     check_url,
+    is_unencrypted_remote,
 )
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.deduce_python import (
@@ -431,6 +432,13 @@ def launch_remote(
         check_plugin(url)
     except BridgeError as exc:
         _fail(str(exc))
+    if is_unencrypted_remote(url):
+        log.warning(
+            "ComfyUI at %s is reached over plain http: the AYON session "
+            "secret and the workflows travel unencrypted. Prefer https for "
+            "a ComfyUI on another machine.",
+            url,
+        )
 
     bridge = ComfyUIBridge(
         url,
