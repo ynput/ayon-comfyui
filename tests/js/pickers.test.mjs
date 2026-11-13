@@ -148,3 +148,104 @@ test("updating to the latest version keeps or replaces the representation",
     assert.equal(apply.representation_name, "png")
     assert.equal(apply.container_uuid, container.container_uuid)
   })
+
+// Runs `func` with the pickers' long timers (> 1 s) captured instead of
+// started; returns them, for the test to fire.
+async function with_long_timers(func) {
+  const timers = []
+  const saved = globalThis.setTimeout
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    if (delay > 1000) {
+      timers.push(() => callback(...args))
+      return 0
+    }
+    return saved(callback, delay, ...args)
+  }
+  try {
+    await func()
+  } finally {
+    globalThis.setTimeout = saved
+  }
+  return timers
+}
+
+// A picker that picked renderMain, and the AYON Context node of its graph.
+function make_pick() {
+  const node = make_node("AYON Load Image")
+  const context = make_node("AYON Context",
+    {context: {}, instances: [], containers: []})
+  const root = {nodes: [node, context]}
+  node.graph = root
+  const hub = make_hub(root)
+  const toasts = []
+  hub.toast = (severity, detail) => toasts.push([severity, detail])
+  hub.call = async () => ({scheduled: true})
+  const picker = new LoadPicker(node, hub)
+  // No AYON queries for the lists.
+  picker.refresh = async () => {}
+  picker.selection = {
+    folder_id: "f", product_id: "p", product_name: "renderMain",
+    version_mode: "latest", representation_name: "png",
+  }
+  return {node, context, hub, picker, toasts}
+}
+
+// The node gave up waiting for AYON to load what it picked, e.g. while AYON
+// was busy publishing; returns the load's token.
+async function load_taking_long(picker) {
+  const timers = await with_long_timers(() => picker.apply())
+  const token = picker.applying
+  assert.ok(token)
+  timers.forEach((fire) => fire())
+  assert.equal(picker.applying, null)
+  return token
+}
+
+test("a load answered after the node stopped waiting still updates it",
+  async () => {
+    const {node, context, hub, picker, toasts} = make_pick()
+    const token = await load_taking_long(picker)
+    assert.equal(picker.state.kind, "busy")
+    assert.equal(toasts.length, 1)
+
+    const container = {container_uuid: "u1", representation: "r1"}
+    const answer = {token, container_json: JSON.stringify(container)}
+    assert.equal(hub.on_applied(answer), true)
+    assert.deepEqual(JSON.parse(node.widgets[0].value), container)
+    assert.deepEqual(
+      JSON.parse(context.widgets[0].value).containers, [container])
+    assert.equal(picker.state.kind, "ok")
+    // Only once.
+    assert.equal(hub.on_applied(answer), false)
+  })
+
+test("a newer load replaces a load the node stopped waiting for",
+  async () => {
+    const {node, hub, picker} = make_pick()
+    const late = await load_taking_long(picker)
+    await with_long_timers(() => picker.apply())
+    const newer = picker.applying
+    assert.ok(newer && newer !== late)
+
+    // The older load's answer comes after all: the newer pick wins.
+    const container = {container_uuid: "old", representation: "r1"}
+    assert.equal(hub.on_applied(
+      {token: late, container_json: JSON.stringify(container)}), false)
+    assert.equal(node.widgets[0].value, "")
+    assert.equal(picker.applying, newer)
+  })
+
+test("a newer load AYON refused keeps the late answer", async () => {
+  const {node, hub, picker} = make_pick()
+  const late = await load_taking_long(picker)
+  hub.call = async () => {
+    throw new Error("AYON is still loading into this node.")
+  }
+  await picker.apply()
+  assert.equal(picker.applying, null)
+
+  const container = {container_uuid: "u1", representation: "r1"}
+  assert.equal(hub.on_applied(
+    {token: late, container_json: JSON.stringify(container)}), true)
+  assert.deepEqual(JSON.parse(node.widgets[0].value), container)
+})

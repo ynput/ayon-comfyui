@@ -36,7 +36,8 @@ const CONTEXT_NODE_TYPE = "AYON Context"
 const CONTEXT_WIDGET = "ayon_context_info"
 
 const QUERY_TIMEOUT_MS = 15000
-// How long AYON may take to upload a picked representation.
+// How long a node shows that it waits for AYON to load (upload) what was
+// picked. A later answer still updates the node, see `LoadPicker.apply`.
 const APPLY_TIMEOUT_MS = 5 * 60 * 1000
 // How long AYON keeps a node waiting for the Loader (LOAD_TARGET_TTL).
 const LOADER_TARGET_TTL_MS = 30 * 60 * 1000
@@ -188,6 +189,9 @@ export class LoadPicker {
     )
     // Token of an open "Open AYON Loader" request.
     this.browse_token = null
+    // Token of a load the node stopped waiting for; AYON's answer still
+    // updates the node, unless the node asked for something else since.
+    this.late_token = null
     this.sync_from_container()
   }
 
@@ -584,12 +588,30 @@ export class LoadPicker {
       this.fail(error_message(err))
       return
     }
+    // AYON loads this instead of a load the node stopped waiting for.
+    this.drop_late_token()
     setTimeout(() => {
-      if (this.hub.pending.delete(token) && this.applying === token) {
-        this.applying = null
-        this.fail("AYON didn't finish loading in time")
+      if (this.applying !== token || !this.hub.pending.has(token)) {
+        return
       }
+      // Let the artist pick again, but keep the answer's place: AYON may
+      // be uploading large files, or busy publishing, and has the files
+      // ready when it answers.
+      this.applying = null
+      this.late_token = token
+      this.hub.toast("info",
+        `AYON is taking long to load ${sel.product_name}; the node ` +
+        "updates when it's done.")
+      this.sync_from_container()
+      this.set_state("busy", `still loading ${sel.product_name} in AYON`)
     }, APPLY_TIMEOUT_MS)
+  }
+
+  drop_late_token() {
+    if (this.late_token) {
+      this.hub.pending.delete(this.late_token)
+      this.late_token = null
+    }
   }
 
   // Let the artist pick in the AYON Loader what this node loads.
@@ -633,6 +655,10 @@ export class LoadPicker {
         this.browse_token = null
         this.fail(error_message(err))
       }
+      return
+    }
+    if (this.browse_token === token) {
+      this.drop_late_token()
     }
   }
 
@@ -645,6 +671,11 @@ export class LoadPicker {
     if (token && token === this.browse_token) {
       this.browse_token = null
       return true
+    }
+    if (token && token === this.late_token) {
+      this.late_token = null
+      // Not while the node waits for another answer: that one is newer.
+      return !this.applying && !this.browse_token
     }
     return false
   }
@@ -737,13 +768,14 @@ export class LoadPicker {
   // is still in use (e.g. moved into a subgraph) registers again when used.
   dispose() {
     this.generation += 1
-    for (const token of [this.applying, this.browse_token]) {
+    for (const token of [this.applying, this.browse_token, this.late_token]) {
       if (token) {
         this.hub.pending.delete(token)
       }
     }
     this.applying = null
     this.browse_token = null
+    this.late_token = null
     this.hub.forget(this)
   }
 
@@ -751,6 +783,7 @@ export class LoadPicker {
   abandon_requests() {
     this.take_token(this.applying)
     this.take_token(this.browse_token)
+    this.late_token = null
   }
 }
 
