@@ -177,6 +177,7 @@ class ComfyUILoader(LoaderPlugin):
             filepaths,
             subfolder=subfolder,
             reference=reference,
+            session_secret=get_bridge().client.secret,
         )
 
     def update_files(

@@ -66,11 +66,24 @@ def rootless_paths(
     return result
 
 
-def server_can_read(comfy_url: str, rootless: list[str]) -> bool:
-    """Return whether the ComfyUI server can read all `rootless` paths."""
+#: Header the ComfyUI plugin authenticates `/ayon/paths/check` with.
+SESSION_HEADER = "X-AYON-Session"
+
+
+def server_can_read(
+    comfy_url: str, rootless: list[str], session_secret: str
+) -> bool:
+    """Return whether the ComfyUI server can read all `rootless` paths.
+
+    The check is only answered for AYON sessions registered on the bridge,
+    so it is authenticated with this session's secret.
+    """
     try:
         answer = ComfyHttp(comfy_url).http_json(
-            "POST", "/ayon/paths/check", json={"paths": rootless}
+            "POST",
+            "/ayon/paths/check",
+            json={"paths": rootless},
+            headers={SESSION_HEADER: session_secret},
         )
     except BridgeError as exc:
         log.info("ComfyUI can't check paths (%s).", exc)
@@ -90,6 +103,7 @@ def container_files(
     *,
     subfolder: str,
     reference: bool = False,
+    session_secret: str = "",
 ) -> dict:
     """Return the container's file entries for `filepaths`.
 
@@ -105,7 +119,7 @@ def container_files(
                 "The files aren't below an AYON root of '%s'; uploading "
                 "them to ComfyUI instead of referencing them.", project_name,
             )
-        elif server_can_read(comfy_url, rootless):
+        elif server_can_read(comfy_url, rootless, session_secret):
             log.info("Referencing %s file(s) on ComfyUI.", len(rootless))
             return {
                 "path_reference": {"files": rootless},

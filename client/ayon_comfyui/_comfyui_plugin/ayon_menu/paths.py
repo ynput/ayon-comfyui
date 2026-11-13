@@ -28,6 +28,8 @@ import re
 log = logging.getLogger(__name__)
 
 ROOTS_ENV = "AYON_COMFYUI_ROOTS"
+#: Header with the AYON host's bridge session secret.
+SESSION_HEADER = "X-AYON-Session"
 ROOTS_FILE = os.path.join("__ayon", "roots.json")
 _ROOTLESS = re.compile(r"^\{root\[([A-Za-z0-9_-]+)\]\}(.*)$", re.DOTALL)
 MAX_CHECK_PATHS = 100_000
@@ -97,13 +99,34 @@ def resolve_rootless(path: str) -> str | None:
     if not root:
         return None
     relative = match.group(2).replace("\\", "/").lstrip("/")
-    full = os.path.abspath(os.path.join(root, relative))
-    try:
-        common = os.path.commonpath([full, root])
-    except ValueError:  # different drives
+    if ":" in relative or "\0" in relative:
+        # Drive letters and NTFS alternate data streams.
         return None
-    inside = os.path.normcase(common) == os.path.normcase(root)
-    return full if inside else None
+    full = os.path.realpath(os.path.join(root, relative))
+    return full if is_inside(full, os.path.realpath(root)) else None
+
+
+def is_inside(path: str, directory: str) -> bool:
+    """Return whether `path` is `directory` or below it."""
+    try:
+        common = os.path.commonpath([path, directory])
+    except ValueError:  # different drives
+        return False
+    return os.path.normcase(common) == os.path.normcase(directory)
+
+
+def _is_ayon_session(request) -> bool:  # noqa: ANN001
+    """Whether the request comes from a registered AYON session.
+
+    The AYON host sends its session secret, the one it registers with on
+    the bridge websocket.
+    """
+    from .bridge import BRIDGE, session_id_from_secret  # noqa: PLC0415
+
+    secret = request.headers.get(SESSION_HEADER, "")
+    if not 32 <= len(secret) <= 256:  # noqa: PLR2004
+        return False
+    return session_id_from_secret(secret) in BRIDGE.sessions
 
 
 async def handle_check(request):  # noqa: ANN001, ANN201
@@ -111,10 +134,13 @@ async def handle_check(request):  # noqa: ANN001, ANN201
 
     Body: `{"paths": ["{root[work]}/...", ...]}`. Answers
     `{"roots": [names], "exists": [bool, ...]}`. Only paths below a
-    configured root are ever checked.
+    configured root are ever checked, and only for AYON sessions, so this
+    doesn't tell anyone else which files exist.
     """
     from aiohttp import web  # noqa: PLC0415
 
+    if not _is_ayon_session(request):
+        return web.json_response({"error": "unauthorized"}, status=403)
     try:
         body = await request.json()
     except ValueError:
