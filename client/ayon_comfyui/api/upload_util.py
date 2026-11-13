@@ -75,11 +75,11 @@ async def upload_image(
         ".ksplat": "application/octet-stream",
     }
 
-    MIME_type = MIME_map.get(image_path.suffix)  # noqa : N806
-
-    if MIME_type is None:
-        # Maybe raise
-        return None
+    # Unknown types (e.g. DPX) upload as plain bytes: ComfyUI ignores the
+    # type, and the upload must not fail on it.
+    MIME_type = MIME_map.get(  # noqa : N806
+        image_path.suffix.lower(), "application/octet-stream"
+    )
 
     url_parsed = urlparse(base_url)
     post_url = url_parsed._replace(path="/upload/image").geturl()
