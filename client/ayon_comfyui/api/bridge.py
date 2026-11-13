@@ -14,6 +14,7 @@ ComfyUI process when AYON launched it, and the lifetime of the session:
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
 import socket
@@ -155,6 +156,8 @@ class ComfyUIBridge(QtCore.QObject):
         self._pairing_url = ""
         self._pairing_code = ""
         self._pairing_code_at = 0.0
+        self._pairing_code_pending = False
+        self._open_tab_on_code = False
         self._shutting_down = False
         # Startup failed and the artist is being told; ignore late events.
         self._failed = False
@@ -226,29 +229,54 @@ class ComfyUIBridge(QtCore.QObject):
 
     def open_tab(self) -> None:
         """Pair and open a new ComfyUI tab in the browser."""
-        if not self.new_pairing_code():
-            return
-        log.info("Opening ComfyUI tab: %s", self.comfy_url)
-        webbrowser.open(self._pairing_url)
+        self._open_tab_on_code = True
+        self.new_pairing_code()
 
-    def new_pairing_code(self) -> bool:
-        """Get a fresh one-time pairing code and link."""
-        if not self.client.registered:
-            return False
-        # Also counts as an attempt, so a failing relay isn't asked (and
-        # the UI blocked) every second.
+    def new_pairing_code(self) -> None:
+        """Ask for a fresh one-time pairing code and link.
+
+        The relay answers in the background, so the Qt thread never waits
+        on it; the session window updates (and the browser opens, after
+        `open_tab`) once the code arrives.
+        """
+        if not self.client.registered or self._pairing_code_pending:
+            return
+        # Also counts as an attempt, so a failing relay isn't asked every
+        # second.
         self._pairing_code_at = time.monotonic()
         try:
-            self._pairing_code = self.client.request_pair_code(timeout=5)
+            future = self.client.call_nowait(None, timeout=10)
         except BridgeError as exc:
             log.warning("Unable to get a pairing code: %s", exc)
+            self._open_tab_on_code = False
+            return
+        self._pairing_code_pending = True
+        future.add_done_callback(
+            lambda done: self.run_in_main_thread(
+                partial(self._on_pairing_code, done)
+            )
+        )
+
+    def _on_pairing_code(self, future: concurrent.futures.Future) -> None:
+        self._pairing_code_pending = False
+        open_tab = self._open_tab_on_code
+        self._open_tab_on_code = False
+        code = None
+        if not future.cancelled() and future.exception() is None:
+            code = future.result()
+        if not code:
+            error = None if future.cancelled() else future.exception()
+            log.warning("Unable to get a pairing code: %s", error)
             self._pairing_code = ""
             self._pairing_url = ""
             self._window.update_view()
-            return False
-        self._pairing_url = self.client.pairing_url(self._pairing_code)
+            return
+        self._pairing_code = code
+        self._pairing_url = self.client.pairing_url(code)
         self._window.update_view()
-        return True
+        if open_tab:
+            log.info("Opening ComfyUI tab: %s", self.comfy_url)
+            webbrowser.open(self._pairing_url)
 
     def ensure_pairing_code(self) -> None:
         """Make sure the session window shows a pairing code still valid."""
@@ -418,13 +446,23 @@ class ComfyUIBridge(QtCore.QObject):
         self._send_session_info()
 
     def _send_session_info(self) -> None:
-        """Show the current AYON context in the tab's AYON panel."""
+        """Show the current AYON context in the tab's AYON panel.
+
+        Doesn't wait for the tab, so a slow tab never blocks the Qt thread.
+        """
         try:
             info = get_session_info()
             self.client.info = info
-            self.client.call("setSessionInfo", info, timeout=5)
+            future = self.client.call_nowait("setSessionInfo", info)
         except Exception:  # noqa: BLE001
             log.debug("Unable to send session info", exc_info=True)
+            return
+
+        def _log_failure(done: concurrent.futures.Future) -> None:
+            if not done.cancelled() and done.exception() is not None:
+                log.debug("Unable to send session info: %s", done.exception())
+
+        future.add_done_callback(_log_failure)
 
     # --- requests from the tab (bridge worker thread) ---------------------
 
