@@ -358,7 +358,11 @@ class AyonLoadImageNode(io.ComfyNode):
     @staticmethod
     def define_inputs() -> list[io.Input]:
         return [
-            io.String.Input("ayon_container_info", "AYON context"),
+            # Folded under "Show advanced inputs": the AYON pickers on the
+            # node show what it loads.
+            io.String.Input(
+                "ayon_container_info", "AYON context", advanced=True
+            ),
         ]
 
     @staticmethod
@@ -405,7 +409,11 @@ class AyonLoadVideoNode(io.ComfyNode):
     @staticmethod
     def define_inputs() -> list[io.Input]:
         return [
-            io.String.Input("ayon_container_info", "AYON context"),
+            # Folded under "Show advanced inputs": the AYON pickers on the
+            # node show what it loads.
+            io.String.Input(
+                "ayon_container_info", "AYON context", advanced=True
+            ),
         ]
 
     @staticmethod
@@ -461,7 +469,11 @@ class AyonLoad3DModelNode(io.ComfyNode):
     @staticmethod
     def define_inputs() -> list[io.Input]:
         return [
-            io.String.Input("ayon_container_info", "AYON context"),
+            # Folded under "Show advanced inputs": the AYON pickers on the
+            # node show what it loads.
+            io.String.Input(
+                "ayon_container_info", "AYON context", advanced=True
+            ),
         ]
 
     @staticmethod
