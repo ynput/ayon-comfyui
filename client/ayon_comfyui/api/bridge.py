@@ -113,6 +113,7 @@ class ComfyUIBridge(QtCore.QObject):
     """
 
     _sig_call = QtCore.Signal(object)
+    _sig_call_while_busy = QtCore.Signal(object)
     _sig_event = QtCore.Signal(str, object)
 
     def __init__(  # noqa: PLR0913
@@ -166,6 +167,7 @@ class ComfyUIBridge(QtCore.QObject):
         self._deferred: list[Callable[[], Any]] = []
 
         self._sig_call.connect(self._run_callable)
+        self._sig_call_while_busy.connect(self._run_callable_while_busy)
         self._sig_event.connect(self._handle_event)
         # After connecting `_sig_call`: registering warms the loaders on the
         # Qt main thread through it.
@@ -476,14 +478,26 @@ class ComfyUIBridge(QtCore.QObject):
 
     # --- requests from the tab (bridge worker thread) ---------------------
 
-    def run_in_main_thread(self, func: Callable[[], Any]) -> None:
+    def run_in_main_thread(
+        self, func: Callable[[], Any], *, while_busy: bool = False
+    ) -> None:
         """Run `func` on the Qt main thread, from any thread.
 
         Doesn't wait for it to run. Tab request handlers run on a worker
         thread; use this for anything that touches Qt or host state, and
         answer the tab right away.
+
+        Args:
+            func: What to run.
+            while_busy: Run it also while `busy`, instead of after. Only
+                for what the busy operation doesn't depend on and that
+                doesn't open windows, e.g. putting a picked container on
+                the node that asked for it.
         """
-        self._sig_call.emit(func)
+        if while_busy:
+            self._sig_call_while_busy.emit(func)
+        else:
+            self._sig_call.emit(func)
 
     @contextlib.contextmanager
     def busy(self) -> Iterator[None]:
@@ -494,6 +508,9 @@ class ComfyUIBridge(QtCore.QObject):
         "AYON > Save Workfile" clicked in the tab would run in the middle of
         it. The tab still gets its answer right away. Use on the Qt main
         thread.
+
+        What is sent with `run_in_main_thread(..., while_busy=True)` still
+        runs meanwhile.
         """
         self._busy += 1
         try:
@@ -509,6 +526,12 @@ class ComfyUIBridge(QtCore.QObject):
         if self._busy:
             self._deferred.append(func)
             return
+        try:
+            func()
+        except Exception:
+            log.exception("Error while running %s", func)
+
+    def _run_callable_while_busy(self, func: Callable[[], Any]) -> None:
         try:
             func()
         except Exception:

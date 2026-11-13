@@ -27,6 +27,17 @@ ComfyUI page can reach them through the paired tab, so:
   `pickerApplied` is addressed by a token the tab chose, so the tab
   updates exactly the node that asked, also when the artist switched
   workflows in the meantime.
+- `pickerApplied` is sent also while the bridge is busy, i.e. while a
+  publish waits for its ComfyUI render, so artists can keep picking: the
+  publish took the workflow it renders and saved the workfile it
+  publishes before it started waiting, and the render runs the prompt
+  queued then, so changing a node doesn't affect it (it is like the artist
+  editing the graph meanwhile; it ends up in the next workfile version).
+  The wait shows an application-modal window, so no Loader, Scene
+  Inventory or Creator action runs meanwhile, and their read-modify-writes
+  don't process Qt events, so they can't be interleaved either. Opening
+  the AYON Loader for a node (`picker.browse`) does wait: that window
+  couldn't be used before the render is done anyway.
 
 Queries run on the bridge's worker threads and are cached for a minute
 (`refresh` bypasses the cache; changing the AYON context clears it).
@@ -830,8 +841,11 @@ def register_picker_handlers(
         # The tab writes the container into the AYON Context node when it
         # gets it: send it from the Qt main thread, where the host's own
         # read-modify-writes of that node run, so they never interleave.
+        # Don't hold it back while a publish waits for its render (see the
+        # notes at the top): the tab could give up waiting meanwhile.
         bridge.run_in_main_thread(
-            partial(_send_applied, request["token"], container, error)
+            partial(_send_applied, request["token"], container, error),
+            while_busy=True,
         )
 
     def _send_applied(
@@ -852,6 +866,8 @@ def register_picker_handlers(
 
     def _browse(params: dict) -> dict:
         request = service.validate_browse(params)
+        # Waits while the bridge is busy: during a publish render only the
+        # render's progress window takes input.
         bridge.run_in_main_thread(partial(_open_loader, request))
         return {"scheduled": True}
 

@@ -6,12 +6,18 @@ No AYON, ComfyUI or Qt needed. Run from the repository root with
 
 from __future__ import annotations
 
+import importlib
+import json
 import os
+import queue
 import sys
 import threading
 import time
+import types
 import unittest
 import uuid
+from functools import partial
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 import _stubs  # noqa: E402, F401
@@ -481,6 +487,7 @@ class FakeBridge:
 
         self.client = Client()
         self.main_thread_calls: list = []
+        self.while_busy: list[bool] = []
         self.applied = threading.Event()
         self.applied_from: str | None = None
         self.applied_args: tuple | None = None
@@ -498,8 +505,9 @@ class FakeBridge:
 
         self.stub = Stub()
 
-    def run_in_main_thread(self, func) -> None:
+    def run_in_main_thread(self, func, *, while_busy=False) -> None:
         self.main_thread_calls.append(func)
+        self.while_busy.append(while_busy)
 
 
 class HandlerTests(unittest.TestCase):
@@ -524,7 +532,9 @@ class HandlerTests(unittest.TestCase):
         self.assertTrue(FakeLoader.built[-1]["thread"].startswith(
             "AYON-ComfyUI-picker-load"))
         # ...and the result goes to the tab from the Qt main thread (here
-        # the test's thread), where the AYON Context node is written.
+        # the test's thread), where the AYON Context node is written, also
+        # while a publish waits for its render.
+        self.assertEqual(bridge.while_busy, [False, True])
         self.assertFalse(bridge.applied.is_set())
         bridge.main_thread_calls[1]()
         self.assertEqual(
@@ -546,6 +556,180 @@ class HandlerTests(unittest.TestCase):
         with self.assertRaises(pickers.PickerError) as caught:
             bridge.handlers["picker.folders"]({})
         self.assertNotIn("secret", str(caught.exception))
+
+
+# --- the real bridge, with stand-ins for Qt and ayon-core --------------------
+
+# Calls posted to the Qt main thread; `process_events` runs them.
+EVENTS: queue.Queue = queue.Queue()
+
+
+def process_events() -> None:
+    """Run what was posted to the Qt main thread, like its event loop."""
+    while True:
+        try:
+            event = EVENTS.get_nowait()
+        except queue.Empty:
+            return
+        event()
+
+
+class _BoundSignal:
+    def __init__(self) -> None:
+        self.slots: list = []
+
+    def connect(self, slot) -> None:
+        self.slots.append(slot)
+
+    def emit(self, *args) -> None:
+        # A queued connection: the slot runs on the Qt main thread later.
+        for slot in self.slots:
+            EVENTS.put(partial(slot, *args))
+
+
+class _Signal:
+    """Stand-in for `QtCore.Signal`, connected to the main thread."""
+
+    def __init__(self, *_types) -> None:
+        self.name = ""
+
+    def __set_name__(self, owner, name) -> None:
+        self.name = name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return obj.__dict__.setdefault(f"_signal_{self.name}", _BoundSignal())
+
+
+def import_bridge() -> types.ModuleType:
+    """Import `api/bridge.py` with stand-ins for Qt and ayon-core."""
+    qtcore = types.ModuleType("qtpy.QtCore")
+    qtcore.QObject = type(
+        "QObject", (), {"__init__": lambda self, parent=None: None})
+    qtcore.Signal = _Signal
+    qtcore.QTimer = lambda *_args: mock.MagicMock()
+    qtgui = types.ModuleType("qtpy.QtGui")
+    qtwidgets = types.ModuleType("qtpy.QtWidgets")
+    qtwidgets.QWidget = type("QWidget", (), {})
+    qtpy = types.ModuleType("qtpy")
+    qtpy.QtCore, qtpy.QtGui, qtpy.QtWidgets = qtcore, qtgui, qtwidgets
+    ayon_core = mock.MagicMock()
+    fakes = {
+        "qtpy": qtpy,
+        "qtpy.QtCore": qtcore,
+        "qtpy.QtGui": qtgui,
+        "qtpy.QtWidgets": qtwidgets,
+        "ayon_core": ayon_core,
+        "ayon_core.pipeline": ayon_core.pipeline,
+        "ayon_core.tools": ayon_core.tools,
+        "ayon_core.tools.utils": ayon_core.tools.utils,
+    }
+    package = sys.modules["ayon_comfyui.api"]
+    # Only for this import: other tests may use the real modules.
+    with mock.patch.dict(sys.modules, fakes), \
+            mock.patch.dict(vars(package)):
+        for name in ("bridge", "menu_actions", "rpc_stub"):
+            sys.modules.pop(f"ayon_comfyui.api.{name}", None)
+        return importlib.import_module("ayon_comfyui.api.bridge")
+
+
+class BusyBridgeTests(unittest.TestCase):
+    """Picks while the bridge is busy, e.g. a publish waiting for a render.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = import_bridge()
+
+    def setUp(self) -> None:
+        module = self.module
+        self.calls: list = []
+        calls = self.calls
+
+        class Client:
+            """Records what is sent to the ComfyUI tab."""
+
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.handlers: dict = {}
+
+            def register_handler(self, name, func) -> None:
+                self.handlers[name] = func
+
+            def call(self, method, params, timeout=None):
+                calls.append((method, params))
+                return True
+
+        register = module.register_picker_handlers
+        # The pickers module the bridge uses.
+        self.pickers = register.__globals__
+        for patch in (
+            mock.patch.object(module, "BridgeClient", Client),
+            mock.patch.object(module, "SessionWindow", mock.MagicMock()),
+            mock.patch.object(module, "get_session_info", dict),
+            mock.patch.object(
+                module, "register_picker_handlers",
+                lambda bridge: register(bridge, service=make_service()),
+            ),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        # No loader discovery: it needs ayon-core.
+        self.set_picker_global("loaders_by_node_type", dict)
+        self.opened: list = []
+        self.set_picker_global(
+            "open_loader", lambda: self.opened.append(True))
+        self.addCleanup(self.pickers["take_load_target"])
+
+        self.bridge = module.ComfyUIBridge("http://127.0.0.1:8188")
+        self.handlers = self.bridge.client.handlers
+        process_events()
+
+    def set_picker_global(self, name: str, value) -> None:
+        original = self.pickers[name]
+        self.pickers[name] = value
+        self.addCleanup(self.pickers.__setitem__, name, original)
+
+    def test_picks_are_applied_while_busy(self) -> None:
+        saves: list = []
+        with mock.patch.object(
+            self.module, "save_current_workfile", lambda: saves.append(True)
+        ):
+            with self.bridge.busy():
+                # Both clicked in the tab while busy. "Save Workfile" waits
+                # until the bridge is no longer busy...
+                self.handlers["requestSaveWorkfile"]({})
+                self.assertEqual(
+                    self.handlers["picker.apply"](dict(APPLY)),
+                    {"scheduled": True},
+                )
+                # ...but the pick is loaded into its node right away.
+                deadline = time.monotonic() + 5
+                while not self.calls:
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
+                    process_events()
+                [(method, params)] = self.calls
+                self.assertEqual(method, "pickerApplied")
+                self.assertEqual(params["token"], "tok1")
+                self.assertIsNone(params["error"])
+                container = json.loads(params["container_json"])
+                self.assertEqual(container["representation"], R2)
+                self.assertEqual(saves, [])
+            process_events()
+            self.assertEqual(saves, [True])
+
+    def test_loader_opens_when_no_longer_busy(self) -> None:
+        browse = {"token": "tok2", "node_type": "AYON Load Image"}
+        with self.bridge.busy():
+            self.assertEqual(
+                self.handlers["picker.browse"](browse), {"scheduled": True})
+            process_events()
+            self.assertEqual(self.opened, [])
+            self.assertIsNone(self.pickers["get_load_target"]())
+        process_events()
+        self.assertEqual(self.opened, [True])
+        self.assertEqual(self.pickers["get_load_target"]()["token"], "tok2")
 
 
 if __name__ == "__main__":
