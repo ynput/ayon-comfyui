@@ -27,7 +27,7 @@ from ayon_core.pipeline import (
 )
 from ayon_core.tools.utils import get_ayon_qt_app
 from ayon_core.tools.utils.dialogs import show_message_dialog, ScrollMessageBox
-from qtpy import QtWidgets
+from qtpy import QtCore, QtWidgets
 
 if TYPE_CHECKING:
     from qtpy.QtWidgets import QApplication
@@ -293,16 +293,31 @@ def main(*args):
     # Launch Qt Thread
     log.info("Launching qt thread")
 
+    ret = 1
     try:
         ret = app.exec_()
     except BaseException:  # noqa: BLE001
         log.debug("Problems keeping thread alive", exc_info=True)
+
+    # Qt may crash tearing down windows that are still alive (e.g. AYON
+    # tools that were left open) during `os._exit`; destroy them first.
+    _destroy_windows(app)
 
     # The bridge already disconnected and stopped ComfyUI (if we launched
     # it) before the Qt loop ended; don't let leftover threads block exit.
 
     # sys.exit(ret)
     os._exit(ret)
+
+
+def _destroy_windows(app: QApplication) -> None:
+    for widget in QtWidgets.QApplication.topLevelWidgets():
+        widget.hide()
+        widget.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(
+        None, QtCore.QEvent.Type.DeferredDelete
+    )
+    app.processEvents()
 
 
 def _open_last_workfile() -> None:
