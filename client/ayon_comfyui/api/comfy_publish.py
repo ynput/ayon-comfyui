@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -31,6 +32,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from fractions import Fraction
 from typing import Any, Protocol
 
 from ayon_comfyui.api.bridge_client import BridgeError
@@ -724,6 +726,123 @@ def download_files(
             raise PublishError(str(exc)) from exc
         names.append(name)
     return names
+
+
+# --- frame ranges for review ------------------------------------------------
+
+
+def frame_range(frame_count: int, fps: float) -> dict:
+    """Return the instance data of `frame_count` frames from frame 1.
+
+    Extract Review needs `frameStart`, `frameEnd` and `fps`. The handles are
+    set to 0 explicitly: without them it takes the context's handles, and
+    the outputs have none.
+    """
+    return {
+        "frameStart": 1,
+        "frameEnd": frame_count,
+        "handleStart": 0,
+        "handleEnd": 0,
+        "frameStartHandle": 1,
+        "frameEndHandle": frame_count,
+        "fps": fps,
+    }
+
+
+def parse_frame_rate(value: Any) -> float | None:  # noqa: ANN401
+    """Return an ffprobe frame rate, such as "24000/1001", as a number.
+
+    It's parsed as a fraction, never evaluated. Returns None for anything
+    but a positive rate, e.g. ffprobe's "0/0" for an unknown rate.
+    """
+    try:
+        rate = float(Fraction(str(value).strip()))
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+    return rate if rate > 0 else None
+
+
+def _positive_number(value: Any) -> float | None:  # noqa: ANN401
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def video_frame_range(
+    path: str,
+    default_fps: float | None,
+    probe: Callable[[str], Any],
+) -> dict:
+    """Return the frame range and frame rate of the video at `path`.
+
+    The frame count is the video stream's `nb_frames`, or else its duration
+    times its frame rate (WebM files have no frame count). The frame rate is
+    the stream's `r_frame_rate`, else its `avg_frame_rate`, else
+    `default_fps`.
+
+    Args:
+        path: The video file.
+        default_fps: The frame rate when the video doesn't have one.
+        probe: Returns ffprobe's JSON data of a file, i.e.
+            `ayon_core.lib.transcoding.get_ffprobe_data`.
+
+    Raises:
+        PublishError: When ffprobe can't read the file, or it tells neither
+            the video's frame count nor its duration.
+    """
+    try:
+        data = probe(path)
+    except Exception as exc:  # noqa: BLE001
+        # No ffprobe, or it printed no JSON: whatever its wrapper raises.
+        reason = str(exc).rstrip(".") or type(exc).__name__
+        msg = f"Unable to read the video '{path}' with ffprobe: {reason}."
+        raise PublishError(msg) from exc
+    if not isinstance(data, dict):
+        data = {}
+    stream = next(
+        (
+            stream
+            for stream in data.get("streams") or []
+            if isinstance(stream, dict)
+            and stream.get("codec_type") == "video"
+        ),
+        None,
+    )
+    if stream is None:
+        # ffprobe reports unreadable files as {"error": {"string": ...}}.
+        error = data.get("error")
+        reason = (
+            error.get("string") if isinstance(error, dict) else None
+        ) or "it has no video stream"
+        msg = f"Unable to read the video '{path}' with ffprobe: {reason}."
+        raise PublishError(msg)
+
+    fps = (
+        parse_frame_rate(stream.get("r_frame_rate"))
+        or parse_frame_rate(stream.get("avg_frame_rate"))
+        or default_fps
+    )
+    frames = _positive_number(stream.get("nb_frames"))
+    if frames is None and fps:
+        container = data.get("format")
+        duration = _positive_number(stream.get("duration")) or (
+            _positive_number(container.get("duration"))
+            if isinstance(container, dict) else None
+        )
+        if duration is not None:
+            # The duration includes the last frame's: e.g. 49 frames at
+            # 24 fps last 2.042 s.
+            frames = duration * fps
+    frame_count = round(frames) if frames else 0
+    if frame_count < 1:
+        msg = (
+            f"ffprobe tells neither the frame count nor the duration of the "
+            f"video '{path}'."
+        )
+        raise PublishError(msg)
+    return frame_range(frame_count, fps)
 
 
 # --- prompts this session may collect ---------------------------------------
