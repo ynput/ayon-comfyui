@@ -54,8 +54,8 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         super().__init__()
         # Workfiles AYON opened or saved in this session.
         self._known_workfiles: set[str] = set()
-        # Project name -> normalized anatomy root paths.
-        self._roots_cache: dict[str, list[str]] = {}
+        # Project name -> normalized `<root>/<project name>` folders.
+        self._project_dirs_cache: dict[str, list[str]] = {}
 
     def get_app_information(self) -> ApplicationInformation:
         """Return application information."""
@@ -100,7 +100,7 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         That path comes from the browser and travels with the workflow, e.g.
         in a workflow file someone shared. Since AYON saves to it, it's
         only trusted when AYON opened or saved it in this session, or when
-        it's a `.json` file inside the current project's roots.
+        it's a `.json` file inside the current project's folders.
         """
         path = self.stub.get_workfile_path()
         if not path:
@@ -109,7 +109,7 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
             log.warning(
                 "Ignoring workfile path '%s' stored in the ComfyUI workflow: "
                 "AYON didn't open or save it in this session and it isn't a "
-                ".json file inside the project's roots.",
+                ".json file inside the project's folders.",
                 path,
             )
             return None
@@ -128,34 +128,44 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         if os.path.splitext(normalized)[1] != ".json":
             return False
         return any(
-            normalized.startswith(root + os.sep)
-            for root in self._get_project_roots()
+            normalized.startswith(directory + os.sep)
+            for directory in self._get_trusted_dirs()
         )
 
-    def _get_project_roots(self) -> list[str]:
+    def _get_trusted_dirs(self) -> list[str]:
+        """Folders whose `.json` files may be this project's workfiles.
+
+        That's `<root>/<project name>` for each of the project's anatomy
+        roots (roots themselves are usually shared by all projects), plus
+        the current task's work directory for templates laid out
+        differently.
+        """
         project_name = get_current_project_name()
-        if not project_name:
-            return []
-        roots = self._roots_cache.get(project_name)
-        if roots is None:
-            try:
-                anatomy_roots = Anatomy(project_name).roots
-                roots = [
-                    _normalize_path(str(root)).rstrip(os.sep)
-                    for root in anatomy_roots.values()
-                    if str(root)
-                ]
-                # A root of '/' would otherwise accept any absolute path.
-                roots = [root for root in roots if root]
-            except Exception:  # noqa: BLE001
-                log.warning(
-                    "Unable to get the roots of project '%s'",
-                    project_name,
-                    exc_info=True,
-                )
-                roots = []
-            self._roots_cache[project_name] = roots
-        return roots
+        dirs = []
+        workdir = os.environ.get("AYON_WORKDIR")
+        if workdir:
+            dirs.append(_normalize_path(workdir))
+        if project_name:
+            project_dirs = self._project_dirs_cache.get(project_name)
+            if project_dirs is None:
+                try:
+                    anatomy_roots = Anatomy(project_name).roots
+                    project_dirs = [
+                        _normalize_path(os.path.join(str(root), project_name))
+                        for root in anatomy_roots.values()
+                        if str(root)
+                    ]
+                except Exception:  # noqa: BLE001
+                    log.warning(
+                        "Unable to get the roots of project '%s'",
+                        project_name,
+                        exc_info=True,
+                    )
+                    project_dirs = []
+                self._project_dirs_cache[project_name] = project_dirs
+            dirs.extend(project_dirs)
+        # An empty prefix (e.g. a root of '/') would accept any path.
+        return [d.rstrip(os.sep) for d in dirs if d.rstrip(os.sep)]
 
     def save_workfile(self, dst_path: str | None = None) -> None:
         """Save the active ComfyUI workflow to `dst_path`.
@@ -181,7 +191,8 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
 
 
 def _normalize_path(path: str) -> str:
-    return os.path.normcase(os.path.abspath(path))
+    # `realpath` so a symlink can't point a trusted path somewhere else.
+    return os.path.normcase(os.path.realpath(path))
 
 
 def uninstall() -> None:
