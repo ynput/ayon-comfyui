@@ -33,6 +33,7 @@ from ayon_core.pipeline import (
 from ayon_comfyui import COMFYUI_ADDON_ROOT
 from ayon_comfyui.api.consts import LOG_LEVEL
 from ayon_comfyui.api.bridge import get_stub
+from ayon_comfyui.api.load_util import export_site_roots
 from ayon_comfyui.api.rpc_stub import RPCStub
 
 logging.basicConfig(force=True, stream=sys.stdout, level=LOG_LEVEL)
@@ -76,6 +77,10 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
         # Pyblish
         pyblish.api.register_host("comfyui")
         pyblish.api.register_plugin_path(PUBLISH_PATH)
+
+        # A ComfyUI that AYON launches next inherits this environment and
+        # can then read loaded files by path when the artist asks for it.
+        export_site_roots(get_current_project_name())
 
     def get_containers(self):
         return ls()
@@ -264,6 +269,7 @@ def make_container(  # noqa: PLR0913
     container_uuid: str | None = None,
     version_mode: str = VERSION_MODE_PINNED,
     suffix: str = "_CON",
+    path_reference: dict | None = None,
 ) -> dict:
     """Return the container data of a load node, without imprinting it.
 
@@ -278,23 +284,29 @@ def make_container(  # noqa: PLR0913
             e.g. when loading into an existing node; a new one by default.
         version_mode (str): "latest" or "pinned", see `build_selection`.
         suffix (str, optional): Suffix of container, defaults to `_CON`.
+        path_reference (dict, optional): `{"files": [rootless paths]}` when
+            the load node reads the files in place on the ComfyUI server
+            instead of uploaded copies.
     """
     if isinstance(image_upload_info, dict):
         image_upload_info = [image_upload_info]
 
-    return {
+    data = {
         "schema": "ayon:container-3.0",
         "id": AYON_CONTAINER_ID,
         "name": name,
         "namespace": namespace,
         "loader": str(loader),
-        "image_upload_info": image_upload_info,
+        "image_upload_info": image_upload_info or [],
         "representation": context["representation"]["id"],
         "project_name": context["project"]["name"],
         "container_uuid": container_uuid or str(uuid4()),
         "container_name": name + suffix,
         "selection": build_selection(context, version_mode),
     }
+    if path_reference:
+        data["path_reference"] = path_reference
+    return data
 
 
 def containerise(  # noqa: PLR0913, PLR0917
@@ -304,6 +316,7 @@ def containerise(  # noqa: PLR0913, PLR0917
     image_upload_info: dict | list[dict],
     loader: str | None = None,
     suffix: str | None = "_CON",
+    path_reference: dict | None = None,
 ) -> dict:
     """Imprint layer with metadata.
 
@@ -318,6 +331,9 @@ def containerise(  # noqa: PLR0913, PLR0917
                                   gotten back from /upload/image endpoint
         loader (str, optional): Name of loader used to produce this container.
         suffix (str, optional): Suffix of container, defaults to `_CON`.
+        path_reference (dict, optional): `{"files": [rootless paths]}` when
+            the load node reads the files in place on the ComfyUI server
+            instead of uploaded copies.
 
     Returns:
         container (str): Name of container assembly
@@ -329,6 +345,7 @@ def containerise(  # noqa: PLR0913, PLR0917
         image_upload_info=image_upload_info,
         loader=loader,
         suffix=suffix,
+        path_reference=path_reference,
     )
     stub = get_stub()
 

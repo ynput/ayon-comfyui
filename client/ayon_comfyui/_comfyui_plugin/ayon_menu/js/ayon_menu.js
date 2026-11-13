@@ -559,87 +559,78 @@ function register_ayon_sidebar_tab() {
   })
 }
 
+// Ids of the prompts this tab queued, newest first. The AYON host only
+// publishes earlier runs ("Recook on publish" off) from these, so it never
+// picks up another artist's run of the same workfile on a shared ComfyUI.
+// Kept in sessionStorage so they survive reloads of the tab.
+const AYON_QUEUED_PROMPTS_KEY = "ayon.queued_prompts"
+const AYON_QUEUED_PROMPTS_LIMIT = 200
+
+function get_queued_prompts() {
+  try {
+    const ids = JSON.parse(sessionStorage.getItem(AYON_QUEUED_PROMPTS_KEY) ?? "[]")
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : []
+  } catch (err) {
+    return []
+  }
+}
+
+function remember_queued_prompt(prompt_id) {
+  if (typeof prompt_id !== "string" || !prompt_id) {
+    return
+  }
+  try {
+    const ids = get_queued_prompts().filter((id) => id !== prompt_id)
+    ids.unshift(prompt_id)
+    sessionStorage.setItem(
+      AYON_QUEUED_PROMPTS_KEY,
+      JSON.stringify(ids.slice(0, AYON_QUEUED_PROMPTS_LIMIT))
+    )
+  } catch (err) {
+    console.warn("AYON: Unable to remember queued prompt", err)
+  }
+}
+
+// Record the id of every prompt this tab queues (Run, Queue, partial runs).
+function track_queued_prompts(api) {
+  const original = api?.queuePrompt
+  if (typeof original !== "function" || original.__ayon_tracked) {
+    return
+  }
+  const tracked = async function (...args) {
+    const result = await original.apply(this, args)
+    remember_queued_prompt(result?.prompt_id)
+    return result
+  }
+  tracked.__ayon_tracked = true
+  api.queuePrompt = tracked
+}
+
+// Queue just `node` so it shows its preview (load nodes only: they have no
+// inputs to compute).
+async function execute_single_node(node) {
+  const prompt = await app.graphToPrompt()
+  const id = `${node.id}`
+  if (!prompt.output[id]) {
+    return
+  }
+  await app.api.queuePrompt(0, {output: {[id]: prompt.output[id]}})
+}
+
+function preview_load_node(node) {
+  execute_single_node(node).catch((err) => {
+    console.warn("AYON: Unable to show the load node's preview", err)
+  })
+}
+
 app.registerExtension({
     name: AYON_EXTENSION_NAME,
-    async afterConfigureGraph(graphData) {
-
-        async function execute_single_node(node) {
-          const proompt = await app.graphToPrompt(node.graph);
-          const id = `${node.id}`;
-          const output_obj = {}
-          output_obj[id] = proompt.output[id]
-          
-          const prompt_t = {
-            output: output_obj  
-          };
-          
-          console.log(prompt_t)
-          await app.api.queuePrompt(0,prompt_t);
-        }
-
-        async function generate_thumbnails_loadimage_nodes(){
-          const nodeType = "AYON Load Image"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        async function generate_thumbnails_loadvideo_nodes(){
-          const nodeType = "AYON Load Video"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        async function generate_thumbnails_load3dmodel_nodes(){
-          const nodeType = "AYON 3D Model Save"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        console.log("AYON: Graph loaded.");
-        // generate thumbnails for AYON Load Images / AYON Load Videos
-        requestAnimationFrame(() =>{
-          console.log("animation frame retrieved, cooking Load Image thumbnails")
-          generate_thumbnails_loadimage_nodes()
-          generate_thumbnails_loadvideo_nodes()
-          generate_thumbnails_load3dmodel_nodes() // Don't know if this will actually make UI thumbnails, but it will at least load stuff in memory
-      })
-    },
     async setup() {
         console.log("AYON")
 
-        this.map_images = new Map()
-        this.expecting_id = null
-        this.resolved_id = null
-
         ensure_ayon_sidebar_style()
         register_ayon_sidebar_tab()
-
-        function get_this() {
-          return get_ayon_extension()
-        }
-
-        function reset_expectations(expecting = null) {
-          const local_this = get_this()
-          local_this.expecting_id = expecting
-          local_this.resolved_id = null
-        }
-
-        function predictate_is_resolved(){
-          const local_this = get_this()
-          return local_this.expecting_id == local_this.resolved_id
-        }
+        track_queued_prompts(app.api)
 
         // v2 adapter for newer comfyui
         function get_workfiles_v2(){
@@ -690,86 +681,6 @@ app.registerExtension({
           const data = JSON.parse(data_str).data
 
           return data
-        }
-
-        app.api.addEventListener("executed", (e) => {
-          console.log("EXECUTED EVENT:", e.detail);
-          const local_this = get_this()
-          // map node id (e.g. '29') to array of output images.
-          local_this.map_images[e.detail.node] = e.detail.output?.images;
-          local_this.resolved_id = e.detail.node
-          console.log(local_this)
-        })
-
-        function waitForFlag(getFlagFn, interval = 100) {
-          return new Promise((resolve) => {
-              const timer = setInterval(() => {
-                  try {
-                      if (getFlagFn()) {
-                          clearInterval(timer);
-                          resolve();
-                      }
-                  } catch (err) {
-                      clearInterval(timer);
-                      throw err; // Stop if condition function throws
-                  }
-              }, interval);
-          });
-        }
-
-        async function execute_single_node(node) {
-          const proompt = await app.graphToPrompt(node.graph);
-          const id = `${node.id}`;
-          const output_obj = {}
-          output_obj[id] = proompt.output[id]
-          
-          const prompt_t = {
-            output: output_obj  
-          };
-          console.log(prompt_t)
-          await app.api.queuePrompt(0,prompt_t);
-        }
-
-        async function execute_node_subgraph(node_out) {
-          const proompt = await app.graphToPrompt(node_out.graph);
-        
-          const subgraph = {};
-          const stack = [node_out.id];
-        
-          while (stack.length) {
-            const id = stack.pop();
-            if (subgraph[id]) continue;
-          
-            const node = proompt.output[id];
-            if (!node) continue;
-          
-            subgraph[id] = node;
-          
-            for (const input of Object.values(node.inputs || {})) {
-              if (Array.isArray(input)) {
-                stack.push(input[0]);
-              }
-            }
-          }
-          console.log(subgraph)
-          return await app.api.queuePrompt(0, {
-            output: subgraph
-          });
-        }
-
-        async function getNodeImages(node,recook) {
-          const local_this = get_this();
-          
-          if (!recook){
-            return local_this.map_images[node.id]
-          }
-
-          reset_expectations(node.id)
-          await execute_node_subgraph(node)
-          await waitForFlag(() => predictate_is_resolved())
-          reset_expectations()
-
-          return local_this.map_images[node.id]
         }
 
         function addNodeAtCenter_v1(type) {
@@ -847,18 +758,6 @@ app.registerExtension({
 
         }
 
-        async function nodeRetrieveImages(node, recook) {
-          // Return references to the node's outputs; the AYON host builds
-          // the `/view` URLs to download them from its own ComfyUI URL.
-          // Flatten in case of "animated" output. This outputs a list of arrays.
-          const images = ((await getNodeImages(node, recook)) ?? []).flat()
-          return images.map((image) => ({
-            filename: image.filename,
-            subfolder: (image.subfolder ?? "").replaceAll("\\", "/"),
-            type: image.type,
-          }))
-        }
-
         // Requests from the AYON host arrive over the bridge; the handlers
         // below run them against this tab's graph.
         const bridge = new AyonBridge(bridge_ws_url(app.api))
@@ -872,11 +771,22 @@ app.registerExtension({
           show_toast("warn", event.detail)
         })
 
-        bridge.register('getPublishNodes', (data) => {
-          const nodeType = data.node_type
+        // The API-format prompt of the active workflow, made by the
+        // frontend's own conversion (bypass, subgraphs, reroutes,
+        // primitives), for the AYON host to queue when publishing.
+        bridge.register('getApiPrompt', async () => {
+          const {output, workflow} = await app.graphToPrompt()
+          return {
+            prompt: output,
+            workflow,
+            client_id: app.api.clientId ?? app.api.initialClientId ?? null,
+            workflow_path: get_workflow_store()?.activeWorkflow?.path ?? null,
+          }
+        })
 
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          return JSON.stringify(foundNodes)
+        // Ids of the prompts this tab queued, newest first.
+        bridge.register('getQueuedPrompts', () => {
+          return {prompt_ids: get_queued_prompts()}
         })
 
 
@@ -1049,32 +959,6 @@ app.registerExtension({
           return json_removed
         })
 
-        bridge.register('getPublishNodeImages', async (data) => {
-          const nodeType = data.node_type;
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log("getting publish node images", data)
-          for (const node of foundNodes) {
-
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_info");
-            const ayon_info = JSON.parse(info_widget.value);
-            // let recook = ayon_info.creator_attributes.force_recook_on_publish;
-
-            const recook_widget = node.widgets.find(widget => widget.name == "recook")
-            const recook = recook_widget.value
-
-            console.log(ayon_info, data.id_for_images)
-
-            if (data.id_for_images == ayon_info.instance_id) {
-              console.log("Retrieving images")
-              let imgs = await nodeRetrieveImages(node, recook);
-              console.log(imgs);
-              return JSON.stringify(imgs);
-            }
-  
-            }
-          return JSON.stringify([]); // none found
-        });
-
         bridge.register('addLoadProductNode', (data) => {
           const nodeType = data.node_type
           const loadimg_node = addNodeAtCenter(nodeType)
@@ -1087,7 +971,7 @@ app.registerExtension({
           loadimg_node.color = "#233"
           loadimg_node.bgcolor = "#355"
           app.graph.setDirtyCanvas(true, true);
-          execute_single_node(loadimg_node); // make sure image shows up
+          preview_load_node(loadimg_node)
           return true
         });
 
@@ -1116,29 +1000,39 @@ app.registerExtension({
           return json_removed
         })
 
-        bridge.register('updateLoadProductNode', async (data) => {
+        // Write an updated container onto its load node(s). Returns whether
+        // a node with that container was found.
+        bridge.register('updateLoadProductNode', (data) => {
           const nodeType = data.node_type
-          let foundNodes = null
-
-          
-          if (nodeType == "ALL") {
-            const nodes = ["AYON Load Image", "AYON Load Video", "AYON Load 3D Model"]
-            foundNodes = app.graph.nodes.filter((node) => nodes.includes(node.type));
-          } else {
-            foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          }
+          const types = nodeType == "ALL"
+            ? ["AYON Load Image", "AYON Load Video", "AYON Load 3D Model"]
+            : [nodeType]
           const ayon_info_update = JSON.parse(data.container_json)
 
-          foundNodes.forEach(async (node) => {
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
-            const ayon_info = JSON.parse(info_widget.value)
-            if (ayon_info_update.container_uuid == ayon_info.container_uuid) {
-              info_widget.value = data.container_json
-              execute_single_node(node); // make sure image shows up
-              return true
+          let updated = false
+          for (const node of app.graph.nodes) {
+            if (!types.includes(node.type)) {
+              continue
             }
-          });
-          return true
+            const info_widget = node.widgets?.find(widget => widget.name == "ayon_container_info")
+            let ayon_info = null
+            try {
+              ayon_info = JSON.parse(info_widget?.value ?? "null")
+            } catch (err) {
+              console.warn(`AYON: Load node ${node.id} has invalid container data`, err)
+              continue
+            }
+            if (ayon_info?.container_uuid !== ayon_info_update.container_uuid) {
+              continue
+            }
+            info_widget.value = data.container_json
+            preview_load_node(node)
+            updated = true
+          }
+          if (updated) {
+            app.graph.setDirtyCanvas(true, true)
+          }
+          return updated
         });
 
 

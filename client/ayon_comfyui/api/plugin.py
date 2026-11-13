@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import ayon_api
+from ayon_core.lib import BoolDef
 from ayon_core.pipeline import (
     AutoCreator,
     CreatedInstance,
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.bridge import get_bridge, get_stub
+from ayon_comfyui.api.load_util import container_files
 from ayon_comfyui.api.pipeline import (
     build_selection,
     list_instances,
@@ -24,7 +26,6 @@ from ayon_comfyui.api.pipeline import (
     resolve_version_mode,
 )
 from ayon_comfyui.api.rpc_stub import LoadType, RPCStub
-from ayon_comfyui.api.upload_util import upload_input_images
 
 
 class ComfyUICreator(Creator):
@@ -146,9 +147,10 @@ class ComfyUIAutoCreator(AutoCreator):
 class ComfyUILoader(LoaderPlugin):
     """Base for loader plugins.
 
-    Loading uploads the representation's files to ComfyUI's input directory
-    and puts the resulting container on an `AYON Load ...` node of type
-    `load_type`. `build_container` does the upload and returns the container
+    Loading makes the representation's files available to ComfyUI (uploads
+    them to its input directory, or, opt-in, references them by path) and
+    puts the resulting container on an `AYON Load ...` node of type
+    `load_type`. `build_container` does that and returns the container
     without touching the graph; it is shared by load, update/switch and the
     AYON pickers on the nodes (`ayon_comfyui.api.pickers`).
     """
@@ -160,6 +162,66 @@ class ComfyUILoader(LoaderPlugin):
 
     # The node type the loader puts its containers on.
     load_type: ClassVar[LoadType | None] = None
+
+    options: ClassVar[list] = [
+        BoolDef(
+            "reference_files",
+            label="Reference files on the ComfyUI server",
+            default=False,
+            tooltip=(
+                "Read the files where they are published instead of "
+                "uploading a copy to ComfyUI. Needs the ComfyUI server to "
+                "reach the project's AYON roots; otherwise the files are "
+                "uploaded after all."
+            ),
+        ),
+    ]
+
+    def make_files_available(
+        self,
+        context: dict,
+        filepaths: list[str],
+        subfolder: str,
+        *,
+        reference: bool = False,
+    ) -> dict:
+        """Upload `filepaths` to ComfyUI, or reference them in place.
+
+        Returns:
+            The container's `image_upload_info` and `path_reference`.
+        """
+        return container_files(
+            self.comfy_url,
+            context["project"]["name"],
+            filepaths,
+            subfolder=subfolder,
+            reference=reference,
+        )
+
+    def update_files(
+        self, container: dict, context: dict, filepaths: list[str]
+    ) -> None:
+        """Make the files of a new version available, the same way."""
+        files = self.make_files_available(
+            context,
+            filepaths,
+            self.upload_subfolder(container, container.get("name") or "AYON"),
+            reference=bool(container.get("path_reference")),
+        )
+        container["representation"] = context["representation"]["id"]
+        container["image_upload_info"] = files["image_upload_info"]
+        if files["path_reference"]:
+            container["path_reference"] = files["path_reference"]
+        else:
+            container.pop("path_reference", None)
+
+    @staticmethod
+    def upload_subfolder(container: dict, default: str) -> str:
+        """Return the input subfolder a container's files were uploaded to."""
+        uploads = container.get("image_upload_info") or []
+        if uploads:
+            return uploads[0].get("subfolder") or default
+        return default
 
     @property
     def stub(self) -> RPCStub:
@@ -184,8 +246,9 @@ class ComfyUILoader(LoaderPlugin):
         namespace: str | None = None,
         container_uuid: str | None = None,
         version_mode: str | None = None,
+        reference: bool | None = None,
     ) -> dict:
-        """Upload the files of `context` and return the container.
+        """Make the files of `context` available; return the container.
 
         Arguments:
             context: Representation context to load.
@@ -198,27 +261,33 @@ class ComfyUILoader(LoaderPlugin):
             version_mode: "latest" or "pinned". By default an updated
                 container keeps "latest" only while it loads the latest
                 version, see `resolve_version_mode`.
+            reference: Reference the files by path instead of uploading
+                them (see `make_files_available`). By default an updated
+                container keeps doing what it did; a new one uploads.
         """
         previous_selection = (container or {}).get("selection") or {}
         if version_mode is None:
             version_mode = resolve_version_mode(
                 context, previous_selection.get("version_mode")
             )
+        if reference is None:
+            reference = bool((container or {}).get("path_reference"))
 
         if name is None:
             name = context["product"]["name"]
-        subfolder = ""
-        if container is not None:
-            upload_infos = container.get("image_upload_info") or []
-            if upload_infos:
-                subfolder = upload_infos[0].get("subfolder") or ""
-        if not subfolder:
-            subfolder = f"{namespace}_{name}" if namespace else name
-
-        image_upload_info = upload_input_images(
-            self.get_upload_files(context), self.comfy_url, subfolder=subfolder
+        default_subfolder = f"{namespace}_{name}" if namespace else name
+        subfolder = (
+            self.upload_subfolder(container, default_subfolder)
+            if container is not None
+            else default_subfolder
         )
-        if not image_upload_info:
+        files = self.make_files_available(
+            context,
+            self.get_upload_files(context),
+            subfolder,
+            reference=reference,
+        )
+        if not files["image_upload_info"] and not files["path_reference"]:
             msg = (
                 "Unable to upload "
                 f"{context['representation']['name']} to ComfyUI."
@@ -230,7 +299,8 @@ class ComfyUILoader(LoaderPlugin):
                 name=name,
                 namespace=namespace,
                 context=context,
-                image_upload_info=image_upload_info,
+                image_upload_info=files["image_upload_info"],
+                path_reference=files["path_reference"],
                 loader=self.__class__.__name__,
                 container_uuid=container_uuid,
                 version_mode=version_mode,
@@ -239,7 +309,11 @@ class ComfyUILoader(LoaderPlugin):
         container = dict(container)
         container["representation"] = context["representation"]["id"]
         container["project_name"] = context["project"]["name"]
-        container["image_upload_info"] = image_upload_info
+        container["image_upload_info"] = files["image_upload_info"]
+        if files["path_reference"]:
+            container["path_reference"] = files["path_reference"]
+        else:
+            container.pop("path_reference", None)
         container["selection"] = build_selection(context, version_mode)
         return container
 
@@ -248,17 +322,24 @@ class ComfyUILoader(LoaderPlugin):
         context: dict,
         name: str | None = None,
         namespace: str | None = None,
-        options: dict | None = None,  # noqa: ARG002
+        options: dict | None = None,
     ) -> None:
-        """Upload the representation and add a load node for it."""
+        """Load the representation and add a load node for it."""
         container = self.build_container(
-            context, name=name, namespace=namespace
+            context,
+            name=name,
+            namespace=namespace,
+            reference=bool((options or {}).get("reference_files")),
         )
         self.stub.add_containers(container)
         self.stub.create_load_node(container, self.load_type)
 
     def update(self, container: dict, context: dict) -> None:
-        """Upload the new representation and update the container."""
+        """Point the container at another version's files.
+
+        Uploads them into the same input subfolder, or references them
+        when the container already did.
+        """
         container = self.build_container(context, container)
         self.stub.update_containers(container)
 
