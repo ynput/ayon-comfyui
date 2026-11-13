@@ -5,17 +5,14 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-import os
 import sys
 from enum import Enum
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
 
 from ayon_core.pipeline import get_current_context
 
-from ayon_comfyui.api.bridge_client import join_url
 from ayon_comfyui.api.consts import LOG_LEVEL
 
 if TYPE_CHECKING:
@@ -80,12 +77,6 @@ class RPCClientStub:  # noqa: PLR0904
 
     def __init__(self, client: BridgeClient) -> None:  # noqa: D107
         self.client = client
-
-    @tab_method()
-    def getPublishNodes(self, node_type: str):  # noqa: N802, ANN201
-        """Call getPublishNodes."""
-
-    # def do_update_publishnodes(self) -> None: # Never used
 
     @tab_method()
     def getWorkfile(self):  # noqa: N802, ANN201
@@ -321,19 +312,21 @@ class RPCClientStub:  # noqa: PLR0904
         Returns a string json representation of instances that were removed.
         """
 
-    @tab_method(timeout=None)
-    def getPublishNodeImages(  # noqa: N802
-        self, *, id_for_images: str, node_type: str
-    ) -> str:
-        """Call getPublishNodeImages.
+    @tab_method(timeout=60.0)
+    def getApiPrompt(self) -> dict:  # noqa: N802
+        """Call getApiPrompt.
 
-        id_for_images has to contain a single instance ids associated with
-        publish instances to retrieve images from.
+        Returns the active workflow converted to an API-format prompt by
+        the frontend (`prompt`), the UI workflow (`workflow`), the tab's
+        ComfyUI client id (`client_id`) and workflow path (`workflow_path`).
+        """
 
-        Returns a string json representation of a list of image locations
-        on network.
+    @tab_method()
+    def getQueuedPrompts(self) -> dict:  # noqa: N802
+        """Call getQueuedPrompts.
 
-        Waits until graph has finished cooking.
+        Returns `prompt_ids`: ids of the prompts the tab queued, newest
+        first.
         """
 
     @tab_method()
@@ -370,26 +363,6 @@ class RPCClientStub:  # noqa: PLR0904
 
         Sentinel value ALL will match for all types of container nodes.
         """
-
-    def do_get_publishnode_images(
-        self, publish_instance: str, node_type: PublishType = PublishType.IMAGE
-    ) -> str:
-        """Retrieve images field from a node.
-
-        Returns:
-            string JSON list representation of links to output product type.
-        """
-        instance = json.loads(publish_instance)
-        id_ = instance["instance_id"]
-
-        result = self.getPublishNodeImages(
-            id_for_images=id_, node_type=node_type.value
-        )
-
-        if result:
-            return result
-
-        return "[]"
 
     def do_context_retrieve(self) -> str:
         """Creates a context node in the browser session if not present.
@@ -441,7 +414,6 @@ class RPCStub:  # noqa : PLR0904
 
     def __init__(self, client: BridgeClient) -> None:  # noqa: D107
         self.client_stub = RPCClientStub(client)
-        self._base_url = client.base_url
 
     def query_workfile(self) -> str:
         """Query workfile.
@@ -909,47 +881,33 @@ class RPCStub:  # noqa : PLR0904
             ids_to_remove=json_ids_to_remove, node_type=node_type.value
         )
 
-    def get_publish_node_images(
-        self,
-        instance_for_images: dict,
-        publish_type: PublishType = PublishType.IMAGE,
-    ) -> list[str]:
-        """Returns URLs to download the outputs of a publish node.
+    def get_api_prompt(self) -> dict:
+        """Return the active workflow as an API-format prompt.
 
-        The tab only names the output files; the URLs are built here from
-        the ComfyUI URL of this session, so nothing downloads from a URL
-        chosen by the browser.
+        The conversion is done by the ComfyUI frontend itself
+        (`app.graphToPrompt`), so bypassed nodes, subgraphs, reroutes and
+        primitives are handled exactly like when the artist runs the graph.
+
+        Returns:
+            Dict with `prompt`, `workflow`, `client_id` and `workflow_path`.
         """
-        log.debug("stub get publish node images")
-        id_ = instance_for_images["instance_id"]
-        result = self.client_stub.getPublishNodeImages(
-            id_for_images=id_, node_type=publish_type.value
-        )
-        try:
-            outputs = json.loads(result)
-        except (TypeError, json.JSONDecodeError):
-            return []
-        if not isinstance(outputs, list):
-            return []
-        urls = [self.output_view_url(output) for output in outputs]
-        return [url for url in urls if url]
-
-    def output_view_url(self, output: dict) -> str | None:
-        """Return the `/view` URL of a ComfyUI output file reference."""
-        if not isinstance(output, dict):
-            return None
-        filename = output.get("filename")
-        if (
-            not isinstance(filename, str)
-            or not filename
-            or os.path.basename(filename) != filename
-            or filename in {".", ".."}
+        result = self.client_stub.getApiPrompt()
+        if not isinstance(result, dict) or not isinstance(
+            result.get("prompt"), dict
         ):
-            log.warning("Ignoring invalid output reference: %s", output)
-            return None
-        query = urlencode({
-            "filename": filename,
-            "subfolder": str(output.get("subfolder") or ""),
-            "type": str(output.get("type") or "output"),
-        })
-        return f"{join_url(self._base_url, '/api/view')}?{query}"
+            msg = "The ComfyUI tab didn't return the workflow's prompt."
+            raise RuntimeError(msg)
+        return result
+
+    def get_queued_prompt_ids(self) -> list[str]:
+        """Return ids of the prompts the paired tab queued, newest first."""
+        result = self.client_stub.getQueuedPrompts()
+        if not isinstance(result, dict):
+            return []
+        prompt_ids = result.get("prompt_ids")
+        if not isinstance(prompt_ids, list):
+            return []
+        return [
+            prompt_id for prompt_id in prompt_ids
+            if isinstance(prompt_id, str) and prompt_id
+        ]
