@@ -152,7 +152,8 @@ class FakeLoader:
         return context["representation"]["context"]["ext"] in cls.exts
 
     def build_container(self, context: dict, **kwargs) -> dict:
-        FakeLoader.built.append(kwargs)
+        FakeLoader.built.append(
+            {**kwargs, "thread": threading.current_thread().name})
         return {
             "representation": context["representation"]["id"],
             "container_uuid": kwargs["container_uuid"] or "new",
@@ -510,19 +511,27 @@ class HandlerTests(unittest.TestCase):
             {"picker.folders", "picker.options", "picker.status",
              "picker.apply", "picker.browse"},
         )
-        # Only the loader discovery warm-up goes to the Qt main thread.
+        # The loader discovery warm-up goes to the Qt main thread.
         self.assertEqual(len(bridge.main_thread_calls), 1)
 
         answer = bridge.handlers["picker.apply"](dict(APPLY))
         self.assertEqual(answer, {"scheduled": True})
-        self.assertTrue(bridge.applied.wait(5))
-        self.assertTrue(
-            bridge.applied_from.startswith("AYON-ComfyUI-picker-load")
-        )
+        # The upload ran on the load worker...
+        deadline = time.monotonic() + 5
+        while len(bridge.main_thread_calls) < 2:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        self.assertTrue(FakeLoader.built[-1]["thread"].startswith(
+            "AYON-ComfyUI-picker-load"))
+        # ...and the result goes to the tab from the Qt main thread (here
+        # the test's thread), where the AYON Context node is written.
+        self.assertFalse(bridge.applied.is_set())
+        bridge.main_thread_calls[1]()
+        self.assertEqual(
+            bridge.applied_from, threading.current_thread().name)
         token, container, error = bridge.applied_args
         self.assertEqual((token, container["representation"], error),
                          ("tok1", R2, None))
-        self.assertEqual(len(bridge.main_thread_calls), 1)
 
     def test_query_errors_are_generic(self) -> None:
         bridge = FakeBridge()

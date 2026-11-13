@@ -18,11 +18,15 @@ ComfyUI page can reach them through the paired tab, so:
 - Loading resolves the representation, the loader and the container here;
   nothing the tab sends ends up in a container except the container id of
   the node to load into. Loads are rate limited.
-- Loading runs on one dedicated worker thread, so uploads never freeze the
-  AYON tools; it doesn't touch Qt or the host's state, and the handler
-  answers right away. The result is sent to the tab with `pickerApplied`,
-  addressed by a token the tab chose, so the tab updates exactly the node
-  that asked, also when the artist switched workflows in the meantime.
+- Loading (the uploads) runs on one dedicated worker thread, so it never
+  freezes the AYON tools, and the handler answers right away. The result
+  is sent to the tab with `pickerApplied` from the Qt main thread: the tab
+  then records the container in the AYON Context node, and the host's own
+  read-modify-writes of that node (Loader, Scene Inventory, Creator) run
+  on the main thread too, so the two can't interleave and lose an entry.
+  `pickerApplied` is addressed by a token the tab chose, so the tab
+  updates exactly the node that asked, also when the artist switched
+  workflows in the meantime.
 
 Queries run on the bridge's worker threads and are cached for a minute
 (`refresh` bypasses the cache; changing the AYON context clears it).
@@ -823,10 +827,18 @@ def register_picker_handlers(
             log.warning("AYON picker load failed", exc_info=True)
         finally:
             service.release(request)
+        # The tab writes the container into the AYON Context node when it
+        # gets it: send it from the Qt main thread, where the host's own
+        # read-modify-writes of that node run, so they never interleave.
+        bridge.run_in_main_thread(
+            partial(_send_applied, request["token"], container, error)
+        )
+
+    def _send_applied(
+        token: str, container: dict | None, error: str | None
+    ) -> None:
         try:
-            bridge.stub.picker_applied(
-                request["token"], container=container, error=error
-            )
+            bridge.stub.picker_applied(token, container=container, error=error)
         except Exception:  # noqa: BLE001
             log.warning(
                 "Unable to send the loaded container to ComfyUI",
