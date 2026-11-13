@@ -298,6 +298,22 @@ function get_root_graph() {
   return app.rootGraph ?? app.graph
 }
 
+// The JSON an AYON node stores in `widget`, or null for a node that has
+// none yet (e.g. added from the node library, nothing picked) or invalid.
+function parse_node_json(node, widget) {
+  const text = widget?.value
+  if (typeof text !== "string" || !text) {
+    return null
+  }
+  try {
+    const value = JSON.parse(text)
+    return value && typeof value === "object" ? value : null
+  } catch (err) {
+    console.warn(`AYON: Node ${node.id} has invalid AYON data`, err)
+    return null
+  }
+}
+
 function merge_into_extra(target, extra) {
   Object.keys(extra).forEach((key) => {
     const value = extra[key]
@@ -1122,9 +1138,9 @@ app.registerExtension({
           let ayon_remove = [];
 
           foundNodes.forEach(node => {
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_info")
-            const ayon_info = JSON.parse(info_widget.value)
-            if (data.ids_to_remove.includes(ayon_info.instance_id)) {
+            const info_widget = node.widgets?.find(widget => widget.name == "ayon_info")
+            const ayon_info = parse_node_json(node, info_widget)
+            if (ayon_info && data.ids_to_remove.includes(ayon_info.instance_id)) {
               to_remove.push(node)
               ayon_remove.push(ayon_info)
             }
@@ -1163,9 +1179,9 @@ app.registerExtension({
           let ayon_remove = [];
 
           foundNodes.forEach(node => {
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
-            const ayon_info = JSON.parse(info_widget.value)
-            if (data.ids_to_remove.includes(ayon_info.container_uuid)) {
+            const info_widget = node.widgets?.find(widget => widget.name == "ayon_container_info")
+            const ayon_info = parse_node_json(node, info_widget)
+            if (ayon_info && data.ids_to_remove.includes(ayon_info.container_uuid)) {
               to_remove.push(node)
               ayon_remove.push(ayon_info)
             }
