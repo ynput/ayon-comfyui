@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, ClassVar
 
 import pyblish.api
@@ -20,6 +21,11 @@ from ayon_comfyui.api.publish_lib import (
 
 if TYPE_CHECKING:
     from ayon_comfyui.api.pipeline import ComfyUIHost
+
+# Errors of API nodes that didn't get the artist's Comfy.org login.
+AUTH_ERROR_HINTS = re.compile(
+    r"unauthori[sz]ed|401|api[ _-]?key|log ?in|sign ?in|auth", re.IGNORECASE
+)
 
 
 class ExtractComfyUIRender(pyblish.api.ContextPlugin):
@@ -102,7 +108,7 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
         except comfy_publish.PublishError as exc:
             raise KnownPublishError(str(exc)) from exc
         comfy_publish.QUEUED_PROMPTS.add(
-            prompt_id, api_prompt.get("workflow_path")
+            prompt_id, comfy_publish.workflow_identity(api_prompt)
         )
 
         finished = False
@@ -116,7 +122,16 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
             )
             finished = True
         except comfy_publish.PublishError as exc:
-            raise KnownPublishError(str(exc)) from exc
+            msg = str(exc)
+            if AUTH_ERROR_HINTS.search(msg):
+                msg += (
+                    "\n\nIf this is a Comfy.org API node: AYON reuses the "
+                    "Comfy.org login of the last run started in the ComfyUI "
+                    "tab (a login expires after an hour). Run the workflow "
+                    "once in the tab and publish again, or publish without "
+                    "'Recook on publish'."
+                )
+            raise KnownPublishError(msg) from exc
         finally:
             if not finished and comfy_publish.cancel_prompt(http, prompt_id):
                 # Don't leave our run on a shared queue when we gave up.
@@ -151,7 +166,10 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
             msg = f"Unable to get the workflow from the ComfyUI tab: {exc}"
             raise KnownPublishError(msg) from exc
         collected = context.data["comfyuiApiPrompt"]
-        if api_prompt.get("workflow_path") != collected.get("workflow_path"):
+        if not comfy_publish.same_workflow(
+            comfy_publish.workflow_identity(api_prompt),
+            comfy_publish.workflow_identity(collected),
+        ):
             msg = (
                 "The active ComfyUI workflow changed while publishing "
                 f"(from '{collected.get('workflow_path')}' to "

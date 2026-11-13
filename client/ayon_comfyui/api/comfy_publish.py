@@ -52,6 +52,14 @@ MISSING_POLLS = 3
 # Tolerate ComfyUI being unreachable (e.g. a proxy blip) this long.
 UNREACHABLE_GRACE = 60.0
 PROGRESS_LOG_INTERVAL = 30.0
+# How long ComfyUI may take to validate and queue a prompt.
+QUEUE_TIMEOUT = 120.0
+# How many of the newest queued prompts of each source to look through for
+# an earlier run of a save node.
+MAX_LOOKBACK = 50
+# Inputs that change between runs without the graph changing ("randomize
+# after generate" already moved the widget on to the next value).
+SEED_INPUTS = frozenset({"seed", "noise_seed"})
 
 
 class PublishError(RuntimeError):
@@ -192,7 +200,11 @@ def queue_prompt(  # noqa: PLR0913
     if client_id:
         body["client_id"] = client_id
     try:
-        result = http.http_json("POST", "/prompt", json=body)
+        # Validating can take a while, e.g. load nodes checking a long
+        # sequence on a network share.
+        result = http.http_json(
+            "POST", "/prompt", json=body, timeout=QUEUE_TIMEOUT
+        )
     except BridgeError as exc:
         if getattr(exc, "status", None) == 400:  # noqa: PLR2004
             details = describe_prompt_errors(
@@ -200,8 +212,13 @@ def queue_prompt(  # noqa: PLR0913
             )
             msg = f"ComfyUI refused to run the graph:\n{details}"
             raise PublishError(msg) from exc
+        # E.g. a timeout: ComfyUI may still have queued it.
+        cancel_prompt(http, prompt_id)
         raise PublishError(str(exc)) from exc
     if not isinstance(result, dict) or result.get("prompt_id") != prompt_id:
+        cancel_prompt(http, prompt_id)
+        if isinstance(result, dict) and result.get("prompt_id"):
+            cancel_prompt(http, str(result["prompt_id"]))
         msg = f"ComfyUI didn't queue the graph as expected: {result!r}"
         raise PublishError(msg)
     if result.get("node_errors"):
@@ -263,6 +280,14 @@ def describe_prompt_errors(body: Any, prompt: dict | None = None) -> str:  # noq
 # --- waiting ----------------------------------------------------------------
 
 
+def is_transient(exc: BridgeError) -> bool:
+    """Whether an HTTP failure may go away by itself (proxy blip, restart)."""
+    status = getattr(exc, "status", None)
+    return exc.code in {"unreachable", "invalid_response"} or (
+        isinstance(status, int) and status >= 500  # noqa: PLR2004
+    )
+
+
 def wait_for_prompt(  # noqa: C901, PLR0913
     http: Http,
     prompt_id: str,
@@ -297,7 +322,7 @@ def wait_for_prompt(  # noqa: C901, PLR0913
                 state = job_state(http, prompt_id)
             unreachable_since = None
         except BridgeError as exc:
-            if exc.code != "unreachable":
+            if not is_transient(exc):
                 raise PublishError(str(exc)) from exc
             now = clock()
             unreachable_since = unreachable_since or now
@@ -483,30 +508,47 @@ def prompt_of_entry(entry: dict) -> tuple[dict, dict | None]:
 
 
 def find_latest_run(
-    http: Http, instance_id: str, *prompt_id_lists: Iterable[str]
+    http: Http,
+    instance_id: str,
+    *prompt_id_lists: Iterable[str],
+    cache: dict | None = None,
+    lookback: int = MAX_LOOKBACK,
 ) -> Run | None:
     """Return the newest successful run that has outputs for `instance_id`.
 
     Only the given prompts are considered: the ones this AYON session
     queued, and the ones its paired tab queued, each list newest first. They
     are fetched one by one, so a long or shared history is never downloaded
-    as a whole, and each list is only read up to its first match.
+    as a whole, and each list is only read up to its first match, and at
+    most `lookback` deep.
+
+    Args:
+        http: ComfyUI HTTP client.
+        instance_id: AYON instance id of the save node.
+        *prompt_id_lists: Lists of prompt ids, each newest first.
+        cache: Finished history entries by prompt id, shared between the
+            instances of one publish so each entry is fetched only once.
+        lookback: How many ids of each list to look at.
 
     Raises:
         PublishError: When a prompt newer than the match is still queued or
             running, since it would probably make newer outputs.
     """
+    cache = {} if cache is None else cache
     best: tuple[int, Run] | None = None
     checked: set[str] = set()
     for prompt_ids in prompt_id_lists:
-        for prompt_id in prompt_ids or []:
+        for prompt_id in list(prompt_ids or [])[:lookback]:
             if not isinstance(prompt_id, str) or prompt_id in checked:
                 continue
             checked.add(prompt_id)
-            entry = _history_entry(http, prompt_id)
+            entry = cache.get(prompt_id)
+            if entry is None:
+                entry = _history_entry(http, prompt_id)
             if entry is None:
                 _check_not_running(http, prompt_id)
                 continue
+            cache[prompt_id] = entry
             found = _run_in_entry(prompt_id, entry, instance_id)
             if found is None:
                 continue
@@ -569,12 +611,16 @@ def finished_at(entry: dict) -> int:
     return 0
 
 
-def upstream(prompt: dict, node_id: str) -> dict:
+def upstream(
+    prompt: dict, node_id: str, ignore_inputs: Iterable[str] = ()
+) -> dict:
     """Return the part of `prompt` that `node_id` depends on.
 
-    The node's own AYON inputs are left out, so comparing two of these
-    tells whether two runs computed the same thing.
+    The node's own AYON inputs are left out, as are `ignore_inputs` of any
+    node (e.g. `SEED_INPUTS`), so comparing two of these tells whether two
+    runs computed the same thing.
     """
+    ignore = set(ignore_inputs)
     result: dict = {}
     pending = [str(node_id)]
     while pending:
@@ -582,7 +628,11 @@ def upstream(prompt: dict, node_id: str) -> dict:
         if current in result or current not in prompt:
             continue
         node = prompt[current]
-        inputs = dict(node.get("inputs") or {})
+        inputs = {
+            key: value
+            for key, value in (node.get("inputs") or {}).items()
+            if key not in ignore
+        }
         if current == str(node_id):
             inputs.pop("ayon_info", None)
             inputs.pop("recook", None)
@@ -655,6 +705,14 @@ def download_files(
                 "/view", os.path.join(staging_dir, name), params=params
             )
         except BridgeError as exc:
+            if getattr(exc, "status", None) == 404:  # noqa: PLR2004
+                msg = (
+                    f"The output '{name}' no longer exists on ComfyUI. The "
+                    "AYON save nodes keep only their newest runs (and "
+                    "ComfyUI's output folder may have been cleaned). Run "
+                    "the workflow again, or enable 'Recook on publish'."
+                )
+                raise PublishError(msg) from exc
             raise PublishError(str(exc)) from exc
         names.append(name)
     return names
@@ -667,29 +725,34 @@ class PromptRegistry:
     """Prompts this AYON session queued itself, with their workflow."""
 
     def __init__(self, limit: int = 256) -> None:
-        self._prompts: OrderedDict[str, str | None] = OrderedDict()
+        self._prompts: OrderedDict[str, dict] = OrderedDict()
         self._limit = limit
         self._lock = threading.Lock()
 
-    def add(self, prompt_id: str, workflow_path: str | None = None) -> None:
-        """Remember that this session queued `prompt_id`."""
+    def add(self, prompt_id: str, workflow: dict | None = None) -> None:
+        """Remember that this session queued `prompt_id`.
+
+        Args:
+            prompt_id: The prompt's id.
+            workflow: `{workflow_id, workflow_path}` it was queued from.
+        """
         with self._lock:
             self._prompts.pop(prompt_id, None)
-            self._prompts[prompt_id] = workflow_path
+            self._prompts[prompt_id] = dict(workflow or {})
             while len(self._prompts) > self._limit:
                 self._prompts.popitem(last=False)
 
-    def newest_first(self, workflow_path: str | None = None) -> list[str]:
+    def newest_first(self, workflow: dict | None = None) -> list[str]:
         """Return the remembered ids, newest first.
 
-        With `workflow_path`, only prompts queued from that ComfyUI
-        workflow (or from an unknown one).
+        With `workflow`, only prompts queued from that ComfyUI workflow (see
+        `same_workflow`).
         """
         with self._lock:
             return [
                 prompt_id
-                for prompt_id, path in reversed(self._prompts.items())
-                if not workflow_path or not path or path == workflow_path
+                for prompt_id, queued_from in reversed(self._prompts.items())
+                if same_workflow(queued_from, workflow)
             ]
 
 
@@ -697,25 +760,49 @@ class PromptRegistry:
 QUEUED_PROMPTS = PromptRegistry()
 
 
+def workflow_identity(data: dict | None) -> dict:
+    """Return `{workflow_id, workflow_path}` from tab data."""
+    data = data or {}
+    return {
+        "workflow_id": data.get("workflow_id"),
+        "workflow_path": data.get("workflow_path"),
+    }
+
+
+def same_workflow(a: dict | None, b: dict | None) -> bool:
+    """Whether two `{workflow_id, workflow_path}` are the same workflow.
+
+    The graph id is compared when both have one: it survives renames (AYON
+    saves a workfile by renaming the tab) and a duplicated workflow gets a
+    new one. Otherwise the ComfyUI workflow paths are compared, and unknown
+    identities match.
+    """
+    a, b = a or {}, b or {}
+    if a.get("workflow_id") and b.get("workflow_id"):
+        return a["workflow_id"] == b["workflow_id"]
+    if a.get("workflow_path") and b.get("workflow_path"):
+        return a["workflow_path"] == b["workflow_path"]
+    return True
+
+
 def tab_prompt_ids(
     entries: Iterable[Any],  # noqa: ANN401
-    workflow_path: str | None = None,
+    workflow: dict | None = None,
 ) -> list[str]:
     """Return the ids of the tab's queued prompts for a workflow.
 
-    `entries` are the tab's `{prompt_id, workflow_path}` records, newest
-    first. A copy of a workflow keeps its AYON instance ids, so runs of
-    other workflows (tabs) are left out.
+    `entries` are the tab's `{prompt_id, workflow_id, workflow_path}`
+    records, newest first. A copy of a workflow keeps its AYON instance ids,
+    so runs of other workflows are left out.
     """
     ids = []
     for entry in entries or []:
         if not isinstance(entry, dict):
             continue
         prompt_id = entry.get("prompt_id")
-        path = entry.get("workflow_path")
         if not isinstance(prompt_id, str) or not prompt_id:
             continue
-        if workflow_path and path and path != workflow_path:
+        if not same_workflow(entry, workflow):
             continue
         ids.append(prompt_id)
     return ids
