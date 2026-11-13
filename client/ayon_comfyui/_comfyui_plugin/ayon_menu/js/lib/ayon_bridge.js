@@ -11,7 +11,7 @@
 // ComfyUI loads every .js file of an extension, so this module must not have
 // side effects on import.
 
-const PROTOCOL = 1
+export const PROTOCOL = 1
 const PAIR_CODE_KEY = "ayon.bridge.pair_code"
 const CREDENTIAL_KEY = "ayon.bridge.credential"
 
@@ -48,6 +48,15 @@ function storage_remove(key) {
   }
 }
 
+// Random prefix for request ids, so answers meant for a previous page load
+// of this tab can't be mistaken for answers to this one. (crypto.randomUUID
+// is not available on plain-http LAN origins; getRandomValues is.)
+function random_id_prefix() {
+  const values = new Uint32Array(2)
+  window.crypto.getRandomValues(values)
+  return Array.from(values, (value) => value.toString(16)).join("")
+}
+
 function parse_json(text) {
   try {
     return text ? JSON.parse(text) : null
@@ -73,6 +82,7 @@ export class AyonBridge extends EventTarget {
     this.handlers = new Map()
     this.pending = new Map()
     this.next_id = 1
+    this.id_prefix = random_id_prefix()
     this.ws = null
     this.state = "not_paired"
     this.reason = ""
@@ -106,8 +116,8 @@ export class AyonBridge extends EventTarget {
   // Pair this tab with a code shown by AYON (e.g. when an SSO login lost
   // the code from the launch link, or for a tab opened by hand).
   pair_with_code(code) {
+    // Keep the current credential until the new code is accepted.
     storage_set(PAIR_CODE_KEY, code.trim())
-    storage_remove(CREDENTIAL_KEY)
     this.close_socket()
     this.reconnect_here()
   }
@@ -142,6 +152,7 @@ export class AyonBridge extends EventTarget {
     const hello = {type: "hello", role: "tab", protocol: PROTOCOL}
     const code = storage_get(PAIR_CODE_KEY)
     const credential = parse_json(storage_get(CREDENTIAL_KEY))
+    this.hello_with_code = !!code
     if (code) {
       hello.pair_code = code
     } else if (credential) {
@@ -219,13 +230,26 @@ export class AyonBridge extends EventTarget {
       return
     }
     if (event.code === CLOSE_REJECTED) {
-      // An expired pairing code or a credential that doesn't match.
-      storage_remove(PAIR_CODE_KEY)
-      storage_remove(CREDENTIAL_KEY)
+      const reason = event.reason || "unknown reason"
+      if (this.hello_with_code) {
+        // An invalid or expired pairing code: drop it, but keep using the
+        // credential this tab may already have.
+        storage_remove(PAIR_CODE_KEY)
+        this.dispatchEvent(new CustomEvent("notice", {
+          detail: `AYON didn't accept the pairing code: ${reason}.`,
+        }))
+        if (parse_json(storage_get(CREDENTIAL_KEY))) {
+          this.attempt = 0
+          this.connect()
+          return
+        }
+      } else {
+        storage_remove(CREDENTIAL_KEY)
+      }
       this.set_state(
         "rejected",
-        `AYON rejected this tab: ${event.reason || "unknown reason"}. ` +
-        "Launch ComfyUI from AYON again."
+        `AYON rejected this tab: ${reason}. ` +
+        "Launch ComfyUI from AYON again, or paste a new pairing code."
       )
       return
     }
@@ -233,6 +257,7 @@ export class AyonBridge extends EventTarget {
       this.unknown_since ??= Date.now()
       if (Date.now() - this.unknown_since > UNKNOWN_SESSION_RETRY_MS) {
         storage_remove(CREDENTIAL_KEY)
+        storage_remove(PAIR_CODE_KEY)
         this.set_state(
           "ended",
           "The AYON session has ended. Launch ComfyUI from AYON again."
@@ -284,7 +309,7 @@ export class AyonBridge extends EventTarget {
         reject(new Error(this.not_connected_message()))
         return
       }
-      const id = `tab-${this.next_id++}`
+      const id = `tab-${this.id_prefix}-${this.next_id++}`
       const timer = timeout_ms ? setTimeout(() => {
         this.pending.delete(id)
         reject(new Error(`AYON didn't answer '${method}' in time.`))

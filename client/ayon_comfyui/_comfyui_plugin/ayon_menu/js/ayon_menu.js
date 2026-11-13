@@ -1,5 +1,5 @@
 import { app } from "../../scripts/app.js";
-import { AyonBridge, bridge_ws_url } from "./lib/ayon_bridge.js";
+import { AyonBridge, PROTOCOL, bridge_ws_url } from "./lib/ayon_bridge.js";
 
 const AYON_EXTENSION_NAME = "AYON.ComfyMenu"
 const AYON_SAVE_WORKFILE_COMMAND_ID = "AYON.SaveWorkfile"
@@ -113,6 +113,22 @@ function describe_bridge_status(bridge) {
   return {level: "error", text: bridge.reason || "Not connected to AYON."}
 }
 
+function describe_bridge_details(bridge) {
+  if (!bridge || bridge.state !== "connected") {
+    return ""
+  }
+  const info = bridge.host_info ?? {}
+  const parts = []
+  if (info.hostname) {
+    parts.push(`AYON on ${info.hostname}`)
+  }
+  if (info.addon_version) {
+    parts.push(`addon ${info.addon_version}`)
+  }
+  parts.push(`bridge protocol ${PROTOCOL}`)
+  return parts.join(", ")
+}
+
 function update_status_views() {
   STATUS_VIEWS.forEach((update) => update())
 }
@@ -175,12 +191,18 @@ function create_status_view() {
     }
   })
 
-  status.append(line, reconnect, pair)
+  // Which AYON session this tab is attached to, for support questions.
+  const details = document.createElement("div")
+  details.className = "ayon-sidebar-status-details"
+
+  status.append(line, details, reconnect, pair)
 
   const update = () => {
     const {level, text: message} = describe_bridge_status(BRIDGE)
     status.dataset.level = level
     text.textContent = message
+    details.textContent = describe_bridge_details(BRIDGE)
+    details.hidden = !details.textContent
     const state = BRIDGE?.state
     reconnect.hidden = state !== "superseded"
     pair.hidden = !["not_paired", "rejected", "ended"].includes(state)
@@ -478,6 +500,12 @@ function ensure_ayon_sidebar_style() {
       background: #d64545;
     }
 
+    .ayon-sidebar-status-details {
+      color: var(--descrip-text);
+      font-size: 0.75rem;
+      padding-left: 1rem;
+    }
+
     .ayon-sidebar-pair {
       display: flex;
       gap: 0.5rem;
@@ -761,6 +789,9 @@ app.registerExtension({
         bridge.addEventListener("change", () => {
           update_status_views()
           notify_bridge_change(bridge)
+        })
+        bridge.addEventListener("notice", (event) => {
+          show_toast("warn", event.detail)
         })
 
         // The API-format prompt of the active workflow, made by the

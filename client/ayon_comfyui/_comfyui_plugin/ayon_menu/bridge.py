@@ -56,6 +56,7 @@ PAIR_CODE_TTL = 600.0
 PAIR_CODE_REUSE = 60.0
 HOSTLESS_SESSION_TTL = 300.0
 MAX_SESSIONS = 256
+MAX_PAIR_CODES_PER_SESSION = 8
 MAX_PENDING = 1024
 MAX_ID_LENGTH = 128
 MAX_INFO_SIZE = 16 * 1024
@@ -77,8 +78,9 @@ PAIR_PAGE = """<!DOCTYPE html>
   try {
     var code = new URLSearchParams(location.hash.slice(1)).get("code");
     if (code) {
+      // The tab trades it for a credential once ComfyUI loaded; a
+      // credential it already has stays until the code is accepted.
       sessionStorage.setItem("ayon.bridge.pair_code", code);
-      sessionStorage.removeItem("ayon.bridge.credential");
     }
   } catch (err) {
     console.error("AYON: unable to store pairing code", err);
@@ -322,6 +324,9 @@ class Bridge:
         else:
             session.tab = ws
         if old is not None and old is not ws:
+            # Before awaiting anything, so nothing the new connection sends
+            # meanwhile gets forgotten.
+            self._forget_requests_from(session, role)
             await self._fail_pending(session, role)
             # Don't wait for an unresponsive old peer's close handshake.
             self._spawn(_close(
@@ -340,9 +345,23 @@ class Bridge:
             session.host_left_at = time.monotonic()
         else:
             session.tab = None
+        self._forget_requests_from(session, role)
         await self._fail_pending(session, role)
-        await _send(session.peer(role), {"type": "peer", "connected": False})
+        # A new connection may have taken this role in the meantime.
+        if (session.host if role == "host" else session.tab) is None:
+            await _send(
+                session.peer(role), {"type": "peer", "connected": False}
+            )
         log.info("AYON session %s: %s disconnected", session.id[:8], role)
+
+    def _forget_requests_from(self, session: Session, role: str) -> None:
+        """Forget requests made by the connection for `role` that left.
+
+        Their answers must not reach whoever takes its place, which may
+        use the same request ids (e.g. a reloaded tab).
+        """
+        other = "tab" if role == "host" else "host"
+        session.pending[other].clear()
 
     async def _fail_pending(self, session: Session, role: str) -> None:
         """Error all requests that the connection for `role` won't answer."""
@@ -383,6 +402,15 @@ class Bridge:
         elif kind == "response":
             await self._relay_response(session, role, frame, text)
         elif kind == "pair_code" and role == "host":
+            # Keep only the newest few codes of a session.
+            codes = [
+                code
+                for code, entry in self.pair_codes.items()
+                if entry[0] == session.id
+            ]
+            excess = len(codes) - MAX_PAIR_CODES_PER_SESSION + 1
+            for code in codes[:max(0, excess)]:
+                del self.pair_codes[code]
             code = secrets.token_urlsafe(18)
             self.pair_codes[code] = [
                 session.id, time.monotonic() + PAIR_CODE_TTL, None
@@ -447,7 +475,7 @@ class Bridge:
         # so nobody can inject results for other requests.
         pending = session.pending[role]
         request_id = frame.get("id")
-        if request_id not in pending:
+        if not isinstance(request_id, str) or request_id not in pending:
             return
         pending.discard(request_id)
         await _send_text(session.peer(role), text)

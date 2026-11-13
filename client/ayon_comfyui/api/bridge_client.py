@@ -61,6 +61,21 @@ def join_url(base_url: str, path: str, *, websocket: bool = False) -> str:
     )
 
 
+def check_url(base_url: str) -> None:
+    """Make sure `base_url` is an http(s) URL.
+
+    Raises:
+        BridgeError: With code `invalid_url`.
+    """
+    parts = urlsplit(base_url)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        msg = (
+            "The ComfyUI address must be an http:// or https:// URL, "
+            f"got '{base_url}'."
+        )
+        raise BridgeError(msg, "invalid_url")
+
+
 def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
     """Check the AYON plugin is installed on ComfyUI and compatible.
 
@@ -68,8 +83,10 @@ def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
         The plugin info reported by `/ayon/info`.
 
     Raises:
-        BridgeError: With code `unreachable`, `no_plugin` or `incompatible`.
+        BridgeError: With code `invalid_url`, `unreachable`, `no_plugin`
+            or `incompatible`.
     """
+    check_url(base_url)
     url = join_url(base_url, "/ayon/info")
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
@@ -110,7 +127,8 @@ class BridgeClient:
         on_event: Called from the bridge thread with an event name and data:
             `connected`, `disconnected`, `tab_connected`, `tab_disconnected`
             and `rejected` (fatal, the client stops reconnecting).
-        ssl: Passed to aiohttp; by default the system's trusted CAs are used.
+        ssl: Passed to aiohttp when set. By default aiohttp verifies the
+            certificate against the system's trusted CAs.
     """
 
     def __init__(
@@ -119,8 +137,9 @@ class BridgeClient:
         *,
         info: dict | None = None,
         on_event: EventCallback | None = None,
-        ssl: Any = True,  # noqa: ANN401
+        ssl: Any = None,  # noqa: ANN401
     ) -> None:
+        check_url(base_url)
         self.base_url = base_url
         self.ws_url = join_url(base_url, "/ayon/ws", websocket=True)
         self.secret = secrets.token_urlsafe(32)
@@ -282,6 +301,9 @@ class BridgeClient:
 
     async def _run(self) -> None:
         attempt = 0
+        # Only pass `ssl` when set: aiohttp < 3.9 treats `ssl=True` as
+        # "don't verify the certificate".
+        ssl_kwargs = {} if self._ssl is None else {"ssl": self._ssl}
         async with aiohttp.ClientSession() as session:
             while not self._stopping:
                 try:
@@ -289,15 +311,20 @@ class BridgeClient:
                         self.ws_url,
                         heartbeat=HEARTBEAT,
                         max_msg_size=MAX_MSG_SIZE,
-                        ssl=self._ssl,
+                        **ssl_kwargs,
                     ) as ws:
                         self._ws = ws
                         attempt = 0
                         fatal = await self._session(ws)
                         if fatal:
                             return
-                except (aiohttp.ClientError, OSError) as exc:
+                except (
+                    aiohttp.ClientError, OSError, asyncio.TimeoutError
+                ) as exc:
                     log.debug("Unable to connect to %s: %s", self.ws_url, exc)
+                except Exception:
+                    # Never let an unexpected error end the reconnect loop.
+                    log.exception("Unexpected error in the ComfyUI connection")
                 finally:
                     self._ws = None
                     self._disconnected()
@@ -335,8 +362,12 @@ class BridgeClient:
                 frame = json.loads(msg.data)
             except ValueError:
                 continue
-            if isinstance(frame, dict):
+            if not isinstance(frame, dict):
+                continue
+            try:
                 await self._on_frame(ws, frame)
+            except Exception:
+                log.exception("Unable to handle a message from ComfyUI")
 
         code = ws.close_code
         if code in {CLOSE_REJECTED, CLOSE_SUPERSEDED}:

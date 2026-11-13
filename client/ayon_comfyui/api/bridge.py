@@ -45,12 +45,16 @@ log = logging.getLogger(__name__)
 
 # Show the session window when no tab has been connected for this long.
 TAB_GRACE_SECONDS = 10.0
+# ...or when ComfyUI isn't reachable yet this long after launch; starting
+# ComfyUI regularly takes a while.
+STARTUP_GRACE_SECONDS = 30.0
 # ...or this long after reconnecting to ComfyUI (e.g. after a restart),
 # since the tab needs to reconnect too.
 TAB_GRACE_AFTER_RECONNECT_SECONDS = 60.0
 # Pairing codes expire on the ComfyUI side after 10 minutes; show a fresh
 # one well before that.
 PAIRING_CODE_MAX_AGE_SECONDS = 300.0
+PAIRING_CODE_RETRY_SECONDS = 30.0
 
 _BRIDGE: ComfyUIBridge | None = None
 
@@ -150,6 +154,8 @@ class ComfyUIBridge(QtCore.QObject):
         self._pairing_code = ""
         self._pairing_code_at = 0.0
         self._shutting_down = False
+        # Startup failed and the artist is being told; ignore late events.
+        self._failed = False
 
         self._sig_call.connect(self._run_callable)
         self._sig_event.connect(self._handle_event)
@@ -202,7 +208,17 @@ class ComfyUIBridge(QtCore.QObject):
             process.wait()
 
     def _process_exited(self) -> bool:
-        return self._process is not None and self._process.poll() is not None
+        """Whether the ComfyUI that AYON launched is known to be gone.
+
+        On Windows ComfyUI runs in a console (`powershell -NoExit`) that
+        stays open until the artist closes it, so its exit means ComfyUI is
+        gone. Elsewhere the terminal wrapper (`open -a Terminal`,
+        `x-terminal-emulator`) may return right away while ComfyUI keeps
+        running, so its exit says nothing.
+        """
+        if self._process is None or sys.platform != "win32":
+            return False
+        return self._process.poll() is not None
 
     # --- pairing ----------------------------------------------------------
 
@@ -217,12 +233,17 @@ class ComfyUIBridge(QtCore.QObject):
         """Get a fresh one-time pairing code and link."""
         if not self.client.registered:
             return False
+        # Also counts as an attempt, so a failing relay isn't asked (and
+        # the UI blocked) every second.
+        self._pairing_code_at = time.monotonic()
         try:
-            self._pairing_code = self.client.request_pair_code()
+            self._pairing_code = self.client.request_pair_code(timeout=5)
         except BridgeError as exc:
             log.warning("Unable to get a pairing code: %s", exc)
+            self._pairing_code = ""
+            self._pairing_url = ""
+            self._window.update_view()
             return False
-        self._pairing_code_at = time.monotonic()
         self._pairing_url = self.client.pairing_url(self._pairing_code)
         self._window.update_view()
         return True
@@ -230,13 +251,16 @@ class ComfyUIBridge(QtCore.QObject):
     def ensure_pairing_code(self) -> None:
         """Make sure the session window shows a pairing code still valid."""
         age = time.monotonic() - self._pairing_code_at
-        if not self._pairing_code or age > PAIRING_CODE_MAX_AGE_SECONDS:
+        if age > PAIRING_CODE_MAX_AGE_SECONDS or (
+            not self._pairing_code and age > PAIRING_CODE_RETRY_SECONDS
+        ):
             self.new_pairing_code()
 
     def _forget_pairing_code(self) -> None:
-        # A tab used it (or it expires soon); don't show it again.
+        # A tab used it, or ComfyUI forgot it; get a new one when needed.
         self._pairing_code = ""
         self._pairing_url = ""
+        self._pairing_code_at = 0.0
 
     # --- state --------------------------------------------------------------
 
@@ -291,13 +315,19 @@ class ComfyUIBridge(QtCore.QObject):
 
         show = False
         if not self.client.registered:
-            reference = self._disconnected_at or self._started_at
-            show = now - reference > TAB_GRACE_SECONDS
+            if self._disconnected_at is None:
+                show = now - self._started_at > STARTUP_GRACE_SECONDS
+            else:
+                show = now - self._disconnected_at > TAB_GRACE_SECONDS
         elif not self.client.tab_connected and self._no_tab_since:
             show = now - self._no_tab_since > self._tab_grace
+        if show and self.client.registered:
+            # Pairing codes expire; keep the one on display usable.
+            self.ensure_pairing_code()
         self._window.set_wanted(show)
 
     def _startup_failed(self) -> None:
+        self._failed = True
         self._timer.stop()
         try:
             check_plugin(self.comfy_url, timeout=3)
@@ -322,7 +352,7 @@ class ComfyUIBridge(QtCore.QObject):
         self._sig_event.emit(event, data)
 
     def _handle_event(self, event: str, data: Any) -> None:  # noqa: ANN401
-        if self._shutting_down:
+        if self._shutting_down or self._failed:
             return
         now = time.monotonic()
         if event == "connected":
@@ -346,6 +376,8 @@ class ComfyUIBridge(QtCore.QObject):
                     self._window.set_wanted(True)
         elif event == "disconnected":
             self._disconnected_at = now
+            # A restarted ComfyUI forgot the pairing codes it handed out.
+            self._forget_pairing_code()
             if self._process_exited():
                 log.info("ComfyUI exited, ending the AYON session.")
                 self.shutdown()
@@ -356,6 +388,7 @@ class ComfyUIBridge(QtCore.QObject):
             self._no_tab_since = now
             self._tab_grace = TAB_GRACE_SECONDS
         elif event == "rejected":
+            self._failed = True
             self._timer.stop()
             QtWidgets.QMessageBox.critical(
                 None,
@@ -393,6 +426,15 @@ class ComfyUIBridge(QtCore.QObject):
 
     # --- requests from the tab (bridge worker thread) ---------------------
 
+    def run_in_main_thread(self, func: Callable[[], Any]) -> None:
+        """Run `func` on the Qt main thread, from any thread.
+
+        Doesn't wait for it to run. Tab request handlers run on a worker
+        thread; use this for anything that touches Qt or host state, and
+        answer the tab right away.
+        """
+        self._sig_call.emit(func)
+
     def _run_callable(self, func: Callable[[], Any]) -> None:
         try:
             func()
@@ -405,11 +447,11 @@ class ComfyUIBridge(QtCore.QObject):
             msg = f"Unknown AYON tool: {tool_name!r}"
             raise ValueError(msg)
         # Acknowledge right away; the tool opens on the Qt main thread.
-        self._sig_call.emit(partial(show_tool_by_name, tool_name))
+        self.run_in_main_thread(partial(show_tool_by_name, tool_name))
         return f"{tool_name} scheduled"
 
     def _handle_request_save(self, params: dict) -> str:  # noqa: ARG002
-        self._sig_call.emit(save_current_workfile)
+        self.run_in_main_thread(save_current_workfile)
         return "save workfile scheduled"
 
     def _handle_ping(self, params: dict) -> str:
@@ -426,9 +468,6 @@ class SessionWindow(QtWidgets.QWidget):
         # Closed by the artist: stay hidden until the situation changes.
         self._dismissed = False
         self.setWindowTitle("AYON - ComfyUI")
-        self.setWindowFlags(
-            self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint
-        )
         self.setMinimumWidth(460)
         try:
             from ayon_core import resources, style  # noqa: PLC0415
@@ -442,6 +481,11 @@ class SessionWindow(QtWidgets.QWidget):
 
         self._status = QtWidgets.QLabel(self)
         self._status.setWordWrap(True)
+        self._details = QtWidgets.QLabel(self)
+        self._details.setWordWrap(True)
+        self._details.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse
+        )
 
         self._code_label = QtWidgets.QLabel("Pairing code:", self)
         self._code = QtWidgets.QLineEdit(self)
@@ -468,6 +512,7 @@ class SessionWindow(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self._status)
+        layout.addWidget(self._details)
         layout.addLayout(pairing)
         layout.addLayout(buttons)
 
@@ -493,6 +538,17 @@ class SessionWindow(QtWidgets.QWidget):
     def update_view(self) -> None:
         bridge = self._bridge
         self._status.setText(bridge.status_text())
+        info = bridge.client.info
+        context = " / ".join(
+            value
+            for value in (
+                info.get("project"), info.get("folder"), info.get("task")
+            )
+            if value
+        )
+        self._details.setText(
+            f"ComfyUI: {bridge.comfy_url}\nAYON context: {context or '-'}"
+        )
         registered = bridge.client.registered
         has_code = registered and bool(bridge.pairing_code)
         for widget in (
