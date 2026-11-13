@@ -439,6 +439,13 @@ class CollectTests(unittest.TestCase):
         # Recorded before tabs had keys: the graph id decides.
         self.assertTrue(cp.same_workflow(
             {"workflow_key": "k1", "workflow_id": "g"}, {"workflow_id": "g"}))
+        # Keys of another browser tab (ComfyUI opened anew): graph id.
+        self.assertTrue(cp.same_workflow(
+            {"workflow_key": "k1", "workflow_page": "p1", "workflow_id": "g"},
+            {"workflow_key": "k2", "workflow_page": "p2", "workflow_id": "g"}))
+        self.assertFalse(cp.same_workflow(
+            {"workflow_key": "k1", "workflow_page": "p1", "workflow_id": "g"},
+            {"workflow_key": "k2", "workflow_page": "p1", "workflow_id": "g"}))
         self.assertEqual(cp.tab_prompt_ids(
             [{"prompt_id": "b", "workflow_key": "k2", "workflow_id": "g"},
              {"prompt_id": "a", "workflow_key": "k1", "workflow_id": "g"}],

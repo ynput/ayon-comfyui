@@ -61,6 +61,44 @@ test("a renamed workflow keeps its key, also after a reload", () => {
   assert.notEqual(reloaded.key(workflow("workflows/Unsaved Workflow.json")), key)
 })
 
+test("a workflow opened at a path another one left gets its own key", () => {
+  const keys = new WorkflowKeys(new MemoryStorage())
+  // Saved as v002 (renamed) without asking for its key after the rename.
+  const v001 = workflow("workflows/shot_v001.json")
+  const key = keys.key(v001)
+  v001.path = "workflows/shot_v002.json"
+  // v001 opened again next to it.
+  const reopened = workflow("workflows/shot_v001.json")
+  assert.notEqual(keys.key(reopened), key)
+  assert.equal(keys.find([v001, reopened], key), v001)
+
+  // Closed, and a new workflow at its path.
+  const unsaved = workflow("workflows/Unsaved Workflow.json")
+  const unsaved_key = keys.key(unsaved)
+  assert.notEqual(keys.key(workflow("workflows/Unsaved Workflow.json")), unsaved_key)
+})
+
+test("a stored key is restored once, and never to a second workflow", () => {
+  const storage = new MemoryStorage()
+  const before = new WorkflowKeys(storage)
+  const key = before.key(workflow("workflows/a.json"))
+
+  const after = new WorkflowKeys(storage)
+  const restored = workflow("workflows/a.json")
+  assert.equal(after.key(restored), key)
+  // E.g. restored, closed, and opened again: a new workflow.
+  assert.notEqual(after.key(workflow("workflows/a.json")), key)
+})
+
+test("the page id is per browser tab", () => {
+  const storage = new MemoryStorage()
+  const page = new WorkflowKeys(storage).page_id()
+  // Reloaded: same session storage.
+  assert.equal(new WorkflowKeys(storage).page_id(), page)
+  // Another browser tab: its own session storage.
+  assert.notEqual(new WorkflowKeys(new MemoryStorage()).page_id(), page)
+})
+
 test("keys work without storage", () => {
   const keys = new WorkflowKeys(null)
   const tab = workflow("workflows/a.json")

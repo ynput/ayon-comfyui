@@ -92,8 +92,17 @@ class RenderWait:
         app = QtWidgets.QApplication.instance()
         if app is None or QtCore.QThread.currentThread() != app.thread():
             return self
-        # The Publisher, which started the publish.
-        parent = app.activeWindow()
+        # Modal to the Publisher, which runs the publish. Without one, to
+        # everything.
+        parent = next(
+            (
+                widget
+                for widget in app.topLevelWidgets()
+                if type(widget).__name__ == "PublisherWindow"
+                and widget.isVisible()
+            ),
+            None,
+        )
         dialog = QtWidgets.QProgressDialog(
             self._text, "Cancel render", 0, 0, parent
         )

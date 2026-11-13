@@ -888,10 +888,14 @@ QUEUED_PROMPTS = PromptRegistry()
 
 
 def workflow_identity(data: dict | None) -> dict:
-    """Return `{workflow_key, workflow_id, workflow_path}` from tab data."""
+    """Return a workflow's identity from tab data.
+
+    `{workflow_key, workflow_page, workflow_id, workflow_path}`.
+    """
     data = data or {}
     return {
         "workflow_key": data.get("workflow_key"),
+        "workflow_page": data.get("workflow_page"),
         "workflow_id": data.get("workflow_id"),
         "workflow_path": data.get("workflow_path"),
     }
@@ -900,15 +904,21 @@ def workflow_identity(data: dict | None) -> dict:
 def same_workflow(a: dict | None, b: dict | None) -> bool:
     """Whether two workflow identities are the same workflow (tab).
 
-    The AYON workflow keys are compared when both have one: a key is unique
-    per open workflow, survives renames (AYON saves a workfile by renaming
-    the tab) and reloads, and a duplicated workflow or the next version of
-    a workfile open next to it get their own. Then the graph ids: the id
-    survives renames, but saved copies of a graph share it. Otherwise the
-    ComfyUI workflow paths are compared, and unknown identities match.
+    The AYON workflow keys are compared when both have one from the same
+    browser tab (`workflow_page`): a key is unique per open workflow,
+    survives renames (AYON saves a workfile by renaming the tab) and
+    reloads, and a duplicated workflow or the next version of a workfile
+    open next to it get their own. Otherwise the graph ids: the id survives
+    renames and reopening ComfyUI in another browser tab, but saved copies
+    of a graph share it. Otherwise the ComfyUI workflow paths are compared,
+    and unknown identities match.
     """
     a, b = a or {}, b or {}
-    if a.get("workflow_key") and b.get("workflow_key"):
+    if (
+        a.get("workflow_key")
+        and b.get("workflow_key")
+        and a.get("workflow_page") == b.get("workflow_page")
+    ):
         return a["workflow_key"] == b["workflow_key"]
     if a.get("workflow_id") and b.get("workflow_id"):
         return a["workflow_id"] == b["workflow_id"]

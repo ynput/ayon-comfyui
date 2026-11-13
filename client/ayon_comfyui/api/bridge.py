@@ -15,7 +15,6 @@ ComfyUI process when AYON launched it, and the lifetime of the session:
 from __future__ import annotations
 
 import concurrent.futures
-import contextvars
 import logging
 import os
 import socket
@@ -41,7 +40,7 @@ from ayon_comfyui.api.menu_actions import (
     show_tool_by_name,
 )
 from ayon_comfyui.api.pickers import register_picker_handlers
-from ayon_comfyui.api.rpc_stub import RPCStub
+from ayon_comfyui.api.rpc_stub import RPCStub, target_workflow
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -512,9 +511,10 @@ class ComfyUIBridge(QtCore.QObject):
 
     def _run_callable(self, func: Callable[[], Any]) -> None:
         try:
-            # In a fresh context: never act on a workflow some code on the
-            # Qt thread targets meanwhile (see `rpc_stub.target_workflow`).
-            contextvars.Context().run(func)
+            # On the active workflow: never on one some code on the Qt
+            # thread targets meanwhile (see `rpc_stub.target_workflow`).
+            with target_workflow(None):
+                func()
         except Exception:
             log.exception("Error while running %s", func)
 

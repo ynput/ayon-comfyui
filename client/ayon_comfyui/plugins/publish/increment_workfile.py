@@ -47,6 +47,18 @@ class IncrementWorkfile(pyblish.api.InstancePlugin):
 
         current_filename = os.path.basename(current_filepath)
         workflow = context.data.get("comfyuiWorkflow")
+        # The artist may have opened another task's workfile while
+        # publishing; `save_next_version` saves into the current context.
+        current = host.get_current_context()
+        published = (context.data.get("folderPath"), context.data.get("task"))
+        if (current.get("folder_path"), current.get("task_name")) != published:
+            self.log.warning(
+                "Not incrementing the workfile: the AYON context changed "
+                "to %s/%s while publishing %s/%s.",
+                current.get("folder_path"), current.get("task_name"),
+                *published,
+            )
+            return
         try:
             with host.stub.target_workflow(workflow):
                 save_next_version(

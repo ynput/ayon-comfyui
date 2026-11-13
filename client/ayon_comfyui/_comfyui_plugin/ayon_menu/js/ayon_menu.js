@@ -695,8 +695,11 @@ async function begin_save_workfile(data) {
 
   let renamed = true
   if (data.workflow_name) {
+    // Keep the workflow's AYON key with its new path (see `WorkflowKeys`).
+    WORKFLOW_KEYS.key(workflow)
     try {
       await rename_workflow(store, workflow, data.workflow_name, data.workfile_path)
+      WORKFLOW_KEYS.key(workflow)
     } catch (err) {
       renamed = false
       console.warn("AYON: Failed to rename workflow:", err)
@@ -958,11 +961,13 @@ function remember_queued_prompt(prompt_id, workflow) {
   }
 }
 
-// A workflow's identity: its AYON key (unique per tab), its graph id and
-// ComfyUI path. `graph` is its live graph, so `workflow` must be active.
+// A workflow's identity: its AYON key (unique per tab within this browser
+// tab, `workflow_page`), its graph id and ComfyUI path. `graph` is its live
+// graph, so `workflow` must be active.
 function workflow_identity(workflow, graph = get_root_graph()) {
   return {
     workflow_key: WORKFLOW_KEYS.key(workflow),
+    workflow_page: WORKFLOW_KEYS.page_id(),
     workflow_label: workflow_label(workflow),
     workflow_id: graph?.id ?? null,
     workflow_path: workflow?.path ?? null,
@@ -1400,12 +1405,22 @@ app.registerExtension({
             if (active) {
               capture_tracker_state(tracker)
             }
+            const snapshot = SNAPSHOTS.get(workflow)
+            if (snapshot && tracker && snapshot !== tracker.activeState) {
+              // Changed since (maybe saved meanwhile, e.g. by "Save
+              // Workfile"): the file now holds the snapshot, so flag the
+              // tab as modified compared to that.
+              try {
+                tracker.initialState = structuredClone(snapshot)
+                tracker.updateModified?.()
+              } catch (err) {
+                console.warn("AYON: Unable to flag the workflow as modified", err)
+              }
+              return false
+            }
             const ayon = target_ayon_extra({workflow, active})
-            if (
-              SNAPSHOTS.get(workflow) !== tracker?.activeState ||
-              ayon?.comfy_workflow_path !== workflow.path
-            ) {
-              // Changed since, or the tab isn't named after the workfile.
+            if (!snapshot || ayon?.comfy_workflow_path !== workflow.path) {
+              // Not collected here, or the tab isn't named after the workfile.
               return false
             }
           }

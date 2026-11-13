@@ -9,6 +9,7 @@
 // Kept free of ComfyUI imports so it can be tested on its own.
 
 const STORAGE_KEY = "ayon.workflow_keys"
+const PAGE_KEY = "ayon.page_id"
 const STORAGE_LIMIT = 200
 
 function new_key() {
@@ -34,14 +35,47 @@ export function workflow_label(workflow) {
   return workflow.filename ?? workflow.path ?? null
 }
 
+function weak_ref(value) {
+  return typeof WeakRef === "function" ? new WeakRef(value) : {deref: () => value}
+}
+
 // Each open workflow's AYON key: unique per tab (a duplicated workflow or
 // the same workfile open twice get their own), stable while it's open, also
 // when it's renamed. Remembered per ComfyUI workflow path in the browser
-// tab's session storage, so a reload of the page keeps the keys.
+// tab's session storage, so the workflows a reload of the page restores
+// get their keys back.
 export class WorkflowKeys {
   constructor(storage = globalThis.sessionStorage ?? null) {
     this.storage = storage
     this.keys = new WeakMap()
+    // key -> the workflow holding it
+    this.holders = new Map()
+    // path -> key, as stored before this page loaded; each is used once
+    this.restorable = null
+    this.page = null
+  }
+
+  // This browser tab's id. Keys are only unique within it: each browser
+  // tab has its own session storage.
+  page_id() {
+    if (!this.page) {
+      let page = null
+      try {
+        page = this.storage?.getItem(PAGE_KEY) ?? null
+      } catch (err) {
+        page = null
+      }
+      if (!page) {
+        page = new_key()
+        try {
+          this.storage?.setItem(PAGE_KEY, page)
+        } catch (err) {
+          // The id still holds for this page.
+        }
+      }
+      this.page = page
+    }
+    return this.page
   }
 
   key(workflow) {
@@ -51,13 +85,30 @@ export class WorkflowKeys {
     const path = typeof workflow.path === "string" ? workflow.path : null
     let key = this.keys.get(workflow)
     if (!key) {
-      key = (path && this.stored()[path]) || new_key()
+      // Only a workflow restored by a reload of the page takes a stored key
+      // back, and never one another open workflow holds: a workflow opened
+      // later at a path another one left (renamed or closed) is another
+      // workflow.
+      this.restorable ??= this.stored()
+      const stored = path ? this.restorable[path] : null
+      if (stored && !this.held_by_other(stored, workflow)) {
+        key = stored
+        delete this.restorable[path]
+      } else {
+        key = new_key()
+      }
       this.keys.set(workflow, key)
+      this.holders.set(key, weak_ref(workflow))
     }
     if (path) {
       this.remember(path, key)
     }
     return key
+  }
+
+  held_by_other(key, workflow) {
+    const holder = this.holders.get(key)?.deref()
+    return Boolean(holder) && holder !== workflow
   }
 
   // The open workflow with AYON key `key`, or null.
