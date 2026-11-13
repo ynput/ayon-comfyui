@@ -10,7 +10,6 @@ from ayon_core.pipeline import registered_host
 from ayon_core.pipeline.publish import KnownPublishError
 
 from ayon_comfyui.api import comfy_publish
-from ayon_comfyui.api.bridge import get_bridge
 from ayon_comfyui.api.bridge_client import BridgeError
 from ayon_comfyui.api.publish_lib import (
     COMFYUI_KEY,
@@ -18,7 +17,6 @@ from ayon_comfyui.api.publish_lib import (
     get_comfy_http,
     RenderCancelled,
     RenderWait,
-    split_api_prompt,
 )
 
 if TYPE_CHECKING:
@@ -34,19 +32,21 @@ AUTH_ERROR_HINTS = re.compile(
 class ExtractComfyUIRender(pyblish.api.ContextPlugin):
     """Queue the workflow on ComfyUI and wait for its outputs.
 
-    The workflow is taken from the ComfyUI tab again, now that the workfile
-    has been saved, so the published outputs match the published workfile.
-    AYON queues it itself under the prompt id chosen while collecting and
-    only runs the AYON save nodes being published (plus what they depend
-    on). It then follows the run in ComfyUI's history, so the ComfyUI tab
-    may be reloaded or closed meanwhile, and there is no time limit for
-    long renders. To stop a render, cancel it in ComfyUI's queue.
+    The workflow is the one collected when publishing started (see
+    `CollectComfyUIWorkflow`), which is also what the published workfile
+    holds. AYON queues it itself under the prompt id chosen while
+    collecting and only runs the AYON save nodes being published (plus what
+    they depend on). It then follows the run in ComfyUI's history, so
+    meanwhile the artist may keep working, switch tabs, or reload or close
+    the ComfyUI tab, and there is no time limit for long renders. To stop a
+    render, cancel it in the progress window or in ComfyUI's queue.
 
     The ComfyUI tab gets the run's progress and previews like any run
     it queued.
     """
 
-    # After `SaveCurrentScene` saved the workfile.
+    # After `SaveCurrentScene` saved the workfile (not that it matters: both
+    # use the collected workflow).
     order = pyblish.api.ExtractorOrder - 0.45
     label = "Render ComfyUI Outputs"
     hosts: ClassVar[list[str]] = ["comfyui"]
@@ -67,7 +67,8 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
             self.log.debug("No instance needs a ComfyUI render.")
             return
 
-        api_prompt, extra_data = self._current_prompt(context)
+        api_prompt: dict = context.data["comfyuiApiPrompt"]
+        extra_data = self._queue_extra_data()
         try:
             save_nodes = comfy_publish.find_save_nodes(api_prompt["prompt"])
         except comfy_publish.PublishError as exc:
@@ -81,8 +82,8 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
             if node is None:
                 msg = (
                     "The AYON save node of "
-                    f"'{instance.data.get('productName')}' was removed or "
-                    "bypassed in ComfyUI while publishing."
+                    f"'{instance.data.get('productName')}' isn't part of "
+                    "the collected workflow."
                 )
                 raise KnownPublishError(msg)
             # What actually runs, for provenance.
@@ -116,15 +117,14 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
 
         finished = False
         try:
-            # The wait keeps processing Qt events; hold back what the tab
-            # asks for meanwhile (e.g. "Save Workfile") until it's done.
             products = ", ".join(
                 str(instance.data.get("productName")) for instance in instances
             )
             # The wait keeps processing Qt events: show the progress with a
-            # way to cancel, and hold back what the tab asks for meanwhile
-            # (e.g. "Save Workfile") until it's done.
-            with get_bridge().busy(), RenderWait(
+            # way to cancel. What the artist does meanwhile (e.g. "Save
+            # Workfile" in the tab) runs right away: this publish doesn't
+            # depend on the tab anymore.
+            with RenderWait(
                 f"ComfyUI is rendering {products} for publishing.\n"
                 "Cancel here, or in ComfyUI's queue, to stop it."
             ) as waiter:
@@ -176,27 +176,19 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
                 instance.data.get("productName"), len(run.files),
             )
 
-    def _current_prompt(
-        self, context: pyblish.api.Context
-    ) -> tuple[dict, dict]:
+    def _queue_extra_data(self) -> dict:
+        """What the tab adds when it queues a prompt itself.
+
+        Taken now rather than when collecting: it holds the artist's
+        Comfy.org login for API nodes, which expires, and is never stored.
+        """
         host: ComfyUIHost = registered_host()
         try:
-            api_prompt, extra_data = split_api_prompt(
-                host.stub.get_api_prompt()
-            )
+            return host.stub.get_queue_extra_data()
         except (BridgeError, RuntimeError) as exc:
-            msg = f"Unable to get the workflow from the ComfyUI tab: {exc}"
-            raise KnownPublishError(msg) from exc
-        collected = context.data["comfyuiApiPrompt"]
-        if not comfy_publish.same_workflow(
-            comfy_publish.workflow_identity(api_prompt),
-            comfy_publish.workflow_identity(collected),
-        ):
-            msg = (
-                "The active ComfyUI workflow changed while publishing "
-                f"(from '{collected.get('workflow_path')}' to "
-                f"'{api_prompt.get('workflow_path')}'). Switch back to it "
-                "and publish again."
+            # E.g. the tab was closed: only API nodes need it.
+            self.log.warning(
+                "Queueing without the ComfyUI tab's Comfy.org login and "
+                "preview setting: %s", exc,
             )
-            raise KnownPublishError(msg)
-        return api_prompt, extra_data
+            return {}

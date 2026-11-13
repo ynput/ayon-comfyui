@@ -11,9 +11,9 @@ everything younger than a day).
 
 What gets published depends on the node's **Recook on publish** toggle:
 
-- **On**: when you publish, AYON takes the active workflow from the ComfyUI
-  tab, after saving the workfile, and queues it on ComfyUI itself, running
-  only the AYON save nodes being published (and what they need). It then
+- **On**: when you publish, AYON queues the workflow as it was collected
+  (see below) on ComfyUI itself, running only the AYON save nodes being
+  published (and what they need). It then
   waits for the run in ComfyUI's history: there is no time limit, and the
   ComfyUI tab may be reloaded or closed meanwhile. The tab still shows the
   run's progress. A small "AYON - ComfyUI" window shows the progress too,
@@ -28,6 +28,32 @@ What gets published depends on the node's **Recook on publish** toggle:
 
 The published version gets the files the save node wrote, a thumbnail, and
 the run's API prompt and workflow as `instance.data["comfyui"]`.
+
+### Working while publishing
+
+A publish acts on one workflow (tab): the one whose instances the Publisher
+shows. That tab must be the active one when you click Publish (or Validate);
+otherwise the publish asks you to switch to it, or to refresh the Publisher
+to publish the active workflow instead. AYON then collects the workflow
+once, and everything after works from that:
+
+- the workfile is saved with the collected workflow, and that's what the
+  workfile product publishes;
+- a recook renders the collected workflow, so its outputs match the
+  published workfile and what was validated;
+- versioning up the workfile afterwards saves that same tab, including
+  what you changed in it meanwhile.
+
+So you can keep working while it publishes: edit the graph, switch tabs,
+open other workfiles, or use AYON > Save Workfile. Changes made after
+collecting stay unsaved in the tab until you save it. Closing the published
+tab doesn't stop the publish either, it just skips versioning up the
+workfile.
+
+The Publisher keeps working on the workflow it showed when it opened or
+was last refreshed: creating, changing or removing its instances acts on
+that workflow, also after you switched tabs. Adding or removing a save node
+needs its tab to be the active one.
 
 **Comfy.org API nodes** need your Comfy.org login. AYON reuses the login of
 the last run you started in the ComfyUI tab; a login token expires after an

@@ -427,6 +427,24 @@ class CollectTests(unittest.TestCase):
             {"workflow_id": "h", "workflow_path": "a"}))
         self.assertTrue(cp.same_workflow({"workflow_path": "a"}, None))
 
+    def test_same_workflow_by_tab_key(self):
+        # v001 and v002 of a workfile open side by side share a graph id.
+        self.assertFalse(cp.same_workflow(
+            {"workflow_key": "k1", "workflow_id": "g"},
+            {"workflow_key": "k2", "workflow_id": "g"}))
+        # Renamed by saving it as the next workfile version: same tab.
+        self.assertTrue(cp.same_workflow(
+            {"workflow_key": "k1", "workflow_path": "workflows/v1.json"},
+            {"workflow_key": "k1", "workflow_path": "workflows/v2.json"}))
+        # Recorded before tabs had keys: the graph id decides.
+        self.assertTrue(cp.same_workflow(
+            {"workflow_key": "k1", "workflow_id": "g"}, {"workflow_id": "g"}))
+        self.assertEqual(cp.tab_prompt_ids(
+            [{"prompt_id": "b", "workflow_key": "k2", "workflow_id": "g"},
+             {"prompt_id": "a", "workflow_key": "k1", "workflow_id": "g"}],
+            {"workflow_key": "k1", "workflow_id": "g"},
+        ), ["a"])
+
     def test_lookup_cache_and_lookback(self):
         http = FakeHttp({
             ("GET", "/history/ok"): {"ok": history_entry("ok")},

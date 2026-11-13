@@ -33,6 +33,8 @@ def split_api_prompt(api_prompt: dict) -> tuple[dict, dict]:
 #: ComfyUI plugin feature the host-driven publish needs (see the relay's
 #: `FEATURES` in `_comfyui_plugin/ayon_menu/bridge.py`).
 PUBLISH_FEATURE = "publish-v1"
+#: ... and to act on the published workflow while it isn't the active tab.
+WORKFLOWS_FEATURE = "workflows-v1"
 
 
 def missing_plugin_feature(feature: str) -> str | None:

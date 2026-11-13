@@ -15,7 +15,7 @@ ComfyUI process when AYON launched it, and the lifetime of the session:
 from __future__ import annotations
 
 import concurrent.futures
-import contextlib
+import contextvars
 import logging
 import os
 import socket
@@ -41,7 +41,7 @@ from ayon_comfyui.api.menu_actions import (
 from ayon_comfyui.api.rpc_stub import RPCStub
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable
 
 log = logging.getLogger(__name__)
 
@@ -160,10 +160,6 @@ class ComfyUIBridge(QtCore.QObject):
         self._shutting_down = False
         # Startup failed and the artist is being told; ignore late events.
         self._failed = False
-        # While busy, actions requested by the tab wait (see `busy`).
-        self._busy = 0
-        self._deferred: list[Callable[[], Any]] = []
-
         self._sig_call.connect(self._run_callable)
         self._sig_event.connect(self._handle_event)
 
@@ -478,35 +474,18 @@ class ComfyUIBridge(QtCore.QObject):
         Doesn't wait for it to run. Tab request handlers run on a worker
         thread; use this for anything that touches Qt or host state, and
         answer the tab right away.
+
+        Also runs while a publish waits for a render (that wait processes Qt
+        events): what the artist asks for doesn't wait for it, and a publish
+        acts on the workflow it collected, not the active one.
         """
         self._sig_call.emit(func)
 
-    @contextlib.contextmanager
-    def busy(self) -> Iterator[None]:
-        """Hold back actions requested by the ComfyUI tab until done.
-
-        For long operations on the Qt main thread that keep processing
-        events, e.g. waiting for a render while publishing: otherwise e.g.
-        "AYON > Save Workfile" clicked in the tab would run in the middle of
-        it. The tab still gets its answer right away. Use on the Qt main
-        thread.
-        """
-        self._busy += 1
-        try:
-            yield
-        finally:
-            self._busy -= 1
-            if not self._busy and self._deferred:
-                deferred, self._deferred = self._deferred, []
-                for func in deferred:
-                    self.run_in_main_thread(func)
-
     def _run_callable(self, func: Callable[[], Any]) -> None:
-        if self._busy:
-            self._deferred.append(func)
-            return
         try:
-            func()
+            # In a fresh context: never act on a workflow some code on the
+            # Qt thread targets meanwhile (see `rpc_stub.target_workflow`).
+            contextvars.Context().run(func)
         except Exception:
             log.exception("Error while running %s", func)
 
