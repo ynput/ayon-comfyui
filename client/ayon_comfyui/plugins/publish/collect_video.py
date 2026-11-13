@@ -12,6 +12,7 @@ from urllib.request import urlretrieve
 import pyblish.api
 from ayon_comfyui.api.rpc_stub import PublishType
 from ayon_core.pipeline import registered_host
+from ayon_core.pipeline.publish import PublishError
 from ayon_core.pipeline.publish.lib import get_instance_staging_dir
 
 if TYPE_CHECKING:
@@ -51,6 +52,14 @@ class CollectVideo(pyblish.api.InstancePlugin):
         image_urls = host.stub.get_publish_node_images(
             instance.data, publish_type=PublishType.VIDEO
         )
+        if not image_urls:
+            product_name = instance.data["productName"]
+            msg = (
+                f"No video to publish for '{product_name}': its node has"
+                " no output yet. Run the workflow in ComfyUI, then publish"
+                " again."
+            )
+            raise PublishError(msg)
 
         video_info = VideoInfo()
 
