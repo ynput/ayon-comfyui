@@ -531,63 +531,25 @@ function register_ayon_sidebar_tab() {
   })
 }
 
+// Queue just `node` so it shows its preview (load nodes only: they have no
+// inputs to compute).
+async function execute_single_node(node) {
+  const prompt = await app.graphToPrompt()
+  const id = `${node.id}`
+  if (!prompt.output[id]) {
+    return
+  }
+  await app.api.queuePrompt(0, {output: {[id]: prompt.output[id]}})
+}
+
+function preview_load_node(node) {
+  execute_single_node(node).catch((err) => {
+    console.warn("AYON: Unable to show the load node's preview", err)
+  })
+}
+
 app.registerExtension({
     name: AYON_EXTENSION_NAME,
-    async afterConfigureGraph(graphData) {
-
-        async function execute_single_node(node) {
-          const proompt = await app.graphToPrompt(node.graph);
-          const id = `${node.id}`;
-          const output_obj = {}
-          output_obj[id] = proompt.output[id]
-          
-          const prompt_t = {
-            output: output_obj  
-          };
-          
-          console.log(prompt_t)
-          await app.api.queuePrompt(0,prompt_t);
-        }
-
-        async function generate_thumbnails_loadimage_nodes(){
-          const nodeType = "AYON Load Image"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        async function generate_thumbnails_loadvideo_nodes(){
-          const nodeType = "AYON Load Video"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        async function generate_thumbnails_load3dmodel_nodes(){
-          const nodeType = "AYON 3D Model Save"
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          console.log(foundNodes)
-          foundNodes.forEach((node) => {
-            console.log(node)
-            execute_single_node(node);
-          })
-        }
-
-        console.log("AYON: Graph loaded.");
-        // generate thumbnails for AYON Load Images / AYON Load Videos
-        requestAnimationFrame(() =>{
-          console.log("animation frame retrieved, cooking Load Image thumbnails")
-          generate_thumbnails_loadimage_nodes()
-          generate_thumbnails_loadvideo_nodes()
-          generate_thumbnails_load3dmodel_nodes() // Don't know if this will actually make UI thumbnails, but it will at least load stuff in memory
-      })
-    },
     async setup() {
         console.log("AYON")
 
@@ -687,19 +649,6 @@ app.registerExtension({
                   }
               }, interval);
           });
-        }
-
-        async function execute_single_node(node) {
-          const proompt = await app.graphToPrompt(node.graph);
-          const id = `${node.id}`;
-          const output_obj = {}
-          output_obj[id] = proompt.output[id]
-          
-          const prompt_t = {
-            output: output_obj  
-          };
-          console.log(prompt_t)
-          await app.api.queuePrompt(0,prompt_t);
         }
 
         async function execute_node_subgraph(node_out) {
@@ -1056,7 +1005,7 @@ app.registerExtension({
           loadimg_node.color = "#233"
           loadimg_node.bgcolor = "#355"
           app.graph.setDirtyCanvas(true, true);
-          execute_single_node(loadimg_node); // make sure image shows up
+          preview_load_node(loadimg_node)
           return true
         });
 
@@ -1085,29 +1034,39 @@ app.registerExtension({
           return json_removed
         })
 
-        bridge.register('updateLoadProductNode', async (data) => {
+        // Write an updated container onto its load node(s). Returns whether
+        // a node with that container was found.
+        bridge.register('updateLoadProductNode', (data) => {
           const nodeType = data.node_type
-          let foundNodes = null
-
-          
-          if (nodeType == "ALL") {
-            const nodes = ["AYON Load Image", "AYON Load Video", "AYON Load 3D Model"]
-            foundNodes = app.graph.nodes.filter((node) => nodes.includes(node.type));
-          } else {
-            foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          }
+          const types = nodeType == "ALL"
+            ? ["AYON Load Image", "AYON Load Video", "AYON Load 3D Model"]
+            : [nodeType]
           const ayon_info_update = JSON.parse(data.container_json)
 
-          foundNodes.forEach(async (node) => {
-            const info_widget = node.widgets.find(widget => widget.name == "ayon_container_info")
-            const ayon_info = JSON.parse(info_widget.value)
-            if (ayon_info_update.container_uuid == ayon_info.container_uuid) {
-              info_widget.value = data.container_json
-              execute_single_node(node); // make sure image shows up
-              return true
+          let updated = false
+          for (const node of app.graph.nodes) {
+            if (!types.includes(node.type)) {
+              continue
             }
-          });
-          return true
+            const info_widget = node.widgets?.find(widget => widget.name == "ayon_container_info")
+            let ayon_info = null
+            try {
+              ayon_info = JSON.parse(info_widget?.value ?? "null")
+            } catch (err) {
+              console.warn(`AYON: Load node ${node.id} has invalid container data`, err)
+              continue
+            }
+            if (ayon_info?.container_uuid !== ayon_info_update.container_uuid) {
+              continue
+            }
+            info_widget.value = data.container_json
+            preview_load_node(node)
+            updated = true
+          }
+          if (updated) {
+            app.graph.setDirtyCanvas(true, true)
+          }
+          return updated
         });
 
 
