@@ -7,7 +7,11 @@ from typing import Any, ClassVar, TypeVar
 
 from ayon_core.settings import get_project_settings, get_studio_settings
 
-from ayon_comfyui.api.bridge_client import BridgeError, check_plugin
+from ayon_comfyui.api.bridge_client import (
+    BridgeError,
+    check_plugin,
+    is_unencrypted_remote,
+)
 from ayon_comfyui.settings_util import ComfyUICustomDirectories
 
 from .template_helper import template_wrap
@@ -447,6 +451,13 @@ class ComfyRemoteSettings:
                     f"{self.name} | Remote: ComfyUI at {self.comfy_url} is "
                     "reachable and has the AYON plugin (bridge protocols "
                     f"{info.get('protocols')})."
+                )
+            if is_unencrypted_remote(self.comfy_url):
+                logs.append(
+                    f"{self.name} | Remote: {self.comfy_url} uses plain "
+                    "http, so the AYON session secret and workflows travel "
+                    "unencrypted. Prefer https for a ComfyUI on another "
+                    "machine."
                 )
 
             self._is_valid = not bool(errors)

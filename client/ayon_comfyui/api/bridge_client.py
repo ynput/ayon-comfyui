@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
+import ipaddress
 import itertools
 import json
 import logging
@@ -75,6 +76,20 @@ def check_url(base_url: str) -> None:
             f"got '{base_url}'."
         )
         raise BridgeError(msg, "invalid_url")
+
+
+def is_unencrypted_remote(base_url: str) -> bool:
+    """Whether `base_url` is plain http to another machine than this one."""
+    parts = urlsplit(base_url)
+    if parts.scheme != "http":
+        return False
+    host = parts.hostname or ""
+    if host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
 
 
 def check_plugin(base_url: str, timeout: float = 5.0) -> dict:
