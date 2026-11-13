@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import ayon_api
+from ayon_core.lib import BoolDef
 from ayon_core.pipeline import (
     AutoCreator,
     CreatedInstance,
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.bridge import get_bridge, get_stub
+from ayon_comfyui.api.load_util import container_files
 from ayon_comfyui.api.pipeline import list_instances
 from ayon_comfyui.api.rpc_stub import RPCStub
 
@@ -141,6 +143,66 @@ class ComfyUILoader(LoaderPlugin):
 
     hosts: ClassVar[list[str]] = ["comfyui"]
     settings_category = "comfyui"
+
+    options: ClassVar[list] = [
+        BoolDef(
+            "reference_files",
+            label="Reference files on the ComfyUI server",
+            default=False,
+            tooltip=(
+                "Read the files where they are published instead of "
+                "uploading a copy to ComfyUI. Needs the ComfyUI server to "
+                "reach the project's AYON roots; otherwise the files are "
+                "uploaded after all."
+            ),
+        ),
+    ]
+
+    def make_files_available(
+        self,
+        context: dict,
+        filepaths: list[str],
+        subfolder: str,
+        *,
+        reference: bool = False,
+    ) -> dict:
+        """Upload `filepaths` to ComfyUI, or reference them in place.
+
+        Returns:
+            The container's `image_upload_info` and `path_reference`.
+        """
+        return container_files(
+            self.comfy_url,
+            context["project"]["name"],
+            filepaths,
+            subfolder=subfolder,
+            reference=reference,
+        )
+
+    def update_files(
+        self, container: dict, context: dict, filepaths: list[str]
+    ) -> None:
+        """Make the files of a new version available, the same way."""
+        files = self.make_files_available(
+            context,
+            filepaths,
+            self.upload_subfolder(container, container.get("name") or "AYON"),
+            reference=bool(container.get("path_reference")),
+        )
+        container["representation"] = context["representation"]["id"]
+        container["image_upload_info"] = files["image_upload_info"]
+        if files["path_reference"]:
+            container["path_reference"] = files["path_reference"]
+        else:
+            container.pop("path_reference", None)
+
+    @staticmethod
+    def upload_subfolder(container: dict, default: str) -> str:
+        """Return the input subfolder a container's files were uploaded to."""
+        uploads = container.get("image_upload_info") or []
+        if uploads:
+            return uploads[0].get("subfolder") or default
+        return default
 
     @property
     def stub(self) -> RPCStub:
