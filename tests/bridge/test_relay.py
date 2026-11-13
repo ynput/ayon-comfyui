@@ -85,7 +85,7 @@ async def main():
         r = await s.get(URL + "/ayon/info")
         info = await r.json()
         check(info == {"name": "ayon-comfyui", "protocols": [1],
-                       "features": []}, "info")
+                       "features": list(bridge_mod.FEATURES)}, "info")
         r = await s.get(URL + "/ayon/pair")
         page = await r.text()
         check("ayon.bridge.pair_code" in page
@@ -95,7 +95,8 @@ async def main():
         host, welcome = await host_connect(s, secret, {"user": "alice"})
         check(welcome["type"] == "welcome"
               and welcome["peer"]["connected"] is False
-              and welcome["features"] == [], "host welcome")
+              and welcome["features"] == list(bridge_mod.FEATURES),
+              "host welcome")
         sid = welcome["session"]
 
         # request without a tab

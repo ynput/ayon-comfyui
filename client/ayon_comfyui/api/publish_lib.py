@@ -29,6 +29,25 @@ def split_api_prompt(api_prompt: dict) -> tuple[dict, dict]:
     return data, extra if isinstance(extra, dict) else {}
 
 
+#: ComfyUI plugin feature the host-driven publish needs (see the relay's
+#: `FEATURES` in `_comfyui_plugin/ayon_menu/bridge.py`).
+PUBLISH_FEATURE = "publish-v1"
+
+
+def missing_plugin_feature(feature: str) -> str | None:
+    """Return why the ComfyUI plugin can't do `feature`, or None if it can."""
+    client = get_bridge().client
+    if not client.registered or feature in client.plugin_features:
+        # Not connected: the call that needs it explains that instead.
+        return None
+    return (
+        f"The AYON plugin on ComfyUI at {get_bridge().comfy_url} is too old "
+        f"for this AYON addon (it lacks '{feature}'). Update the AYON "
+        "ComfyUI plugin on that ComfyUI server to the version shipped with "
+        "this addon."
+    )
+
+
 def get_comfy_http() -> ComfyHttp:
     """Return an HTTP client for the ComfyUI of this AYON session."""
     return ComfyHttp(get_bridge().comfy_url)

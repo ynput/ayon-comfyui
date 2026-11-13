@@ -49,7 +49,13 @@ PROTOCOL = PROTOCOLS[-1]
 # What this plugin offers beyond the bridge protocol itself (e.g. nodes or
 # tab methods a publish needs), so AYON can tell an outdated plugin apart
 # before relying on them. Reported by `/ayon/info` and in the host welcome.
-FEATURES: tuple[str, ...] = ()
+#
+# - "publish-v1": save nodes write `AYON/<instance>/<prompt>/` and report
+#   their files in an `ayon` UI output; the tab answers `getApiPrompt` and
+#   `getQueuedPrompts` (host-driven publishing).
+# - "paths-v1": `/ayon/paths/check` and load nodes reading AYON rootless
+#   path references.
+FEATURES: tuple[str, ...] = ("publish-v1", "paths-v1")
 
 HELLO_TIMEOUT = 10.0
 HEARTBEAT = 30.0
