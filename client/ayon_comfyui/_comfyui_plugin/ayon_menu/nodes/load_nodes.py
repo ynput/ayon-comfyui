@@ -60,8 +60,17 @@ class ContainerError(ValueError):
     """The node's AYON container can't be resolved to files."""
 
 
+NOTHING_LOADED = (
+    "No AYON representation is loaded on this node yet. Pick one with the "
+    "AYON pickers on the node, or load one with the AYON Loader."
+)
+
+
 def parse_container(ayon_container_info: str) -> dict:
     """Return the AYON container stored on a load node."""
+    if not str(ayon_container_info or "").strip():
+        # E.g. a load node added from the node library.
+        raise ContainerError(NOTHING_LOADED)
     try:
         container = json.loads(ayon_container_info)
     except (TypeError, ValueError) as exc:
@@ -138,6 +147,9 @@ def container_files(container: dict, extensions: set[str]) -> list[str]:
             )
             raise ContainerError(msg)
     if not paths:
+        if not container.get("representation"):
+            # A container the pickers started, not loaded into yet.
+            raise ContainerError(NOTHING_LOADED)
         msg = "The AYON load node's container has no files. Load it again."
         raise ContainerError(msg)
     unsupported = sorted({
