@@ -1,7 +1,5 @@
 import { app } from "../../scripts/app.js";
-import "../../../../extensions/ayon_menu/lib/wsrpc.js";
-import {RPCServer} from "../../../../extensions/ayon_menu/lib/rpc_server.js"
-import {AYON_ORIGIN_ADRESS} from "../../../../extensions/ayon_menu/lib/consts.js"
+import { AyonBridge, PROTOCOL, bridge_ws_url } from "./lib/ayon_bridge.js";
 
 const AYON_EXTENSION_NAME = "AYON.ComfyMenu"
 const AYON_SAVE_WORKFILE_COMMAND_ID = "AYON.SaveWorkfile"
@@ -53,6 +51,10 @@ function get_ayon_extension() {
   return exts.find((el) => el.name == AYON_EXTENSION_NAME)
 }
 
+// Connection to the AYON session that opened this tab (see lib/ayon_bridge.js)
+let BRIDGE = null
+const STATUS_VIEWS = new Set()
+
 function show_toast(severity, detail, life = 6000) {
   const toast = app.extensionManager?.toast
   if (toast?.add) {
@@ -62,17 +64,284 @@ function show_toast(severity, detail, life = 6000) {
   }
 }
 
-function push_ayon_queue(function_name, args) {
-  const ext = get_ayon_extension()
-  if (!ext) {
-    console.warn("AYON extension was not ready when a UI action was triggered.")
-    return
+// Call `method` on the AYON host; failures are shown as a toast instead of
+// silently doing nothing.
+async function call_ayon(method, params = {}) {
+  if (!BRIDGE) {
+    show_toast("warn", "The AYON extension is still starting.")
+    return null
   }
-  ext.PROC_QUEUE.push({function: function_name, args})
+  try {
+    return await BRIDGE.call(method, params)
+  } catch (err) {
+    show_toast("warn", String(err?.message ?? err))
+    return null
+  }
 }
 
 function request_ayon_tool(tool_name) {
-  push_ayon_queue("ayonComfyUI.requestToolByName", {"tool_name": tool_name})
+  return call_ayon("requestToolByName", {tool_name})
+}
+
+// AYON ComfyUI addon versions from before the bridge show ComfyUI in an
+// iframe on a page that AYON serves itself (http://127.0.0.1:5454 by
+// default), which calls into the frame with postMessage requests
+// `{rpc: true, id, method, params}`, polling `pop_process` every 100 ms.
+// This plugin doesn't speak that protocol: when such requests come in, tell
+// the artist that their AYON ComfyUI addon is too old for this ComfyUI.
+const OLD_ADDON_NOTICE_ID = "ayon-old-addon-notice"
+let OLD_ADDON_PAGE = false
+let PLUGIN_VERSION = ""
+
+function old_addon_message() {
+  const versions = PLUGIN_VERSION
+    ? `a newer AYON plugin (${PLUGIN_VERSION}), which needs the matching ` +
+      `AYON ComfyUI addon version (${PLUGIN_VERSION})`
+    : "a newer AYON plugin, which needs the matching AYON ComfyUI addon " +
+      "version"
+  return (
+    `This ComfyUI runs ${versions}. The AYON session that opened this ` +
+    "page uses an older AYON ComfyUI addon, so the AYON tools don't work " +
+    "here. Update the AYON ComfyUI addon (ask your AYON administrator), " +
+    "then launch ComfyUI from AYON again."
+  )
+}
+
+function is_framed() {
+  try {
+    return window.parent !== window
+  } catch {
+    return true
+  }
+}
+
+async function fetch_plugin_version() {
+  try {
+    const response = await fetch(
+      app.api.apiURL("/ayon/info"), {cache: "no-store"}
+    )
+    const info = await response.json()
+    return typeof info?.version === "string" ? info.version : ""
+  } catch {
+    return ""
+  }
+}
+
+function show_old_addon_notice() {
+  if (OLD_ADDON_PAGE) {
+    return
+  }
+  OLD_ADDON_PAGE = true
+
+  const notice = document.createElement("div")
+  notice.id = OLD_ADDON_NOTICE_ID
+  notice.setAttribute("role", "alert")
+  Object.assign(notice.style, {
+    position: "fixed",
+    top: "4rem",
+    left: "50%",
+    transform: "translateX(-50%)",
+    zIndex: "100000",
+    boxSizing: "border-box",
+    width: "min(40rem, calc(100vw - 2rem))",
+    padding: "0.875rem 1rem",
+    borderRadius: "0.75rem",
+    background: "#7f1d1d",
+    color: "#fff",
+    boxShadow: "0 0.5rem 2rem rgba(0, 0, 0, 0.5)",
+    font: "14px/1.4 system-ui, sans-serif",
+  })
+  const title = document.createElement("strong")
+  title.textContent = "AYON: update the AYON ComfyUI addon"
+  title.style.display = "block"
+  title.style.marginBottom = "0.25rem"
+  const text = document.createElement("div")
+  notice.append(title, text)
+  document.body.append(notice)
+
+  const update = () => {
+    text.textContent = old_addon_message()
+    update_status_views()
+  }
+  update()
+  console.error(`AYON: ${old_addon_message()}`)
+  fetch_plugin_version().then((version) => {
+    PLUGIN_VERSION = version
+    update()
+  })
+}
+
+// Answer its requests, so they don't pile up unanswered on that page and
+// the old AYON gets told why its requests fail.
+function answer_old_addon_request(event) {
+  const {id, method} = event.data
+  const reply = method === "pop_process"
+    ? {rpc: true, id, result: null}
+    : {rpc: true, id, error: old_addon_message()}
+  try {
+    event.source.postMessage(reply, event.origin)
+  } catch (err) {
+    console.debug("AYON: unable to answer the old AYON page", err)
+  }
+}
+
+function watch_for_old_addon_page() {
+  if (!is_framed()) {
+    return
+  }
+  window.addEventListener("message", (event) => {
+    const data = event.data
+    if (
+      event.source !== window.parent ||
+      data?.rpc !== true ||
+      typeof data.id !== "string" ||
+      typeof data.method !== "string"
+    ) {
+      return
+    }
+    show_old_addon_notice()
+    answer_old_addon_request(event)
+  })
+}
+
+watch_for_old_addon_page()
+
+function describe_bridge_status(bridge) {
+  if (OLD_ADDON_PAGE && !bridge?.connected) {
+    return {level: "error", text: old_addon_message()}
+  }
+  if (!bridge) {
+    return {level: "warn", text: "Starting..."}
+  }
+  if (bridge.state === "connected") {
+    if (!bridge.host_connected) {
+      return {
+        level: "warn",
+        text: "AYON is not connected. Waiting for the AYON session...",
+      }
+    }
+    const info = bridge.host_info ?? {}
+    const context = [info.project, info.folder, info.task]
+      .filter(Boolean)
+      .join(" / ")
+    let text = "Connected to AYON"
+    if (info.user) {
+      text += ` as ${info.user}`
+    }
+    if (context) {
+      text += `: ${context}`
+    }
+    return {level: "ok", text}
+  }
+  if (bridge.state === "connecting") {
+    return {level: "warn", text: bridge.reason || "Connecting to AYON..."}
+  }
+  return {level: "error", text: bridge.reason || "Not connected to AYON."}
+}
+
+function describe_bridge_details(bridge) {
+  if (!bridge || bridge.state !== "connected") {
+    return ""
+  }
+  const info = bridge.host_info ?? {}
+  const parts = []
+  if (info.hostname) {
+    parts.push(`AYON on ${info.hostname}`)
+  }
+  if (info.addon_version) {
+    parts.push(`addon ${info.addon_version}`)
+  }
+  if (bridge.plugin_version) {
+    parts.push(`plugin ${bridge.plugin_version}`)
+  }
+  parts.push(`bridge protocol ${PROTOCOL}`)
+  return parts.join(", ")
+}
+
+function update_status_views() {
+  STATUS_VIEWS.forEach((update) => update())
+}
+
+let LAST_BRIDGE_SUMMARY = null
+
+// Toast when the connection state changes in a way the artist should know.
+function notify_bridge_change(bridge) {
+  const summary = bridge.connected ? "connected" : bridge.state
+  const previous = LAST_BRIDGE_SUMMARY
+  LAST_BRIDGE_SUMMARY = summary
+  if (summary === previous) {
+    return
+  }
+  if (summary === "connected") {
+    show_toast("success", describe_bridge_status(bridge).text, 3000)
+  } else if (previous === "connected" || summary === "superseded") {
+    show_toast("warn", describe_bridge_status(bridge).text)
+  } else if (summary === "rejected" || summary === "ended") {
+    show_toast("error", describe_bridge_status(bridge).text)
+  }
+}
+
+function create_status_view() {
+  const status = document.createElement("div")
+  status.className = "ayon-sidebar-status"
+
+  const line = document.createElement("div")
+  line.className = "ayon-sidebar-status-line"
+  const dot = document.createElement("span")
+  dot.className = "ayon-sidebar-status-dot"
+  const text = document.createElement("span")
+  line.append(dot, text)
+
+  const reconnect = document.createElement("button")
+  reconnect.type = "button"
+  reconnect.className = "ayon-sidebar-small-button"
+  reconnect.textContent = "Use this tab for AYON"
+  reconnect.addEventListener("click", () => BRIDGE?.reconnect_here())
+
+  // Manual pairing: for a tab not opened by AYON, or when the launch link
+  // lost its code (e.g. through an SSO login redirect).
+  const pair = document.createElement("form")
+  pair.className = "ayon-sidebar-pair"
+  const code_input = document.createElement("input")
+  code_input.type = "text"
+  code_input.placeholder = "Pairing code from AYON"
+  code_input.autocomplete = "off"
+  const pair_button = document.createElement("button")
+  pair_button.type = "submit"
+  pair_button.className = "ayon-sidebar-small-button"
+  pair_button.textContent = "Connect"
+  pair.append(code_input, pair_button)
+  pair.addEventListener("submit", (event) => {
+    event.preventDefault()
+    const code = code_input.value.trim()
+    if (code && BRIDGE) {
+      BRIDGE.pair_with_code(code)
+      code_input.value = ""
+    }
+  })
+
+  // Which AYON session this tab is attached to, for support questions.
+  const details = document.createElement("div")
+  details.className = "ayon-sidebar-status-details"
+
+  status.append(line, details, reconnect, pair)
+
+  const update = () => {
+    const {level, text: message} = describe_bridge_status(BRIDGE)
+    status.dataset.level = level
+    text.textContent = message
+    details.textContent = describe_bridge_details(BRIDGE)
+    details.hidden = !details.textContent
+    const state = BRIDGE?.state
+    reconnect.hidden = state !== "superseded"
+    pair.hidden = !["not_paired", "rejected", "ended"].includes(state)
+    status.closest(".ayon-sidebar-panel")
+      ?.querySelectorAll(".ayon-sidebar-action")
+      .forEach((button) => {
+        button.disabled = !BRIDGE?.connected
+      })
+  }
+  return {element: status, update}
 }
 
 function create_ayon_tool_panel(container) {
@@ -98,6 +367,8 @@ function create_ayon_tool_panel(container) {
   heading_wrap.append(title, description)
   header.append(logo, heading_wrap)
 
+  const status_view = create_status_view()
+
   const actions = document.createElement("div")
   actions.className = "ayon-sidebar-panel-actions"
 
@@ -121,8 +392,13 @@ function create_ayon_tool_panel(container) {
     actions.append(button)
   })
 
-  root.append(header, actions)
+  root.append(header, status_view.element, actions)
   container.replaceChildren(root)
+
+  // Only the most recently rendered panel is kept up to date.
+  STATUS_VIEWS.clear()
+  STATUS_VIEWS.add(status_view.update)
+  status_view.update()
 }
 
 // --- ComfyUI workflow (tab) management -------------------------------------
@@ -445,6 +721,79 @@ function ensure_ayon_sidebar_style() {
       font-size: 0.8125rem;
       line-height: 1.125rem;
     }
+
+    .ayon-sidebar-action:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .ayon-sidebar-status {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border-color, var(--input-border-color, #3a3a3a));
+      border-radius: 0.75rem;
+      font-size: 0.8125rem;
+      line-height: 1.125rem;
+    }
+
+    .ayon-sidebar-status-line {
+      display: flex;
+      gap: 0.5rem;
+      align-items: baseline;
+    }
+
+    .ayon-sidebar-status-dot {
+      flex-shrink: 0;
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 50%;
+      background: #d9a521;
+    }
+
+    .ayon-sidebar-status[data-level="ok"] .ayon-sidebar-status-dot {
+      background: #3fa34d;
+    }
+
+    .ayon-sidebar-status[data-level="error"] .ayon-sidebar-status-dot {
+      background: #d64545;
+    }
+
+    .ayon-sidebar-status-details {
+      color: var(--descrip-text);
+      font-size: 0.75rem;
+      padding-left: 1rem;
+    }
+
+    .ayon-sidebar-pair {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .ayon-sidebar-pair input {
+      flex: 1;
+      min-width: 0;
+      padding: 0.25rem 0.5rem;
+      border: 1px solid var(--border-color, var(--input-border-color, #3a3a3a));
+      border-radius: 0.5rem;
+      background: var(--comfy-input-bg);
+      color: inherit;
+    }
+
+    .ayon-sidebar-small-button {
+      padding: 0.25rem 0.75rem;
+      border: 1px solid var(--border-color, var(--input-border-color, #3a3a3a));
+      border-radius: 0.5rem;
+      background: var(--comfy-input-bg);
+      color: inherit;
+      cursor: pointer;
+    }
+
+    .ayon-sidebar-status [hidden] {
+      display: none;
+    }
   `
   document.head.appendChild(style)
 }
@@ -760,55 +1109,31 @@ app.registerExtension({
         }
 
         async function nodeRetrieveImages(node, recook) {
-          // API point to view image
-          const baseurl =  `${window.location.protocol}//${window.location.host}/api/view`;
-          // look into if '/' or '\\' in url doesn't give any problems
-          console.log("getNodeImages")
+          // Return references to the node's outputs; the AYON host builds
+          // the `/view` URLs to download them from its own ComfyUI URL.
           // Flatten in case of "animated" output. This outputs a list of arrays.
-          const images = (await getNodeImages(node, recook)).flat()
-          let urls = images.map((image) => 
-            `${baseurl}?filename=${image.filename}&subfolder=${image.subfolder.replace("\\","/")}&type=${image.type}`)
-            .flat()
-          return urls
+          const images = ((await getNodeImages(node, recook)) ?? []).flat()
+          return images.map((image) => ({
+            filename: image.filename,
+            subfolder: (image.subfolder ?? "").replaceAll("\\", "/"),
+            type: image.type,
+          }))
         }
 
-        // DO NOT THE WSRPC HERE, WE DO IFRAME THROUGH PROXY.JS
-        // Retrieve host URL from consts. Will always be http
-        this.IFRAMERPC = new RPCServer(window.parent, AYON_ORIGIN_ADRESS)
-
-        this.PROC_QUEUE = new Array()
-
-        console.log(this.PROC_QUEUE)
-
-        this.IFRAMERPC.register("alert", (data) => {
-          console.log("from parent iframe:", data.text);
-          alert(data.text)
-        });
-
-        function retrieve_latest_procqueue() {
-          const exts = app.extensions;
-          const ext = exts.find((el) => el.name == AYON_EXTENSION_NAME)
-          if (ext.PROC_QUEUE.length > 0)
-            return ext.PROC_QUEUE.pop()
-          return null
-        }
-
-        this.IFRAMERPC.register("pop_process", (data) => {
-          let result = retrieve_latest_procqueue()
-          if (result !== null)
-            console.log("pop_process",result)
-          return result
+        // Requests from the AYON host arrive over the bridge; the handlers
+        // below run them against this tab's graph.
+        const bridge = new AyonBridge(bridge_ws_url(app.api))
+        BRIDGE = bridge
+        this.bridge = bridge
+        bridge.addEventListener("change", () => {
+          update_status_views()
+          notify_bridge_change(bridge)
+        })
+        bridge.addEventListener("notice", (event) => {
+          show_toast("warn", event.detail)
         })
 
-        this.IFRAMERPC.register('getPublishNodes', (data) => {
-          const nodeType = data.node_type
-
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          return JSON.stringify(foundNodes)
-        })
-
-
-        this.IFRAMERPC.register('getWorkfile', (data) => {
+        bridge.register('getWorkfile', (data) => {
           // Serialize the live graph so the result always reflects the
           // current state, instead of ComfyUI's debounced storage drafts.
           const graph = get_root_graph()
@@ -827,7 +1152,7 @@ app.registerExtension({
         })
 
         // Allow host to set arbitrary extra metadata on the current graph
-        this.IFRAMERPC.register('setGraphExtra', (data) => {
+        bridge.register('setGraphExtra', (data) => {
           const extra = typeof data.extra_json === 'string' ? JSON.parse(data.extra_json) : data.extra_json
           const graph = get_root_graph()
           graph.extra ??= {}
@@ -837,7 +1162,7 @@ app.registerExtension({
         })
 
         // Return graph.extra (stringified JSON), optionally a single key.
-        this.IFRAMERPC.register('getGraphExtra', (data) => {
+        bridge.register('getGraphExtra', (data) => {
           const extra = get_root_graph()?.extra ?? {}
           if (data && data.key) {
             return JSON.stringify(extra[data.key] ?? null)
@@ -847,14 +1172,14 @@ app.registerExtension({
 
         // Return the AYON workfile path the current workflow was saved to or
         // opened from, or null when it is not (or no longer) an AYON workfile.
-        this.IFRAMERPC.register('getWorkfilePath', (data) => {
+        bridge.register('getWorkfilePath', (data) => {
           const active = get_workflow_store()?.activeWorkflow ?? null
           return claimed_workfile_path(active, get_ayon_extra())
         })
 
         // See `begin_save_workfile`. Errors and warnings are also shown in
         // ComfyUI, since e.g. the Workfiles tool doesn't show the reason.
-        this.IFRAMERPC.register('beginSaveWorkfile', async (data) => {
+        bridge.register('beginSaveWorkfile', async (data) => {
           const result = await begin_save_workfile(data)
           if (result.error) {
             show_toast("error", result.error, 10000)
@@ -866,7 +1191,7 @@ app.registerExtension({
         // Step two of saving an AYON workfile: after the host wrote the file
         // to disk, also save the workflow in ComfyUI so the tab is no longer
         // flagged as modified.
-        this.IFRAMERPC.register('finishSaveWorkfile', async (data) => {
+        bridge.register('finishSaveWorkfile', async (data) => {
           const store = get_workflow_store()
           if (!store || !data.comfy_workflow_path) {
             return false
@@ -886,7 +1211,7 @@ app.registerExtension({
           return true
         })
 
-        this.IFRAMERPC.register('addPublishNode', (data) => {
+        bridge.register('addPublishNode', (data) => {
           console.log("adding node...")
           const nodeType = data.node_type
           const save_node = addNodeAtCenter(nodeType)
@@ -910,7 +1235,7 @@ app.registerExtension({
         })
 
 
-        this.IFRAMERPC.register('removePublishNodes', (data) => {
+        bridge.register('removePublishNodes', (data) => {
           const nodeType = data.node_type
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           
@@ -935,7 +1260,7 @@ app.registerExtension({
           return json_removed
         })
 
-        this.IFRAMERPC.register('getPublishNodeImages', async (data) => {
+        bridge.register('getPublishNodeImages', async (data) => {
           const nodeType = data.node_type;
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           console.log("getting publish node images", data)
@@ -961,7 +1286,7 @@ app.registerExtension({
           return JSON.stringify([]); // none found
         });
 
-        this.IFRAMERPC.register('addLoadProductNode', (data) => {
+        bridge.register('addLoadProductNode', (data) => {
           const nodeType = data.node_type
           const loadimg_node = addNodeAtCenter(nodeType)
           const info_widget = loadimg_node.widgets.find(widget => widget.name == "ayon_container_info")
@@ -977,7 +1302,7 @@ app.registerExtension({
           return true
         });
 
-        this.IFRAMERPC.register('removeLoadProductNodes', (data) => {
+        bridge.register('removeLoadProductNodes', (data) => {
           const nodeType = data.node_type
           let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
           
@@ -1002,7 +1327,7 @@ app.registerExtension({
           return json_removed
         })
 
-        this.IFRAMERPC.register('updateLoadProductNode', async (data) => {
+        bridge.register('updateLoadProductNode', async (data) => {
           const nodeType = data.node_type
           let foundNodes = null
 
@@ -1028,7 +1353,7 @@ app.registerExtension({
         });
 
 
-        this.IFRAMERPC.register('setImprintContext', (data) => {
+        bridge.register('setImprintContext', (data) => {
           console.log("setting context...", data)
           const imprint_node = ensureAyonContextNode()
           console.log(imprint_node)
@@ -1045,7 +1370,7 @@ app.registerExtension({
         })
 
 
-        this.IFRAMERPC.register('getImprintContext', (data) => {
+        bridge.register('getImprintContext', (data) => {
           console.log("getting context...", data)
           const imprint_node = ensureAyonContextNode()
           console.log(imprint_node)
@@ -1059,7 +1384,7 @@ app.registerExtension({
           }
         })
 
-        this.IFRAMERPC.register('loadWorkfile', async (data) => {
+        bridge.register('loadWorkfile', async (data) => {
           const graph_data = JSON.parse(data.workfile_json)
           if (data.workfile_path) {
             // Record the AYON workfile path *before* loading, so that it
@@ -1092,15 +1417,18 @@ app.registerExtension({
           return true
         })
 
-        //this.RPC.connect();
+        bridge.start()
     },
     commands: [
-    { 
-      id: "myCommand", 
-      label: "Ping Ayon Plugin Websocket RPC server", 
-      function: () => {
-        push_ayon_queue("ayonComfyUI.pingAyonMenu", {"message": "Ping from web"})
-      } 
+    {
+      id: "AYON.Ping",
+      label: "Ping AYON",
+      function: async () => {
+        const result = await call_ayon("pingAyonMenu", {message: "Ping from ComfyUI"})
+        if (result !== null) {
+          show_toast("info", `AYON answered: ${result}`, 3000)
+        }
+      }
     },
     ...AYON_TOOL_ACTIONS.map((action) => ({
       id: action.id,
@@ -1115,7 +1443,7 @@ app.registerExtension({
       function: () => {
         // Saves to the current AYON workfile path, or opens the
         // Workfiles tool when the workflow isn't an AYON workfile yet.
-        push_ayon_queue("ayonComfyUI.requestSaveWorkfile", {})
+        call_ayon("requestSaveWorkfile", {})
       }
     },
   ],

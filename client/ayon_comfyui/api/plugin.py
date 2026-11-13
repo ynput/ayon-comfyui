@@ -15,8 +15,9 @@ from ayon_core.pipeline import (
 if TYPE_CHECKING:
     from ayon_core.pipeline.create.context import CreateContext
 
+from ayon_comfyui.api.bridge import get_bridge, get_stub
 from ayon_comfyui.api.pipeline import list_instances
-from ayon_comfyui.api.qt_rpc import QRPCManager, RPCStub
+from ayon_comfyui.api.rpc_stub import RPCStub
 
 
 class ComfyUICreator(Creator):
@@ -25,8 +26,8 @@ class ComfyUICreator(Creator):
 
     @property
     def stub(self) -> RPCStub:
-        """Return stub stored on QRPCManager."""
-        return QRPCManager.get_instance().stub
+        """Return the stub to talk to the paired ComfyUI tab."""
+        return get_stub()
 
     def get_full_product_name(
         self,
@@ -66,14 +67,14 @@ class ComfyUIAutoCreator(AutoCreator):
                 self._add_instance_to_context(instance)
 
     def update_instances(self, update_list: list[tuple[CreatedInstance, Any]]):
-        stub = QRPCManager.get_instance().stub
+        stub = get_stub()
         updated = [
             instance.data_to_store() for instance, _changes in update_list
         ]
         stub.update_instance(updated)
 
     def create(self, options=None):
-        stub = QRPCManager.get_instance().stub
+        stub = get_stub()
         existing_instance = None
         for instance in self.create_context.instances:
             if instance.product_type == self.product_type:
@@ -160,10 +161,10 @@ class ComfyUILoader(LoaderPlugin):
 
     @property
     def stub(self) -> RPCStub:
-        """Return stub stored on QRPCManager."""
-        return QRPCManager.get_instance().stub
+        """Return the stub to talk to the paired ComfyUI tab."""
+        return get_stub()
 
     @property
-    def comfy_url(self) -> RPCStub:
-        """Return url stored on QRPCManager."""
-        return QRPCManager.get_instance().comfy_url
+    def comfy_url(self) -> str:
+        """Return the URL of ComfyUI this session is connected to."""
+        return get_bridge().comfy_url

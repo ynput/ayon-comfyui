@@ -220,34 +220,6 @@ class ComfyLocalSetting(BaseSettingsModel):
 class ComfyLocalSettings(BaseSettingsModel):
     """Group together settings."""
 
-    # Port settings
-    http_server_port: int = SettingsField(
-        5454,
-        title="Default port for website user interacts with.",
-        description=(
-            "This port is used to launch a wrapper website "
-            "for ComfyUI. This websites hosts an <iframe> the "
-            "'real' ComfyUI will be embedded in."
-        ),
-    )
-
-    server_pulse_port: int = SettingsField(
-        55055,
-        title="Default port to pulse connection to backend",
-        description=(
-            "Websocket port to send heartbeat over, to make sure the backend "
-            "process is still alive"
-        ),
-    )
-
-    frontend_port: int = SettingsField(
-        55056,
-        title="Default port for frontend websocket RPC",
-        description=(
-            "Websocket port to communicate with local browser instance"
-        ),
-    )
-
     local_setting_list: list[ComfyLocalSetting] = SettingsField(
         default_factory=list, title="Local configuration entry"
     )
