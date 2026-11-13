@@ -270,6 +270,8 @@ export class LoadPicker {
       case "ok":
         label = `↻ ${loaded}` +
           (sel.version_mode === LATEST ? " (latest)" : "") +
+          // Read in place on the ComfyUI server instead of uploaded.
+          (this.container()?.path_reference ? " (by path)" : "") +
           " · refresh"
         break
       default:
