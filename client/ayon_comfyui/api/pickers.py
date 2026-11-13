@@ -564,6 +564,10 @@ class PickerService:
             msg = "Invalid container_uuid."
             raise PickerError(msg)
         node_type = _node_type(params)
+        reference = params.get("reference", False)
+        if not isinstance(reference, bool):
+            msg = "Invalid reference."
+            raise PickerError(msg)
         now = time.monotonic()
         with self._apply_lock:
             if now - self._last_browse < MIN_BROWSE_INTERVAL:
@@ -574,6 +578,7 @@ class PickerService:
             "token": token,
             "node_type": node_type,
             "container_uuid": container_uuid,
+            "reference": reference,
         }
 
     def validate_apply(self, params: dict) -> dict:
@@ -606,6 +611,12 @@ class PickerService:
         ):
             msg = "Invalid representation_name."
             raise PickerError(msg)
+        # Whether the node references its files by path (it keeps doing
+        # so when the server can read them; see `load_util`).
+        reference = params.get("reference", False)
+        if not isinstance(reference, bool):
+            msg = "Invalid reference."
+            raise PickerError(msg)
         request = {
             "token": token,
             "node_type": _node_type(params),
@@ -616,6 +627,7 @@ class PickerService:
                 params, "version_id", required=version_mode == "pinned"
             ),
             "representation_name": representation_name,
+            "reference": reference,
         }
 
         now = time.monotonic()
@@ -698,6 +710,7 @@ class PickerService:
             namespace=context["folder"]["name"],
             container_uuid=request["container_uuid"],
             version_mode=request["version_mode"],
+            reference=request.get("reference", False),
         )
 
 

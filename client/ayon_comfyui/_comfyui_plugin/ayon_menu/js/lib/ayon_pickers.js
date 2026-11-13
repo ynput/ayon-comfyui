@@ -563,6 +563,8 @@ export class LoadPicker {
         version_mode: sel.version_mode,
         version_id: sel.version_mode === LATEST ? null : sel.version_id,
         representation_name: sel.representation_name,
+        // Keep reading files in place when the node does.
+        reference: !!container?.path_reference,
       })
     } catch (err) {
       this.hub.pending.delete(token)
@@ -611,7 +613,7 @@ export class LoadPicker {
         token,
         node_type: this.node_type,
         container_uuid,
-        title: this.node.title ?? "",
+        reference: !!container?.path_reference,
       })
     } catch (err) {
       this.hub.pending.delete(token)

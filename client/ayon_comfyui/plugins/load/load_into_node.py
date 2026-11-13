@@ -70,6 +70,7 @@ class LoadIntoComfyUINode(ComfyUILoader):
                 namespace=context["folder"]["name"],
                 container_uuid=target["container_uuid"],
                 version_mode="pinned",
+                reference=target.get("reference", False),
             )
         except Exception as exc:
             # Let the waiting node stop waiting.
