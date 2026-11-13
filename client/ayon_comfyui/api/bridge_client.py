@@ -413,11 +413,14 @@ class BridgeClient:
             self._emit("connected", {"tab_connected": self._tab_connected})
         elif kind == "peer":
             connected = bool(frame.get("connected"))
-            if connected != self._tab_connected:
-                self._tab_connected = connected
-                self._emit(
-                    "tab_connected" if connected else "tab_disconnected", {}
-                )
+            changed = connected != self._tab_connected
+            self._tab_connected = connected
+            # Also report a tab that took over from another one, so it gets
+            # the current session info.
+            if connected:
+                self._emit("tab_connected", {})
+            elif changed:
+                self._emit("tab_disconnected", {})
         elif kind == "pair_code":
             self._resolve("pair_code", result=frame.get("code"))
         elif kind == "response":
