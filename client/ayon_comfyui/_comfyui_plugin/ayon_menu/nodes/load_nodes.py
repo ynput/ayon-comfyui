@@ -18,6 +18,7 @@ changes in place (e.g. a hero version), and stays cached otherwise.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -32,6 +33,24 @@ from PIL import Image, ImageOps, ImageSequence
 from ..paths import is_inside, resolve_rootless
 
 log = logging.getLogger(__name__)
+
+
+def _advanced_input() -> dict:
+    """Keyword to fold an input under "Show advanced inputs", when supported.
+
+    `advanced` is a recent addition to ComfyUI's V3 inputs; older versions
+    would refuse the keyword and fail to register the nodes.
+    """
+    try:
+        parameters = inspect.signature(io.String.Input.__init__).parameters
+    except (TypeError, ValueError):
+        return {}
+    return {"advanced": True} if "advanced" in parameters else {}
+
+
+# The AYON pickers on the node show what it loads, so its container JSON
+# can be folded away.
+CONTAINER_INPUT_OPTIONS = _advanced_input()
 
 # Decoded through ComfyUI's own (PyAV) decoder, which keeps 16-bit and float
 # precision; Pillow reads 16-bit PNGs as 8-bit and can't open EXR at all.
@@ -374,10 +393,9 @@ class AyonLoadImageNode(io.ComfyNode):
     @staticmethod
     def define_inputs() -> list[io.Input]:
         return [
-            # Folded under "Show advanced inputs": the AYON pickers on the
-            # node show what it loads.
             io.String.Input(
-                "ayon_container_info", "AYON context", advanced=True
+                "ayon_container_info", "AYON context",
+                **CONTAINER_INPUT_OPTIONS,
             ),
         ]
 
@@ -425,10 +443,9 @@ class AyonLoadVideoNode(io.ComfyNode):
     @staticmethod
     def define_inputs() -> list[io.Input]:
         return [
-            # Folded under "Show advanced inputs": the AYON pickers on the
-            # node show what it loads.
             io.String.Input(
-                "ayon_container_info", "AYON context", advanced=True
+                "ayon_container_info", "AYON context",
+                **CONTAINER_INPUT_OPTIONS,
             ),
         ]
 
@@ -485,10 +502,9 @@ class AyonLoad3DModelNode(io.ComfyNode):
     @staticmethod
     def define_inputs() -> list[io.Input]:
         return [
-            # Folded under "Show advanced inputs": the AYON pickers on the
-            # node show what it loads.
             io.String.Input(
-                "ayon_container_info", "AYON context", advanced=True
+                "ayon_container_info", "AYON context",
+                **CONTAINER_INPUT_OPTIONS,
             ),
         ]
 
