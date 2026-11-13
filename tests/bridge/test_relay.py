@@ -11,6 +11,7 @@ import importlib.util
 import json
 import secrets
 import sys
+import types
 from pathlib import Path
 
 import aiohttp
@@ -21,9 +22,21 @@ RELAY_PATH = REPO / "client/ayon_comfyui/_comfyui_plugin/ayon_menu/bridge.py"
 if __name__ == "__main__" and len(sys.argv) > 1:
     RELAY_PATH = Path(sys.argv[1])
 
-spec = importlib.util.spec_from_file_location("bridge", RELAY_PATH)
-bridge_mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(bridge_mod)
+
+def load_plugin_module(path):
+    """Load a module of the plugin package without its ComfyUI-only init."""
+    package = types.ModuleType("ayon_menu")
+    package.__path__ = [str(path.parent)]
+    sys.modules["ayon_menu"] = package
+    spec = importlib.util.spec_from_file_location(
+        f"ayon_menu.{path.stem}", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+bridge_mod = load_plugin_module(RELAY_PATH)
 
 PORT = 18731
 URL = f"http://127.0.0.1:{PORT}"
@@ -84,8 +97,12 @@ async def main():
     async with aiohttp.ClientSession() as s:
         r = await s.get(URL + "/ayon/info")
         info = await r.json()
-        check(info == {"name": "ayon-comfyui", "protocols": [1],
+        check(info == {"name": "ayon-comfyui",
+                       "version": bridge_mod.__version__,
+                       "protocols": [1],
                        "features": list(bridge_mod.FEATURES)}, "info")
+        check(isinstance(info["version"], str) and info["version"],
+              "info has the plugin version")
         r = await s.get(URL + "/ayon/pair")
         page = await r.text()
         check("ayon.bridge.pair_code" in page
@@ -95,7 +112,8 @@ async def main():
         host, welcome = await host_connect(s, secret, {"user": "alice"})
         check(welcome["type"] == "welcome"
               and welcome["peer"]["connected"] is False
-              and welcome["features"] == list(bridge_mod.FEATURES),
+              and welcome["features"] == list(bridge_mod.FEATURES)
+              and welcome["version"] == bridge_mod.__version__,
               "host welcome")
         sid = welcome["session"]
 
@@ -108,7 +126,8 @@ async def main():
         code = await get_code(host)
         tab, tw = await tab_connect(s, pair_code=code)
         check(tw["type"] == "welcome" and tw["peer"]["connected"]
-              and tw["peer"]["info"] == {"user": "alice"}, "tab welcome")
+              and tw["peer"]["info"] == {"user": "alice"}
+              and tw["version"] == bridge_mod.__version__, "tab welcome")
         cred = tw["credential"]
         check(cred["session"] == sid, "credential session")
         ev = await recv(host)
@@ -177,8 +196,9 @@ async def main():
         await ws.send_json({"type": "hello", "role": "host",
                             "protocol": 99, "secret": secret})
         r = await recv(ws)
-        check(r.get("code") == 4001 and b"protocol" in r["extra"].encode(),
-              "protocol mismatch rejected with reason")
+        check(r.get("code") == 4001 and "protocol" in r["extra"]
+              and bridge_mod.__version__ in r["extra"],
+              "protocol mismatch rejected with reason and plugin version")
         ws = await s.ws_connect(WS)
         await ws.send_json({"type": "hello", "role": "host", "protocol": 1,
                             "secret": "short"})

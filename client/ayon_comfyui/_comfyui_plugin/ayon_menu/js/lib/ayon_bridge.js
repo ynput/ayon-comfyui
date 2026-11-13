@@ -88,6 +88,9 @@ export class AyonBridge extends EventTarget {
     this.reason = ""
     this.host_connected = false
     this.host_info = {}
+    // Version of this ComfyUI plugin (the AYON ComfyUI addon version it
+    // ships with), as the bridge reports it.
+    this.plugin_version = ""
     this.attempt = 0
     this.unknown_since = null
     this.reconnect_timer = null
@@ -197,6 +200,8 @@ export class AyonBridge extends EventTarget {
         this.unknown_since = null
         this.host_connected = !!frame.peer?.connected
         this.host_info = frame.peer?.info ?? {}
+        this.plugin_version =
+          typeof frame.version === "string" ? frame.version : ""
         this.set_state("connected")
         break
       case "peer":

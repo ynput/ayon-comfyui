@@ -125,6 +125,9 @@ function describe_bridge_details(bridge) {
   if (info.addon_version) {
     parts.push(`addon ${info.addon_version}`)
   }
+  if (bridge.plugin_version) {
+    parts.push(`plugin ${bridge.plugin_version}`)
+  }
   parts.push(`bridge protocol ${PROTOCOL}`)
   return parts.join(", ")
 }

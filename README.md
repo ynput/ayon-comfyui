@@ -14,7 +14,8 @@ To learn more about configuration and user guides, please visit [AYON ComfyUi - 
 The AYON ComfyUI plugin (a custom node package shipped with this addon) adds a
 few routes to ComfyUI's own server:
 
-- `GET /ayon/info`: lets AYON check the plugin is installed and compatible.
+- `GET /ayon/info`: lets AYON check the plugin is installed and compatible,
+  and which addon version it is from.
 - `GET /ayon/pair`: the page AYON opens in the browser to pair a tab.
 - `GET /ayon/ws` (also `/api/ayon/ws`): a websocket relay between an AYON
   session and the ComfyUI tab paired with it.

@@ -9,10 +9,12 @@ Needs Python 3.9+ with aiohttp, e.g. ComfyUI's embedded Python:
 import asyncio
 import importlib.util
 import json
+import logging
 import socket
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import aiohttp
@@ -27,15 +29,41 @@ def load(name, path):
     return mod
 
 
+def load_plugin_module(path):
+    """Load a module of the plugin package without its ComfyUI-only init."""
+    package = types.ModuleType("ayon_menu")
+    package.__path__ = [str(path.parent)]
+    sys.modules["ayon_menu"] = package
+    return load(f"ayon_menu.{path.stem}", path)
+
+
 REPO = Path(__file__).resolve().parents[2]
 RELAY_PATH = REPO / "client/ayon_comfyui/_comfyui_plugin/ayon_menu/bridge.py"
 CLIENT_PATH = REPO / "client/ayon_comfyui/api/bridge_client.py"
 if __name__ == "__main__" and len(sys.argv) > 2:
     RELAY_PATH, CLIENT_PATH = Path(sys.argv[1]), Path(sys.argv[2])
 
-relay = load("relay", RELAY_PATH)
+relay = load_plugin_module(RELAY_PATH)
 client_mod = load("bridge_client", CLIENT_PATH)
 client_mod.RECONNECT_DELAYS = (0.2, 0.3)
+
+
+class LogRecords(logging.Handler):
+    """Collects the client's log messages."""
+
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.records = []
+        client_mod.log.addHandler(self)
+        client_mod.log.setLevel(logging.DEBUG)
+
+    def emit(self, record):
+        self.records.append(record)
+
+    def messages(self, level):
+        return [r.getMessage() for r in list(self.records)
+                if r.levelno == level]
+
 
 PORT = 18732
 BASE = f"http://127.0.0.1:{PORT}/sub"  # sub-path proxy style
@@ -169,13 +197,51 @@ def main():
 
     server = Server()
     server.start()
+    logs = LogRecords()
+    client_mod.ADDON_VERSION = relay.__version__
     info = client_mod.check_plugin(BASE)
-    check(info["protocols"] == [1], "check_plugin ok (sub-path)")
+    check(info["protocols"] == [1] and info["version"] == relay.__version__,
+          "check_plugin ok (sub-path)")
+    check(client_mod.version_mismatch(BASE, info["version"]) is None,
+          "same version: no mismatch")
+
+    # From here on, the plugin is from another addon version than AYON's.
+    client_mod.ADDON_VERSION = "7.7.7"
+    relay.__version__ = "8.8.8"
     try:
         client_mod.check_plugin(f"http://127.0.0.1:{PORT}/other")
         check(False, "check_plugin no_plugin")
     except BridgeError as e:
-        check(e.code == "no_plugin", "check_plugin no_plugin")
+        check(e.code == "no_plugin" and "7.7.7" in str(e),
+              "check_plugin no_plugin names the addon version")
+    for protocols, label, hint in (
+        ((0,), "older", "install the AYON plugin from AYON ComfyUI addon "
+                        "7.7.7"),
+        ((2, 3), "newer", "update the AYON ComfyUI addon"),
+    ):
+        relay.PROTOCOLS = protocols
+        try:
+            client_mod.check_plugin(BASE)
+            check(False, f"check_plugin incompatible ({label} plugin)")
+        except BridgeError as e:
+            msg = str(e)
+            check(e.code == "incompatible" and "version 8.8.8" in msg
+                  and "version 7.7.7" in msg and hint in msg,
+                  f"check_plugin incompatible ({label} plugin): {msg}")
+    relay.PROTOCOLS = (1,)
+    info = client_mod.check_plugin(BASE)
+    check(info["version"] == "8.8.8",
+          "check_plugin accepts another version with the same protocol")
+    check(any("8.8.8" in m and "7.7.7" in m
+              for m in logs.messages(logging.DEBUG)),
+          "check_plugin debug log names both versions")
+    mismatch = client_mod.version_mismatch(BASE, "8.8.8")
+    check(mismatch and "8.8.8" in mismatch and "7.7.7" in mismatch,
+          "version mismatch names both versions")
+
+    def version_warnings():
+        return [m for m in logs.messages(logging.WARNING)
+                if "8.8.8" in m and "7.7.7" in m]
 
     events = []
     client = BridgeClient(BASE, info={"user": "alice"},
@@ -196,6 +262,11 @@ def main():
     check(wait_for(lambda: client.registered), "client registered")
     check(client.plugin_features == frozenset(relay.FEATURES),
           "plugin features")
+    check(client.plugin_version == "8.8.8", "plugin version")
+    check(len(version_warnings()) == 1, "version mismatch warning")
+    check(any("8.8.8" in m and "7.7.7" in m
+              for m in logs.messages(logging.INFO)),
+          "connected log names both versions")
     check(("connected", {"tab_connected": False}) in events,
           "connected event")
 
@@ -267,6 +338,8 @@ def main():
           "disconnected event")
     server.start()
     check(wait_for(lambda: client.registered, 10), "client re-registered")
+    check(len(version_warnings()) == 1,
+          "version mismatch warned once per plugin version")
     # tab reconnects with its credential after the host re-registered
     w = tab2.connect(credential=cred)
     check(w.get("type") == "welcome", "tab rebinds after restart")
@@ -286,6 +359,10 @@ def main():
           "protocol mismatch -> rejected")
     rej = [d for e, d in events2 if e == "rejected"][0]
     check("protocol" in rej["reason"], "rejected reason: " + rej["reason"])
+    check("8.8.8" in rej["reason"], "rejected reason names the plugin version")
+    check(any("8.8.8" in m and "7.7.7" in m
+              for m in logs.messages(logging.ERROR)),
+          "rejection log names both versions")
     c2._thread.join(3)
     check(not c2._thread.is_alive(), "client stops after rejection")
 

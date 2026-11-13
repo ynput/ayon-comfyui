@@ -14,7 +14,8 @@ Protocol (JSON text frames):
 - The first frame of a connection must be a `hello`:
     - host:     {type: hello, role: host, protocol, secret, info}
     - tab:      {type: hello, role: tab, protocol, pair_code | credential}
-  The server answers with a `welcome`, or closes the connection.
+  The server answers with a `welcome` (which has the plugin `version`, the
+  AYON ComfyUI addon version it ships with), or closes the connection.
 - Host only: {type: pair_code} -> {type: pair_code, code, expires_in}
   The host opens `/ayon/pair#code=<code>` in the browser; the tab trades the
   one-time code for a credential it keeps in its `sessionStorage`.
@@ -42,13 +43,16 @@ import time
 
 from aiohttp import WSMsgType, web
 
+from .version import __version__
+
 log = logging.getLogger(__name__)
 
 PROTOCOLS = (1,)
 PROTOCOL = PROTOCOLS[-1]
 # What this plugin offers beyond the bridge protocol itself (e.g. nodes or
 # tab methods a publish needs), so AYON can tell an outdated plugin apart
-# before relying on them. Reported by `/ayon/info` and in the host welcome.
+# before relying on them. Reported by `/ayon/info` and in the host welcome,
+# like the plugin's `__version__`.
 FEATURES: tuple[str, ...] = ()
 
 HELLO_TIMEOUT = 10.0
@@ -149,6 +153,7 @@ class Bridge:
         return web.json_response(
             {
                 "name": "ayon-comfyui",
+                "version": __version__,
                 "protocols": list(PROTOCOLS),
                 "features": list(FEATURES),
             },
@@ -186,8 +191,9 @@ class Bridge:
             await _close(
                 ws,
                 CLOSE_REJECTED,
-                f"Unsupported protocol {hello.get('protocol')!r}, this "
-                f"ComfyUI plugin supports {list(PROTOCOLS)}",
+                f"Unsupported bridge protocol {hello.get('protocol')!r}: "
+                f"AYON plugin {__version__} on this ComfyUI supports "
+                f"{list(PROTOCOLS)}",
             )
             return ws
 
@@ -245,6 +251,7 @@ class Bridge:
         await _send(ws, {
             "type": "welcome",
             "protocol": PROTOCOL,
+            "version": __version__,
             "session": session.id,
             "features": list(FEATURES),
             "peer": {"connected": session.tab is not None},
@@ -294,6 +301,7 @@ class Bridge:
         await _send(ws, {
             "type": "welcome",
             "protocol": PROTOCOL,
+            "version": __version__,
             "session": session.id,
             "credential": {
                 "session": session.id,

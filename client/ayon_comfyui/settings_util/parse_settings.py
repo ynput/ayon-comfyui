@@ -11,6 +11,8 @@ from ayon_comfyui.api.bridge_client import (
     BridgeError,
     check_plugin,
     is_unencrypted_remote,
+    plugin_version,
+    version_mismatch,
 )
 from ayon_comfyui.settings_util import ComfyUICustomDirectories
 
@@ -447,11 +449,15 @@ class ComfyRemoteSettings:
             except BridgeError as exc:
                 errors.append(f"{self.name} | Remote: {exc}")
             else:
+                version = plugin_version(info)
                 logs.append(
                     f"{self.name} | Remote: ComfyUI at {self.comfy_url} is "
-                    "reachable and has the AYON plugin (bridge protocols "
-                    f"{info.get('protocols')})."
+                    f"reachable and has AYON plugin {version} (bridge "
+                    f"protocols {info.get('protocols')})."
                 )
+                mismatch = version_mismatch(self.comfy_url, version)
+                if mismatch:
+                    logs.append(f"{self.name} | Remote: {mismatch}")
             if is_unencrypted_remote(self.comfy_url):
                 logs.append(
                     f"{self.name} | Remote: {self.comfy_url} uses plain "

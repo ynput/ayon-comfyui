@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any
 from qtpy import QtCore, QtGui, QtWidgets
 
 from ayon_comfyui.api.bridge_client import (
+    ADDON_VERSION,
+    PROTOCOL,
     BridgeClient,
     BridgeError,
     check_plugin,
@@ -430,7 +432,9 @@ class ComfyUIBridge(QtCore.QObject):
                 None,
                 "AYON - ComfyUI",
                 "ComfyUI refused the AYON session.\n\n"
-                f"{data.get('reason') or 'No reason given.'}",
+                f"{data.get('reason') or 'No reason given.'}\n\n"
+                f"This AYON ComfyUI addon is version {ADDON_VERSION} "
+                f"(bridge protocol {PROTOCOL}).",
             )
             self.shutdown()
             return
