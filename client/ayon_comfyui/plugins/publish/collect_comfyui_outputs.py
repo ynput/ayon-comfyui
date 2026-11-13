@@ -141,15 +141,17 @@ class CollectComfyUIOutputs(pyblish.api.InstancePlugin):
     ) -> dict:
         context = instance.context
         api_prompt = context.data["comfyuiApiPrompt"]
-        workflow_path = api_prompt.get("workflow_path")
+        workflow = comfy_publish.workflow_identity(api_prompt)
         try:
             run = comfy_publish.find_latest_run(
                 get_comfy_http(),
                 node.instance_id,
-                comfy_publish.QUEUED_PROMPTS.newest_first(workflow_path),
+                comfy_publish.QUEUED_PROMPTS.newest_first(workflow),
                 comfy_publish.tab_prompt_ids(
-                    context.data.get("comfyuiTabPrompts"), workflow_path
+                    context.data.get("comfyuiTabPrompts"), workflow
                 ),
+                # Shared by the instances of this publish.
+                cache=context.data.setdefault("comfyuiHistoryCache", {}),
             )
         except comfy_publish.PublishError as exc:
             raise KnownPublishError(str(exc)) from exc
@@ -165,9 +167,12 @@ class CollectComfyUIOutputs(pyblish.api.InstancePlugin):
             "Publishing '%s' from the earlier ComfyUI run %s (node %s).",
             product_name, run.prompt_id, run.node_id,
         )
+        # Seeds are left out: with "randomize after generate" the graph
+        # already holds the next seed, so they'd always differ.
+        seeds = comfy_publish.SEED_INPUTS
         if comfy_publish.upstream(
-            run.prompt, run.node_id
-        ) != comfy_publish.upstream(api_prompt["prompt"], node.node_id):
+            run.prompt, run.node_id, seeds
+        ) != comfy_publish.upstream(api_prompt["prompt"], node.node_id, seeds):
             self.log.warning(
                 "The workflow changed since run %s made the outputs of "
                 "'%s'; publishing that run's outputs as they are. Enable "

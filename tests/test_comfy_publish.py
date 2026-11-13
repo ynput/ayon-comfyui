@@ -88,7 +88,7 @@ class FakeHttp:
         if isinstance(value, Exception):
             raise value
         if callable(value):
-            return value(**kwargs)
+            return value(json=kwargs.get("json"))
         return value
 
     def download(self, path, dest, **kwargs):
@@ -389,23 +389,115 @@ class CollectTests(unittest.TestCase):
 
     def test_registry(self):
         registry = cp.PromptRegistry(limit=3)
-        for prompt_id, path in (("a", "w1"), ("b", "w2"), ("a", "w1"),
-                                ("c", None), ("d", "w1")):
-            registry.add(prompt_id, path)
+        w1 = {"workflow_id": "g1", "workflow_path": "workflows/a.json"}
+        w2 = {"workflow_id": "g2", "workflow_path": "workflows/b.json"}
+        for prompt_id, workflow in (("a", w1), ("b", w2), ("a", w1),
+                                    ("c", None), ("d", w1)):
+            registry.add(prompt_id, workflow)
         self.assertEqual(registry.newest_first(), ["d", "c", "a"])
-        self.assertEqual(registry.newest_first("w1"), ["d", "c", "a"])
-        self.assertEqual(registry.newest_first("w2"), ["c"])
+        self.assertEqual(registry.newest_first(w1), ["d", "c", "a"])
+        self.assertEqual(registry.newest_first(w2), ["c"])
+        # Renamed (e.g. saved as a new workfile version): same graph id.
+        renamed = {"workflow_id": "g1", "workflow_path": "workflows/v2.json"}
+        self.assertEqual(registry.newest_first(renamed), ["d", "c", "a"])
 
     def test_tab_prompt_ids_per_workflow(self):
         entries = [
-            {"prompt_id": "c", "workflow_path": "workflows/copy.json"},
+            # A duplicated workflow: new graph id.
+            {"prompt_id": "d", "workflow_id": "copy",
+             "workflow_path": "workflows/shot (Copy).json"},
+            # Queued before the tab was renamed to the workfile name.
+            {"prompt_id": "c", "workflow_id": "g1",
+             "workflow_path": "workflows/Unsaved Workflow.json"},
+            # Recorded by an older version: path only.
             {"prompt_id": "b", "workflow_path": "workflows/shot.json"},
-            {"prompt_id": "a", "workflow_path": None},
+            {"prompt_id": "a", "workflow_path": "workflows/other.json"},
             "junk",
         ]
-        self.assertEqual(
-            cp.tab_prompt_ids(entries, "workflows/shot.json"), ["b", "a"])
-        self.assertEqual(cp.tab_prompt_ids(entries), ["c", "b", "a"])
+        current = {"workflow_id": "g1", "workflow_path": "workflows/shot.json"}
+        self.assertEqual(cp.tab_prompt_ids(entries, current), ["c", "b"])
+        self.assertEqual(cp.tab_prompt_ids(entries), ["d", "c", "b", "a"])
+
+    def test_same_workflow(self):
+        self.assertTrue(cp.same_workflow(
+            {"workflow_id": "g", "workflow_path": "a"},
+            {"workflow_id": "g", "workflow_path": "b"}))
+        self.assertFalse(cp.same_workflow(
+            {"workflow_id": "g", "workflow_path": "a"},
+            {"workflow_id": "h", "workflow_path": "a"}))
+        self.assertTrue(cp.same_workflow({"workflow_path": "a"}, None))
+
+    def test_lookup_cache_and_lookback(self):
+        http = FakeHttp({
+            ("GET", "/history/ok"): {"ok": history_entry("ok")},
+            ("GET", "/history/far"): {"far": history_entry("far")},
+        })
+        cache = {}
+        cp.find_latest_run(http, INSTANCE, ["ok"], cache=cache)
+        cp.find_latest_run(http, INSTANCE, ["ok"], cache=cache)
+        fetched = [path for _m, path, _k in http.calls]
+        self.assertEqual(fetched.count("/history/ok"), 1)
+        self.assertIsNone(cp.find_latest_run(
+            http, INSTANCE, ["x1", "x2", "far"], lookback=2))
+        self.assertNotIn("/history/far",
+                         [path for _m, path, _k in http.calls])
+
+    def test_upstream_can_ignore_seeds(self):
+        prompt = {
+            "1": {"class_type": "KSampler",
+                  "inputs": {"seed": 1, "steps": 20}},
+            "2": {"class_type": "AYON Image Save",
+                  "inputs": {"images_in": ["1", 0]}},
+        }
+        other = json.loads(json.dumps(prompt))
+        other["1"]["inputs"]["seed"] = 2
+        self.assertNotEqual(cp.upstream(prompt, "2"), cp.upstream(other, "2"))
+        self.assertEqual(cp.upstream(prompt, "2", cp.SEED_INPUTS),
+                         cp.upstream(other, "2", cp.SEED_INPUTS))
+
+    def test_download_of_pruned_output(self):
+        gone = BridgeError("HTTP 404", "http_404")
+        gone.status = 404
+
+        class GoneHttp(FakeHttp):
+            def download(self, path, dest, **kwargs):
+                raise gone
+
+        with tempfile.TemporaryDirectory() as staging, \
+                self.assertRaisesRegex(cp.PublishError, "no longer exists"):
+            cp.download_files(GoneHttp(), [{"filename": "a.png"}], staging)
+
+
+class RobustnessTests(unittest.TestCase):
+    def test_wait_survives_proxy_errors(self):
+        bad_gateway = BridgeError("HTTP 502", "http_502")
+        bad_gateway.status = 502
+        clock = iter(range(0, 100000, 10))
+        http = FakeHttp({("GET", "/history/abc"): [
+            bad_gateway, bad_gateway, {"abc": history_entry("abc")}]})
+        entry = cp.wait_for_prompt(
+            http, "abc", sleep=lambda _s: None, clock=lambda: next(clock))
+        self.assertIn("outputs", entry)
+
+    def test_queue_failure_cancels(self):
+        timeout = BridgeError("timed out", "unreachable")
+        http = FakeHttp({
+            ("POST", "/prompt"): timeout,
+            ("POST", "/api/jobs/abc/cancel"): {"cancelled": True},
+        })
+        with self.assertRaises(cp.PublishError):
+            cp.queue_prompt(http, {}, prompt_id="abc", targets=["2"])
+        self.assertIn(("POST", "/api/jobs/abc/cancel", {}), http.calls)
+
+    def test_other_prompt_id_is_cancelled(self):
+        http = FakeHttp({
+            ("POST", "/prompt"): {"prompt_id": "theirs", "node_errors": {}},
+            ("POST", "/api/jobs/abc/cancel"): {"cancelled": False},
+            ("POST", "/api/jobs/theirs/cancel"): {"cancelled": True},
+        })
+        with self.assertRaisesRegex(cp.PublishError, "didn't queue"):
+            cp.queue_prompt(http, {}, prompt_id="abc", targets=["2"])
+        self.assertIn(("POST", "/api/jobs/theirs/cancel", {}), http.calls)
 
 
 if __name__ == "__main__":

@@ -559,11 +559,14 @@ function register_ayon_sidebar_tab() {
   })
 }
 
-// The prompts this tab queued, newest first, as {prompt_id, workflow_path}.
-// The AYON host only publishes earlier runs ("Recook on publish" off) from
-// these, and only those of the workflow being published, so it never picks
-// up another artist's run, or a copied workflow's run, of the same AYON
-// instance. Kept in sessionStorage so they survive reloads of the tab.
+// The prompts this tab queued, newest first, as {prompt_id, workflow_id,
+// workflow_path}. The AYON host only publishes earlier runs ("Recook on
+// publish" off) from these, and only those of the workflow being
+// published, so it never picks up another artist's run, or a duplicated
+// workflow's run, of the same AYON instance. The workflow is identified by
+// its graph id, which survives renames (AYON saves a workfile by renaming
+// the tab) while a duplicated workflow gets a new one. Kept in
+// sessionStorage so they survive reloads of the tab.
 const AYON_QUEUED_PROMPTS_KEY = "ayon.queued_prompts"
 const AYON_QUEUED_PROMPTS_LIMIT = 200
 
@@ -578,13 +581,13 @@ function get_queued_prompts() {
   }
 }
 
-function remember_queued_prompt(prompt_id, workflow_path) {
+function remember_queued_prompt(prompt_id, workflow) {
   if (typeof prompt_id !== "string" || !prompt_id) {
     return
   }
   try {
     const entries = get_queued_prompts().filter((entry) => entry.prompt_id !== prompt_id)
-    entries.unshift({prompt_id, workflow_path: workflow_path ?? null})
+    entries.unshift({prompt_id, ...workflow})
     sessionStorage.setItem(
       AYON_QUEUED_PROMPTS_KEY,
       JSON.stringify(entries.slice(0, AYON_QUEUED_PROMPTS_LIMIT))
@@ -594,6 +597,21 @@ function remember_queued_prompt(prompt_id, workflow_path) {
   }
 }
 
+// The active workflow's identity: graph id and ComfyUI path.
+function active_workflow_identity() {
+  return {
+    workflow_id: get_root_graph()?.id ?? null,
+    workflow_path: get_workflow_store()?.activeWorkflow?.path ?? null,
+  }
+}
+
+// The Comfy.org credentials of this tab's last own run. The frontend only
+// sets them on the api object while it queues a prompt, from internal
+// stores, so they're captured there; kept in memory only, never stored.
+let LAST_QUEUE_CREDENTIALS = null
+// Comfy.org (Firebase) login tokens expire after an hour.
+const AUTH_TOKEN_MAX_AGE_MS = 50 * 60 * 1000
+
 // Record every prompt this tab queues (Run, Queue, partial runs), with the
 // workflow it was queued from.
 function track_queued_prompts(api) {
@@ -602,9 +620,16 @@ function track_queued_prompts(api) {
     return
   }
   const tracked = async function (...args) {
-    const workflow_path = get_workflow_store()?.activeWorkflow?.path
+    const workflow = active_workflow_identity()
+    if (this?.authToken || this?.apiKey) {
+      LAST_QUEUE_CREDENTIALS = {
+        auth_token: this.authToken ?? null,
+        api_key: this.apiKey ?? null,
+        at: Date.now(),
+      }
+    }
     const result = await original.apply(this, args)
-    remember_queued_prompt(result?.prompt_id, workflow_path)
+    remember_queued_prompt(result?.prompt_id, workflow)
     return result
   }
   tracked.__ayon_tracked = true
@@ -616,11 +641,12 @@ function track_queued_prompts(api) {
 // preview method. ComfyUI keeps the credentials out of its history.
 function queue_extra_data() {
   const extra = {}
-  if (app.api.authToken) {
-    extra.auth_token_comfy_org = app.api.authToken
+  const credentials = LAST_QUEUE_CREDENTIALS
+  if (credentials?.api_key) {
+    extra.api_key_comfy_org = credentials.api_key
   }
-  if (app.api.apiKey) {
-    extra.api_key_comfy_org = app.api.apiKey
+  if (credentials?.auth_token && Date.now() - credentials.at < AUTH_TOKEN_MAX_AGE_MS) {
+    extra.auth_token_comfy_org = credentials.auth_token
   }
   const preview_method = app.extensionManager?.setting?.get?.("Comfy.Execution.PreviewMethod")
   if (preview_method && preview_method !== "default") {
@@ -803,7 +829,7 @@ app.registerExtension({
             prompt: output,
             workflow,
             client_id: app.api.clientId ?? app.api.initialClientId ?? null,
-            workflow_path: get_workflow_store()?.activeWorkflow?.path ?? null,
+            ...active_workflow_identity(),
             extra_data: queue_extra_data(),
           }
         })
