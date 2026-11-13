@@ -102,6 +102,8 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
                     "Use the Workfiles tool to save it."
                 )
                 raise RuntimeError(msg)
+            self.stub.save_workfile(dst_path, in_place=True)
+            return
 
         self.stub.save_workfile(dst_path)
 

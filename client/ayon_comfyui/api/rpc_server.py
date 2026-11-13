@@ -78,7 +78,7 @@ def save_current_workfile() -> None:
         return
 
     try:
-        host.save_workfile(current_path)
+        host.stub.save_workfile(current_path, in_place=True)
     except Exception as exc:
         log.exception("Failed to save workfile: %s", current_path)
         from qtpy import QtWidgets  # noqa: PLC0415
