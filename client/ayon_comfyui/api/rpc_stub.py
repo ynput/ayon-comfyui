@@ -371,6 +371,25 @@ class RPCClientStub:  # noqa: PLR0904
         Sentinel value ALL will match for all types of container nodes.
         """
 
+    @tab_method(timeout=10.0)
+    def pickerApplied(  # noqa: N802
+        self,
+        *,
+        token: str,
+        container_json: str | None = None,
+        error: str | None = None,
+    ) -> bool:
+        """Call pickerApplied.
+
+        Answers a `picker.apply` request of the tab's AYON pickers: puts
+        the container on the node that asked (identified by `token`), or
+        shows `error` on it.
+        """
+
+    @tab_method(timeout=5.0)
+    def pickerInvalidate(self) -> None:  # noqa: N802
+        """Call pickerInvalidate: refresh the lists of the AYON pickers."""
+
     def do_get_publishnode_images(
         self, publish_instance: str, node_type: PublishType = PublishType.IMAGE
     ) -> str:
@@ -908,6 +927,25 @@ class RPCStub:  # noqa : PLR0904
         self.client_stub.removeLoadProductNodes(
             ids_to_remove=json_ids_to_remove, node_type=node_type.value
         )
+
+    def picker_applied(
+        self,
+        token: str,
+        container: dict | None = None,
+        error: str | None = None,
+    ) -> bool:
+        """Send the result of a picker load to the node that asked."""
+        return self.client_stub.pickerApplied(
+            token=token,
+            container_json=None if container is None else json.dumps(
+                container
+            ),
+            error=error,
+        )
+
+    def picker_invalidate(self) -> None:
+        """Let the tab's AYON pickers reload their lists."""
+        self.client_stub.pickerInvalidate()
 
     def get_publish_node_images(
         self,

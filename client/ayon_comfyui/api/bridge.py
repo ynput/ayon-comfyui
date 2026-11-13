@@ -36,6 +36,7 @@ from ayon_comfyui.api.menu_actions import (
     save_current_workfile,
     show_tool_by_name,
 )
+from ayon_comfyui.api.pickers import register_picker_handlers
 from ayon_comfyui.api.rpc_stub import RPCStub
 
 if TYPE_CHECKING:
@@ -142,6 +143,7 @@ class ComfyUIBridge(QtCore.QObject):
             "requestSaveWorkfile", self._handle_request_save
         )
         self.client.register_handler("pingAyonMenu", self._handle_ping)
+        register_picker_handlers(self)
 
         self._started_at = time.monotonic()
         self._ever_connected = False
