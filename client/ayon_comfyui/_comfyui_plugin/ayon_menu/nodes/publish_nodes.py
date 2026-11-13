@@ -10,9 +10,12 @@ the files from the node's `ayon` UI output (see `ayon_output_entry`).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import shutil
 import struct
+import uuid
 from fractions import Fraction
 from secrets import token_hex
 
@@ -31,8 +34,14 @@ try:
 except ImportError:  # ComfyUI before the execution context existed
     get_executing_context = None
 
+log = logging.getLogger(__name__)
+
 # Folder in ComfyUI's output directory that holds all AYON outputs.
 AYON_OUTPUT_ROOT = "AYON"
+# Every run of a save node writes a new folder; keep this many per instance
+# (the newest), so publishing an earlier run still finds its files without
+# the output directory growing forever.
+KEEP_RUNS_PER_INSTANCE = 5
 
 _UNSAFE_ID_CHARS = re.compile(r"[^A-Za-z0-9_-]")
 _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
@@ -87,10 +96,14 @@ def staging_folder(ayon_json: dict) -> tuple[str, str, str, str]:
         Tuple of the absolute folder, its subfolder relative to the output
         directory (with forward slashes), the instance id and the prompt id.
     """
-    instance_id = _safe_id(ayon_json.get("instance_id"))
-    if not instance_id:
+    instance_id = str(ayon_json.get("instance_id") or "")
+    try:
+        valid = str(uuid.UUID(instance_id)) == instance_id
+    except ValueError:
+        valid = False
+    if not valid:
         msg = (
-            "The AYON save node's publish instance has no instance id. "
+            "The AYON save node's publish instance has no valid instance id. "
             "Recreate it with the AYON Creator."
         )
         raise ValueError(msg)
@@ -103,7 +116,23 @@ def staging_folder(ayon_json: dict) -> tuple[str, str, str, str]:
         msg = f"Refusing to write outside the output directory: {folder}"
         raise ValueError(msg)
     os.makedirs(folder, exist_ok=True)
+    prune_old_runs(os.path.dirname(folder), keep=folder)
     return folder, subfolder, instance_id, prompt_id
+
+
+def prune_old_runs(instance_folder: str, keep: str) -> None:
+    """Delete all but the newest run folders of an instance."""
+    try:
+        runs = [
+            entry for entry in os.scandir(instance_folder)
+            if entry.is_dir(follow_symlinks=False) and entry.path != keep
+        ]
+        runs.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+    for entry in runs[KEEP_RUNS_PER_INSTANCE - 1:]:
+        shutil.rmtree(entry.path, ignore_errors=True)
+        log.debug("AYON: Removed old outputs %s", entry.path)
 
 
 def file_stem(creator_attrs: dict) -> str:

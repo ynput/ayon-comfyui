@@ -2,28 +2,36 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import pyblish.api
+from ayon_core.pipeline import registered_host
 from ayon_core.pipeline.publish import KnownPublishError
 
 from ayon_comfyui.api import comfy_publish
+from ayon_comfyui.api.bridge_client import BridgeError
 from ayon_comfyui.api.publish_lib import (
     COMFYUI_KEY,
     OUTPUT_FAMILIES,
     get_comfy_http,
     responsive_sleep,
+    split_api_prompt,
 )
+
+if TYPE_CHECKING:
+    from ayon_comfyui.api.pipeline import ComfyUIHost
 
 
 class ExtractComfyUIRender(pyblish.api.ContextPlugin):
     """Queue the workflow on ComfyUI and wait for its outputs.
 
-    AYON queues the prompt itself, under the prompt id chosen while
-    collecting, and only runs the AYON save nodes being published (plus
-    what they depend on). It then follows the run in ComfyUI's history, so
-    the ComfyUI tab may be reloaded or closed meanwhile, and there is no
-    time limit for long renders. To stop a render, cancel it in ComfyUI.
+    The workflow is taken from the ComfyUI tab again, now that the workfile
+    has been saved, so the published outputs match the published workfile.
+    AYON queues it itself under the prompt id chosen while collecting and
+    only runs the AYON save nodes being published (plus what they depend
+    on). It then follows the run in ComfyUI's history, so the ComfyUI tab
+    may be reloaded or closed meanwhile, and there is no time limit for
+    long renders. To stop a render, cancel it in ComfyUI's queue.
 
     The ComfyUI tab gets the run's progress and previews like any run
     it queued.
@@ -50,12 +58,32 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
             self.log.debug("No instance needs a ComfyUI render.")
             return
 
+        api_prompt, extra_data = self._current_prompt(context)
+        try:
+            save_nodes = comfy_publish.find_save_nodes(api_prompt["prompt"])
+        except comfy_publish.PublishError as exc:
+            raise KnownPublishError(str(exc)) from exc
+
         prompt_id = context.data["comfyuiPromptId"]
-        api_prompt = context.data["comfyuiApiPrompt"]
-        targets = [
-            instance.data[COMFYUI_KEY]["outputNodeId"]
-            for instance in instances
-        ]
+        targets = []
+        for instance in instances:
+            data = instance.data[COMFYUI_KEY]
+            node = save_nodes.get(instance.data["instance_id"])
+            if node is None:
+                msg = (
+                    "The AYON save node of "
+                    f"'{instance.data.get('productName')}' was removed or "
+                    "bypassed in ComfyUI while publishing."
+                )
+                raise KnownPublishError(msg)
+            # What actually runs, for provenance.
+            data.update(
+                prompt=api_prompt["prompt"],
+                workflow=api_prompt.get("workflow"),
+                outputNodeId=node.node_id,
+            )
+            targets.append(node.node_id)
+
         http = get_comfy_http()
         self.log.info(
             "Queueing ComfyUI run %s for save node(s) %s.",
@@ -69,8 +97,16 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
                 targets=targets,
                 workflow=api_prompt.get("workflow"),
                 client_id=api_prompt.get("client_id"),
+                extra_data=extra_data,
             )
-            comfy_publish.QUEUED_PROMPTS.add(prompt_id)
+        except comfy_publish.PublishError as exc:
+            raise KnownPublishError(str(exc)) from exc
+        comfy_publish.QUEUED_PROMPTS.add(
+            prompt_id, api_prompt.get("workflow_path")
+        )
+
+        finished = False
+        try:
             entry = comfy_publish.wait_for_prompt(
                 http,
                 prompt_id,
@@ -78,8 +114,13 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
                 log_progress=self.log.info,
                 sleep=responsive_sleep,
             )
+            finished = True
         except comfy_publish.PublishError as exc:
             raise KnownPublishError(str(exc)) from exc
+        finally:
+            if not finished and comfy_publish.cancel_prompt(http, prompt_id):
+                # Don't leave our run on a shared queue when we gave up.
+                self.log.info("Cancelled ComfyUI run %s.", prompt_id)
 
         for instance in instances:
             data = instance.data[COMFYUI_KEY]
@@ -97,3 +138,25 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
                 "'%s': %s file(s) rendered.",
                 instance.data.get("productName"), len(run.files),
             )
+
+    def _current_prompt(
+        self, context: pyblish.api.Context
+    ) -> tuple[dict, dict]:
+        host: ComfyUIHost = registered_host()
+        try:
+            api_prompt, extra_data = split_api_prompt(
+                host.stub.get_api_prompt()
+            )
+        except (BridgeError, RuntimeError) as exc:
+            msg = f"Unable to get the workflow from the ComfyUI tab: {exc}"
+            raise KnownPublishError(msg) from exc
+        collected = context.data["comfyuiApiPrompt"]
+        if api_prompt.get("workflow_path") != collected.get("workflow_path"):
+            msg = (
+                "The active ComfyUI workflow changed while publishing "
+                f"(from '{collected.get('workflow_path')}' to "
+                f"'{api_prompt.get('workflow_path')}'). Switch back to it "
+                "and publish again."
+            )
+            raise KnownPublishError(msg)
+        return api_prompt, extra_data

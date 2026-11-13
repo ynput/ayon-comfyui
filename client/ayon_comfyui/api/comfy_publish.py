@@ -42,10 +42,9 @@ SAVE_NODE_TYPES = frozenset({
     "AYON Video Save",
     "AYON 3D Model Save",
 })
-# UI output keys of ComfyUI nodes that list files, used for outputs that
-# have no `ayon` entry (e.g. made by an older version of the save nodes).
-FILE_OUTPUT_KEYS = ("images", "gifs", "video", "3d", "audio")
-VIEW_TYPES = frozenset({"output", "temp", "input"})
+# Folder in ComfyUI's output directory the save nodes write into, as
+# `AYON/<instance id>/<prompt id>/`.
+AYON_OUTPUT_ROOT = "AYON"
 
 # A prompt that is in neither the queue nor the history this many polls in
 # a row was removed before it ran (or ComfyUI restarted and lost it).
@@ -162,6 +161,7 @@ def queue_prompt(  # noqa: PLR0913
     targets: Iterable[str],
     workflow: dict | None = None,
     client_id: str | None = None,
+    extra_data: dict | None = None,
 ) -> dict:
     """Queue `prompt` on ComfyUI, running only the `targets` output nodes.
 
@@ -173,15 +173,19 @@ def queue_prompt(  # noqa: PLR0913
         workflow: UI workflow, embedded in the outputs' metadata.
         client_id: ComfyUI client id of the tab that should show progress
             and previews. Only a display hint.
+        extra_data: More `extra_data`, e.g. the tab's Comfy.org credentials
+            for API nodes (ComfyUI keeps those out of its history).
 
     Raises:
-        PublishError: When ComfyUI rejects the prompt.
+        PublishError: When ComfyUI rejects the prompt, or would only run
+            part of it.
     """
+    targets = list(targets)
     body: dict[str, Any] = {
         "prompt": prompt,
         "prompt_id": prompt_id,
-        "partial_execution_targets": list(targets),
-        "extra_data": {},
+        "partial_execution_targets": targets,
+        "extra_data": dict(extra_data or {}),
     }
     if workflow is not None:
         body["extra_data"]["extra_pnginfo"] = {"workflow": workflow}
@@ -200,7 +204,37 @@ def queue_prompt(  # noqa: PLR0913
     if not isinstance(result, dict) or result.get("prompt_id") != prompt_id:
         msg = f"ComfyUI didn't queue the graph as expected: {result!r}"
         raise PublishError(msg)
+    if result.get("node_errors"):
+        # ComfyUI queues a prompt as long as *one* output validates, and
+        # drops the others; a publish needs all of them.
+        cancel_prompt(http, prompt_id)
+        details = describe_prompt_errors(result, prompt)
+        msg = f"ComfyUI can't run all AYON save nodes:\n{details}"
+        raise PublishError(msg)
     return result
+
+
+def cancel_prompt(http: Http, prompt_id: str) -> bool:
+    """Cancel a queued or running prompt; never raises.
+
+    Returns:
+        Whether ComfyUI reports that it cancelled something.
+    """
+    try:
+        result = http.http_json("POST", f"/api/jobs/{prompt_id}/cancel")
+        return bool((result or {}).get("cancelled"))
+    except BridgeError as exc:
+        if getattr(exc, "status", None) != 404:  # noqa: PLR2004
+            log.warning("Unable to cancel ComfyUI run %s: %s", prompt_id, exc)
+            return False
+    # ComfyUI without the jobs API.
+    try:
+        http.http_json("POST", "/queue", json={"delete": [prompt_id]})
+        http.http_json("POST", "/interrupt", json={"prompt_id": prompt_id})
+    except BridgeError as exc:
+        log.warning("Unable to cancel ComfyUI run %s: %s", prompt_id, exc)
+        return False
+    return True
 
 
 def describe_prompt_errors(body: Any, prompt: dict | None = None) -> str:  # noqa: ANN401
@@ -260,7 +294,7 @@ def wait_for_prompt(  # noqa: C901, PLR0913
             history = http.http_json("GET", f"/history/{prompt_id}")
             entry = (history or {}).get(prompt_id)
             if entry is None:
-                state = queue_state(http.http_json("GET", "/queue"), prompt_id)
+                state = job_state(http, prompt_id)
             unreachable_since = None
         except BridgeError as exc:
             if exc.code != "unreachable":
@@ -307,8 +341,34 @@ def wait_for_prompt(  # noqa: C901, PLR0913
         interval = min(interval * 1.5, max_poll_interval)
 
 
+def job_state(http: Http, prompt_id: str) -> str | None:
+    """Return 'pending', 'running' (or 'finishing') or None when unknown.
+
+    Uses ComfyUI's single-job API; the full `/queue` (every pending prompt
+    with its whole graph) is only read on ComfyUI versions without it.
+    """
+    try:
+        job = http.http_json("GET", f"/api/jobs/{prompt_id}")
+    except BridgeError as exc:
+        if getattr(exc, "status", None) != 404:  # noqa: PLR2004
+            raise
+        if isinstance(getattr(exc, "body", None), dict):
+            return None  # {"error": "Job not found"}
+        # No jobs API in this ComfyUI.
+        return queue_state(http.http_json("GET", "/queue"), prompt_id)
+    status = (job or {}).get("status")
+    if status == "pending":
+        return "pending"
+    if status == "in_progress":
+        return "running"
+    if status:
+        # Done, but not in the history we just read: it just finished.
+        return "finishing"
+    return None
+
+
 def queue_state(queue: Any, prompt_id: str) -> str | None:  # noqa: ANN401
-    """Return 'running', 'pending (N ahead)' or None when not queued."""
+    """Return 'running', 'pending, N ahead' or None when not queued."""
     if not isinstance(queue, dict):
         return None
     for item in queue.get("queue_running") or []:
@@ -354,39 +414,24 @@ def describe_run_error(status: dict) -> str:
 # --- collecting -----------------------------------------------------------
 
 
-def node_files(
-    node_outputs: Any,  # noqa: ANN401
-    instance_id: str | None = None,
-) -> list[dict]:
-    """Return the files an AYON save node reported in its UI outputs.
+def node_files(node_outputs: Any, instance_id: str) -> list[dict]:  # noqa: ANN401
+    """Return the files an AYON save node reported for `instance_id`.
 
-    Uses the node's `ayon` entries (all of them: a node with a list input
-    runs, and reports, more than once). Falls back to the standard preview
-    keys for outputs without `ayon` entries.
+    Reads the node's `ayon` UI output entries (all of them: a node with a
+    list input runs, and reports, more than once).
     """
     if not isinstance(node_outputs, dict):
         return []
-    entries = node_outputs.get("ayon")
-    if isinstance(entries, list) and entries:
-        files = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            if instance_id and entry.get("instance_id") != instance_id:
-                continue
-            files.extend(
-                item for item in entry.get("files") or []
-                if isinstance(item, dict)
-            )
-        return files
-    if instance_id:
-        # Can't tell which instance plain preview outputs belong to.
-        return []
     files = []
-    for key in FILE_OUTPUT_KEYS:
-        for item in node_outputs.get(key) or []:
-            if isinstance(item, dict) and item.get("filename"):
-                files.append({**item, "role": item.get("role", "main")})
+    for entry in node_outputs.get("ayon") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("instance_id") != instance_id:
+            continue
+        files.extend(
+            item for item in entry.get("files") or []
+            if isinstance(item, dict)
+        )
     return files
 
 
@@ -396,7 +441,8 @@ def run_from_history(
     """Return the run of `node_id` in a history entry.
 
     Raises:
-        PublishError: When the node reported no files for the instance.
+        PublishError: When the node reported no files for the instance, or
+            files outside the instance's AYON output folder.
     """
     node_outputs = (entry.get("outputs") or {}).get(node_id)
     files = node_files(node_outputs, instance_id)
@@ -406,6 +452,15 @@ def run_from_history(
             f"{prompt_id}."
         )
         raise PublishError(msg)
+    expected = f"{AYON_OUTPUT_ROOT}/{instance_id}/"
+    for file in files:
+        subfolder = view_params(file)["subfolder"] + "/"
+        if not subfolder.startswith(expected):
+            msg = (
+                f"The AYON save node {node_id} reported a file outside its "
+                f"output folder: {file!r}"
+            )
+            raise PublishError(msg)
     prompt, workflow = prompt_of_entry(entry)
     return Run(prompt_id, node_id, prompt, workflow, files)
 
@@ -436,6 +491,10 @@ def find_latest_run(
     queued, and the ones its paired tab queued, each list newest first. They
     are fetched one by one, so a long or shared history is never downloaded
     as a whole, and each list is only read up to its first match.
+
+    Raises:
+        PublishError: When a prompt newer than the match is still queued or
+            running, since it would probably make newer outputs.
     """
     best: tuple[int, Run] | None = None
     checked: set[str] = set()
@@ -444,7 +503,11 @@ def find_latest_run(
             if not isinstance(prompt_id, str) or prompt_id in checked:
                 continue
             checked.add(prompt_id)
-            found = _run_in_history(http, prompt_id, instance_id)
+            entry = _history_entry(http, prompt_id)
+            if entry is None:
+                _check_not_running(http, prompt_id)
+                continue
+            found = _run_in_entry(prompt_id, entry, instance_id)
             if found is None:
                 continue
             if best is None or found[0] > best[0]:
@@ -453,16 +516,32 @@ def find_latest_run(
     return best[1] if best is not None else None
 
 
-def _run_in_history(
-    http: Http, prompt_id: str, instance_id: str
-) -> tuple[int, Run] | None:
+def _history_entry(http: Http, prompt_id: str) -> dict | None:
     try:
         history = http.http_json("GET", f"/history/{prompt_id}")
     except BridgeError as exc:
         raise PublishError(str(exc)) from exc
     entry = (history or {}).get(prompt_id)
-    if not isinstance(entry, dict):
-        return None
+    return entry if isinstance(entry, dict) else None
+
+
+def _check_not_running(http: Http, prompt_id: str) -> None:
+    try:
+        state = job_state(http, prompt_id)
+    except BridgeError as exc:
+        raise PublishError(str(exc)) from exc
+    if state and (state == "running" or state.startswith("pending")):
+        msg = (
+            f"A newer ComfyUI run of this workflow ({prompt_id}) is still "
+            f"{state}. Wait for it to finish before publishing, or enable "
+            "'Recook on publish'."
+        )
+        raise PublishError(msg)
+
+
+def _run_in_entry(
+    prompt_id: str, entry: dict, instance_id: str
+) -> tuple[int, Run] | None:
     status = entry.get("status") or {}
     if status.get("status_str") != "success":
         return None
@@ -490,12 +569,40 @@ def finished_at(entry: dict) -> int:
     return 0
 
 
+def upstream(prompt: dict, node_id: str) -> dict:
+    """Return the part of `prompt` that `node_id` depends on.
+
+    The node's own AYON inputs are left out, so comparing two of these
+    tells whether two runs computed the same thing.
+    """
+    result: dict = {}
+    pending = [str(node_id)]
+    while pending:
+        current = pending.pop()
+        if current in result or current not in prompt:
+            continue
+        node = prompt[current]
+        inputs = dict(node.get("inputs") or {})
+        if current == str(node_id):
+            inputs.pop("ayon_info", None)
+            inputs.pop("recook", None)
+        result[current] = {
+            "class_type": node.get("class_type"),
+            "inputs": inputs,
+        }
+        pending.extend(
+            str(value[0]) for value in inputs.values()
+            if isinstance(value, list) and value
+        )
+    return result
+
+
 def view_params(file: dict) -> dict:
-    """Return the `/view` query for a file reference, after checking it.
+    """Return the `/view` query for an output file, after checking it.
 
     Raises:
         PublishError: For anything but a plain file name in a relative
-            subfolder of ComfyUI's output, temp or input directory.
+            subfolder of ComfyUI's output directory.
     """
     filename = file.get("filename") if isinstance(file, dict) else None
     if (
@@ -517,14 +624,13 @@ def view_params(file: dict) -> dict:
     ):
         msg = f"Refusing to download from an invalid subfolder: {file!r}"
         raise PublishError(msg)
-    file_type = str(file.get("type") or "output")
-    if file_type not in VIEW_TYPES:
-        msg = f"Refusing to download an output of type {file_type!r}."
+    if (file.get("type") or "output") != "output":
+        msg = f"Refusing to download a file that isn't an output: {file!r}"
         raise PublishError(msg)
     return {
         "filename": filename,
         "subfolder": "/".join(parts),
-        "type": file_type,
+        "type": "output",
     }
 
 
@@ -558,26 +664,58 @@ def download_files(
 
 
 class PromptRegistry:
-    """Ids of the prompts this AYON session queued itself, newest last."""
+    """Prompts this AYON session queued itself, with their workflow."""
 
     def __init__(self, limit: int = 256) -> None:
-        self._ids: OrderedDict[str, None] = OrderedDict()
+        self._prompts: OrderedDict[str, str | None] = OrderedDict()
         self._limit = limit
         self._lock = threading.Lock()
 
-    def add(self, prompt_id: str) -> None:
+    def add(self, prompt_id: str, workflow_path: str | None = None) -> None:
         """Remember that this session queued `prompt_id`."""
         with self._lock:
-            self._ids.pop(prompt_id, None)
-            self._ids[prompt_id] = None
-            while len(self._ids) > self._limit:
-                self._ids.popitem(last=False)
+            self._prompts.pop(prompt_id, None)
+            self._prompts[prompt_id] = workflow_path
+            while len(self._prompts) > self._limit:
+                self._prompts.popitem(last=False)
 
-    def newest_first(self) -> list[str]:
-        """Return the remembered ids, newest first."""
+    def newest_first(self, workflow_path: str | None = None) -> list[str]:
+        """Return the remembered ids, newest first.
+
+        With `workflow_path`, only prompts queued from that ComfyUI
+        workflow (or from an unknown one).
+        """
         with self._lock:
-            return list(reversed(self._ids))
+            return [
+                prompt_id
+                for prompt_id, path in reversed(self._prompts.items())
+                if not workflow_path or not path or path == workflow_path
+            ]
 
 
 #: Prompts queued by this AYON host process.
 QUEUED_PROMPTS = PromptRegistry()
+
+
+def tab_prompt_ids(
+    entries: Iterable[Any],  # noqa: ANN401
+    workflow_path: str | None = None,
+) -> list[str]:
+    """Return the ids of the tab's queued prompts for a workflow.
+
+    `entries` are the tab's `{prompt_id, workflow_path}` records, newest
+    first. A copy of a workflow keeps its AYON instance ids, so runs of
+    other workflows (tabs) are left out.
+    """
+    ids = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        prompt_id = entry.get("prompt_id")
+        path = entry.get("workflow_path")
+        if not isinstance(prompt_id, str) or not prompt_id:
+            continue
+        if workflow_path and path and path != workflow_path:
+            continue
+        ids.append(prompt_id)
+    return ids

@@ -165,6 +165,13 @@ class QueuePromptTests(unittest.TestCase):
                       "images_in", text)
 
 
+def not_found():
+    error = BridgeError("HTTP 404", "http_404")
+    error.status = 404
+    error.body = {"error": "Job not found"}
+    return error
+
+
 class WaitTests(unittest.TestCase):
     def wait(self, http, **kwargs):
         clock = iter(range(0, 100000, 10))
@@ -173,18 +180,18 @@ class WaitTests(unittest.TestCase):
             clock=lambda: next(clock), **kwargs,
         )
 
-    def test_waits_through_queue_until_done(self):
-        running = {"queue_running": [[0, "abc", {}, {}, []]],
-                   "queue_pending": []}
+    def test_waits_until_done(self):
         http = FakeHttp({
             ("GET", "/history/abc"): [
                 {}, {}, {}, {"abc": history_entry("abc")}],
-            ("GET", "/queue"): running,
+            ("GET", "/api/jobs/abc"): {"id": "abc", "status": "in_progress"},
         })
         logged = []
         entry = self.wait(http, log_progress=logged.append)
         self.assertEqual(entry["status"]["status_str"], "success")
         self.assertTrue(logged)  # the fake clock advances 10 s per call
+        paths = {path for _m, path, _k in http.calls}
+        self.assertNotIn("/queue", paths)  # never the whole queue
 
     def test_error_status(self):
         http = FakeHttp({("GET", "/history/abc"): {
@@ -196,16 +203,27 @@ class WaitTests(unittest.TestCase):
     def test_removed_from_queue(self):
         http = FakeHttp({
             ("GET", "/history/abc"): {},
-            ("GET", "/queue"): {"queue_running": [], "queue_pending": []},
+            ("GET", "/api/jobs/abc"): not_found(),
         })
         with self.assertRaisesRegex(cp.PublishError, "removed from the queue"):
             self.wait(http)
 
+    def test_old_comfyui_without_jobs_api(self):
+        no_route = BridgeError("HTTP 404", "http_404")
+        no_route.status = 404
+        no_route.body = None
+        http = FakeHttp({
+            ("GET", "/history/abc"): [{}, {"abc": history_entry("abc")}],
+            ("GET", "/api/jobs/abc"): no_route,
+            ("GET", "/queue"): {"queue_running": [[0, "abc", {}, {}, []]],
+                                "queue_pending": []},
+        })
+        self.assertIn("outputs", self.wait(http))
+
     def test_timeout(self):
         http = FakeHttp({
             ("GET", "/history/abc"): {},
-            ("GET", "/queue"): {"queue_running": [],
-                                "queue_pending": [[1, "abc", {}, {}, []]]},
+            ("GET", "/api/jobs/abc"): {"id": "abc", "status": "pending"},
         })
         with self.assertRaisesRegex(cp.PublishError, "within 25 s"):
             self.wait(http, timeout=25)
@@ -230,6 +248,37 @@ class WaitTests(unittest.TestCase):
         self.assertIsNone(cp.queue_state(queue, "c"))
 
 
+class PartialPromptTests(unittest.TestCase):
+    def test_node_errors_on_200_cancel_and_fail(self):
+        # ComfyUI queues a prompt when one output validates and silently
+        # drops the others.
+        http = FakeHttp({
+            ("POST", "/prompt"): lambda json: {
+                "prompt_id": json["prompt_id"], "number": 1,
+                "node_errors": {"9": {
+                    "class_type": "AYON Video Save",
+                    "errors": [{"message": "Required input is missing",
+                                "details": "video_in"}],
+                }},
+            },
+            ("POST", "/api/jobs/abc/cancel"): {"cancelled": True},
+        })
+        with self.assertRaisesRegex(cp.PublishError,
+                                    "node 9 .*video_in"):
+            cp.queue_prompt(http, {}, prompt_id="abc", targets=["2", "9"])
+        self.assertIn(("POST", "/api/jobs/abc/cancel", {}), http.calls)
+
+    def test_extra_data_is_passed(self):
+        http = FakeHttp({("POST", "/prompt"): lambda json: {
+            "prompt_id": json["prompt_id"], "node_errors": {}}})
+        cp.queue_prompt(http, {}, prompt_id="abc", targets=["2"],
+                        workflow={"w": 1},
+                        extra_data={"auth_token_comfy_org": "t"})
+        extra = http.calls[0][2]["json"]["extra_data"]
+        self.assertEqual(extra["auth_token_comfy_org"], "t")
+        self.assertEqual(extra["extra_pnginfo"], {"workflow": {"w": 1}})
+
+
 class CollectTests(unittest.TestCase):
     def test_node_files_merges_list_runs_and_filters_instance(self):
         outputs = {"ayon": [
@@ -243,7 +292,13 @@ class CollectTests(unittest.TestCase):
     def test_node_files_without_ayon_entry(self):
         outputs = {"images": [{"filename": "a.png", "type": "output"}]}
         self.assertEqual(cp.node_files(outputs, INSTANCE), [])
-        self.assertEqual(cp.node_files(outputs)[0]["role"], "main")
+
+    def test_run_rejects_files_outside_instance_folder(self):
+        entry = history_entry("p1", files=[{
+            "filename": "a.png", "subfolder": "AYON/other-instance/p1",
+            "type": "output"}])
+        with self.assertRaisesRegex(cp.PublishError, "outside its output"):
+            cp.run_from_history("p1", entry, "2", INSTANCE)
 
     def test_latest_run_only_considers_owned_prompts(self):
         # "foreign" is the newest run of the same instance (e.g. another
@@ -266,6 +321,7 @@ class CollectTests(unittest.TestCase):
     def test_latest_run_skips_failed_and_evicted(self):
         http = FakeHttp({
             ("GET", "/history/gone"): {},
+            ("GET", "/api/jobs/gone"): not_found(),
             ("GET", "/history/failed"): {"failed": history_entry(
                 "failed", status="error")},
             ("GET", "/history/ok"): {"ok": history_entry("ok")},
@@ -273,6 +329,31 @@ class CollectTests(unittest.TestCase):
         run = cp.find_latest_run(http, INSTANCE, ["gone", "failed", "ok"])
         self.assertEqual(run.prompt_id, "ok")
         self.assertIsNone(cp.find_latest_run(http, "nope", ["ok"]))
+
+    def test_newer_run_still_running_is_an_error(self):
+        http = FakeHttp({
+            ("GET", "/history/new"): {},
+            ("GET", "/api/jobs/new"): {"id": "new", "status": "in_progress"},
+            ("GET", "/history/old"): {"old": history_entry("old")},
+        })
+        with self.assertRaisesRegex(cp.PublishError, "still running"):
+            cp.find_latest_run(http, INSTANCE, ["new", "old"])
+
+    def test_upstream_ignores_ayon_inputs(self):
+        prompt = {
+            "1": {"class_type": "EmptyImage", "inputs": {"width": 8}},
+            "2": save_node(recook=True),
+            "3": {"class_type": "PreviewImage",
+                  "inputs": {"images": ["1", 0]}},
+        }
+        other = json.loads(json.dumps(prompt))
+        other["2"]["inputs"]["recook"] = False
+        other["2"]["inputs"]["ayon_info"] = "{}"
+        other["3"]["inputs"]["images"] = ["9", 0]
+        self.assertEqual(set(cp.upstream(prompt, "2")), {"1", "2"})
+        self.assertEqual(cp.upstream(prompt, "2"), cp.upstream(other, "2"))
+        other["1"]["inputs"]["width"] = 16
+        self.assertNotEqual(cp.upstream(prompt, "2"), cp.upstream(other, "2"))
 
     def test_view_params_rejects_traversal(self):
         good = {"filename": "a.png", "subfolder": "AYON\\x\\y",
@@ -286,7 +367,8 @@ class CollectTests(unittest.TestCase):
             {"filename": "a.png", "subfolder": "../.."},
             {"filename": "a.png", "subfolder": "/etc"},
             {"filename": "a.png", "subfolder": "C:/x"},
-            {"filename": "a.png", "type": "secret"},
+            {"filename": "a.png", "type": "temp"},
+            {"filename": "a.png", "type": "input"},
         ):
             with self.assertRaises(cp.PublishError, msg=bad):
                 cp.view_params(bad)
@@ -306,10 +388,24 @@ class CollectTests(unittest.TestCase):
             cp.download_files(http, [{"filename": "a.png"}] * 2, staging)
 
     def test_registry(self):
-        registry = cp.PromptRegistry(limit=2)
-        for prompt_id in ("a", "b", "a", "c"):
-            registry.add(prompt_id)
-        self.assertEqual(registry.newest_first(), ["c", "a"])
+        registry = cp.PromptRegistry(limit=3)
+        for prompt_id, path in (("a", "w1"), ("b", "w2"), ("a", "w1"),
+                                ("c", None), ("d", "w1")):
+            registry.add(prompt_id, path)
+        self.assertEqual(registry.newest_first(), ["d", "c", "a"])
+        self.assertEqual(registry.newest_first("w1"), ["d", "c", "a"])
+        self.assertEqual(registry.newest_first("w2"), ["c"])
+
+    def test_tab_prompt_ids_per_workflow(self):
+        entries = [
+            {"prompt_id": "c", "workflow_path": "workflows/copy.json"},
+            {"prompt_id": "b", "workflow_path": "workflows/shot.json"},
+            {"prompt_id": "a", "workflow_path": None},
+            "junk",
+        ]
+        self.assertEqual(
+            cp.tab_prompt_ids(entries, "workflows/shot.json"), ["b", "a"])
+        self.assertEqual(cp.tab_prompt_ids(entries), ["c", "b", "a"])
 
 
 if __name__ == "__main__":

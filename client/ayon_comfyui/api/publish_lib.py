@@ -15,6 +15,20 @@ OUTPUT_FAMILIES = ["image", "render", "model"]
 COMFYUI_KEY = "comfyui"
 
 
+def split_api_prompt(api_prompt: dict) -> tuple[dict, dict]:
+    """Split the tab's `getApiPrompt` result into data and queue extras.
+
+    Returns:
+        The result without `extra_data`, safe to keep in publish data, and
+        the `extra_data` to queue the prompt with: the tab's Comfy.org
+        credentials for API nodes and its preview method, exactly what the
+        tab sends when it queues itself. Never store or log those.
+    """
+    data = dict(api_prompt)
+    extra = data.pop("extra_data", None)
+    return data, extra if isinstance(extra, dict) else {}
+
+
 def get_comfy_http() -> ComfyHttp:
     """Return an HTTP client for the ComfyUI of this AYON session."""
     return ComfyHttp(get_bridge().comfy_url)
@@ -25,8 +39,9 @@ def responsive_sleep(seconds: float) -> None:
 
     Publish plugins run on the Qt main thread, so waiting for a long render
     would otherwise freeze the Publisher and make Windows report it as not
-    responding. The Publisher only queues its next step after a plugin
-    returns, so processing events meanwhile doesn't start other plugins.
+    responding. Only non-input events are processed (repaints, timers), so
+    nothing can be clicked meanwhile, and the Publisher only queues its next
+    step after a plugin returns.
     """
     try:
         from qtpy import QtCore, QtWidgets  # noqa: PLC0415
@@ -39,7 +54,7 @@ def responsive_sleep(seconds: float) -> None:
         return
     deadline = time.monotonic() + seconds
     while True:
-        app.processEvents(QtCore.QEventLoop.AllEvents, 50)
+        app.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents, 50)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return

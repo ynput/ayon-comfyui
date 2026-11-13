@@ -29,15 +29,31 @@ import torch
 from comfy_api.latest import InputImpl, Types, io, ui
 from PIL import Image, ImageOps, ImageSequence
 
-from ..paths import resolve_rootless
+from ..paths import is_inside, resolve_rootless
 
 log = logging.getLogger(__name__)
 
 # Decoded through ComfyUI's own (PyAV) decoder, which keeps 16-bit and float
 # precision; Pillow reads 16-bit PNGs as 8-bit and can't open EXR at all.
 FULL_PRECISION_EXTENSIONS = {".png", ".exr", ".tif", ".tiff", ".dpx", ".hdr"}
+# Of those, the ones Pillow can't read either.
+PYAV_ONLY_EXTENSIONS = {".exr", ".dpx", ".hdr"}
 # Uploaded files a browser can show as the node's preview as they are.
 BROWSER_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+# What each load node may read. A container can be edited by anyone who can
+# edit the workflow, so nodes never read other kinds of files.
+IMAGE_EXTENSIONS = FULL_PRECISION_EXTENSIONS | BROWSER_IMAGE_EXTENSIONS | {
+    ".jpe", ".jfif", ".tga", ".psd", ".avif", ".heic", ".heif", ".jxl",
+    ".ppm", ".pgm", ".pbm",
+}
+VIDEO_EXTENSIONS = {
+    ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mxf", ".gif",
+}
+MODEL_EXTENSIONS = {
+    ".gltf", ".glb", ".obj", ".fbx", ".stl", ".spz", ".splat", ".ply",
+    ".ksplat",
+}
 
 
 class ContainerError(ValueError):
@@ -58,16 +74,12 @@ def parse_container(ayon_container_info: str) -> dict:
 
 
 def _input_file(upload_info: dict) -> str:
-    input_dir = os.path.abspath(folder_paths.get_input_directory())
+    input_dir = os.path.realpath(folder_paths.get_input_directory())
     relative = os.path.join(
         str(upload_info.get("subfolder") or ""), str(upload_info.get("name"))
     )
-    path = os.path.abspath(os.path.join(input_dir, relative))
-    try:
-        common = os.path.commonpath([path, input_dir])
-    except ValueError:
-        common = ""
-    if os.path.normcase(common) != os.path.normcase(input_dir):
+    path = os.path.realpath(os.path.join(input_dir, relative))
+    if ":" in relative or not is_inside(path, input_dir):
         msg = f"Refusing to read outside ComfyUI's input directory: {relative}"
         raise ContainerError(msg)
     return path
@@ -103,11 +115,16 @@ def referenced_files(container: dict) -> list[str] | None:
     return None
 
 
-def container_files(container: dict) -> list[str]:
+def container_files(container: dict, extensions: set[str]) -> list[str]:
     """Return the files to read for a container.
 
+    Args:
+        container: The node's AYON container.
+        extensions: File extensions the node may read.
+
     Raises:
-        ContainerError: When there are none, or some don't exist.
+        ContainerError: When there are none, some don't exist, or some are
+            of a kind the node doesn't read.
     """
     paths = referenced_files(container)
     if paths is None:
@@ -122,6 +139,17 @@ def container_files(container: dict) -> list[str]:
             raise ContainerError(msg)
     if not paths:
         msg = "The AYON load node's container has no files. Load it again."
+        raise ContainerError(msg)
+    unsupported = sorted({
+        os.path.splitext(path)[1].lower() or "(none)"
+        for path in paths
+        if os.path.splitext(path)[1].lower() not in extensions
+    })
+    if unsupported:
+        msg = (
+            "This AYON load node can't read files of type "
+            f"{', '.join(unsupported)}. Load them with the matching loader."
+        )
         raise ContainerError(msg)
     missing = [path for path in paths if not os.path.isfile(path)]
     if missing:
@@ -142,20 +170,22 @@ def files_fingerprint(container: dict, paths: list[str]) -> str:
     return "\n".join(parts)
 
 
-def fingerprint(ayon_container_info: str) -> str:
+def fingerprint(ayon_container_info: str, extensions: set[str]) -> str:
     """`fingerprint_inputs` of the load nodes."""
     try:
         container = parse_container(ayon_container_info)
-        return files_fingerprint(container, container_files(container))
+        return files_fingerprint(
+            container, container_files(container, extensions)
+        )
     except (ContainerError, OSError):
         # Validation reports the problem; keep the cache key stable.
         return ayon_container_info
 
 
-def validate(ayon_container_info: str) -> bool | str:
+def validate(ayon_container_info: str, extensions: set[str]) -> bool | str:
     """`validate_inputs` of the load nodes."""
     try:
-        container_files(parse_container(ayon_container_info))
+        container_files(parse_container(ayon_container_info), extensions)
     except ContainerError as exc:
         return str(exc)
     return True
@@ -165,6 +195,8 @@ def validate(ayon_container_info: str) -> bool | str:
 
 # One decoded frame: image (H, W, 3) and alpha (H, W) or None.
 Frame = tuple[torch.Tensor, "torch.Tensor | None"]
+# Refuse to load more than this share of the free memory as one batch.
+MEMORY_SHARE = 0.8
 
 
 def _decode_full_precision(path: str) -> list[Frame]:
@@ -207,10 +239,14 @@ def _decode_pillow(path: str) -> list[Frame]:
 
 def decode_image(path: str) -> list[Frame]:
     """Return (image HxWx3, alpha HxW or None) for each frame in `path`."""
-    if os.path.splitext(path)[1].lower() in FULL_PRECISION_EXTENSIONS:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in FULL_PRECISION_EXTENSIONS:
         try:
             return _decode_full_precision(path)
         except Exception as exc:  # noqa: BLE001
+            if ext in PYAV_ONLY_EXTENSIONS:
+                msg = f"ComfyUI can't decode {path}: {exc}"
+                raise ContainerError(msg) from exc
             log.warning(
                 "AYON: ComfyUI's decoder couldn't read %s (%s), reading it "
                 "with Pillow at 8-bit instead.", path, exc,
@@ -218,31 +254,61 @@ def decode_image(path: str) -> list[Frame]:
     return _decode_pillow(path)
 
 
+def _check_memory(frames: int, width: int, height: int) -> None:
+    """Refuse a batch that wouldn't fit in memory, with numbers."""
+    # IMAGE (3 channels) plus MASK, float32.
+    needed = frames * width * height * 4 * 4
+    try:
+        import psutil  # noqa: PLC0415
+
+        available = psutil.virtual_memory().available
+    except Exception:  # noqa: BLE001
+        return
+    if needed > available * MEMORY_SHARE:
+        msg = (
+            f"Loading {frames} frame(s) of {width}x{height} needs "
+            f"{needed / 2**30:.1f} GiB, but only {available / 2**30:.1f} GiB "
+            "of memory is free. Load fewer frames or smaller images."
+        )
+        raise ContainerError(msg)
+
+
 def load_images(paths: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return an IMAGE batch and its MASK (1 - alpha) for `paths`."""
-    images = []
-    masks = []
+    """Return an IMAGE batch and its MASK (1 - alpha) for `paths`.
+
+    The batch is allocated once (one frame per file, grown for files with
+    more frames) and filled file by file, so a long sequence never needs
+    twice its size in memory.
+    """
+    images = masks = None
+    count = 0
     size = None
     for path in paths:
         for image, alpha in decode_image(path):
             height, width = image.shape[0], image.shape[1]
             if size is None:
                 size = (width, height)
+                _check_memory(len(paths), width, height)
+                images = torch.empty((len(paths), height, width, 3))
+                masks = torch.zeros((len(paths), height, width))
             elif (width, height) != size:
                 log.warning(
                     "AYON: Skipping a frame of %s: it is %sx%s, the batch "
                     "is %sx%s.", path, width, height, *size,
                 )
                 continue
-            images.append(image)
-            if alpha is None:
-                masks.append(torch.zeros((height, width), dtype=torch.float32))
-            else:
-                masks.append(1.0 - alpha)
-    if not images:
+            if count == images.shape[0]:
+                _check_memory(count * 2, width, height)
+                images = torch.cat((images, torch.empty_like(images)))
+                masks = torch.cat((masks, torch.zeros_like(masks)))
+            images[count] = image
+            if alpha is not None:
+                masks[count] = 1.0 - alpha
+            count += 1
+    if not count:
         msg = "The AYON load node found no images to load."
         raise ContainerError(msg)
-    return torch.stack(images), torch.stack(masks)
+    return images[:count], masks[:count]
 
 
 def preview(
@@ -304,17 +370,17 @@ class AyonLoadImageNode(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, ayon_container_info: str):
-        return fingerprint(ayon_container_info)
+        return fingerprint(ayon_container_info, IMAGE_EXTENSIONS)
 
     @classmethod
     def validate_inputs(cls, ayon_container_info: str):
-        return validate(ayon_container_info)
+        return validate(ayon_container_info, IMAGE_EXTENSIONS)
 
     @classmethod
     def execute(cls, ayon_container_info: str):
         """Load the container's images at full precision."""
         container = parse_container(ayon_container_info)
-        paths = container_files(container)
+        paths = container_files(container, IMAGE_EXTENSIONS)
         images, masks = load_images(paths)
         return io.NodeOutput(
             images, masks, ui=preview(cls, container, paths, images)
@@ -350,17 +416,17 @@ class AyonLoadVideoNode(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, ayon_container_info: str):
-        return fingerprint(ayon_container_info)
+        return fingerprint(ayon_container_info, VIDEO_EXTENSIONS)
 
     @classmethod
     def validate_inputs(cls, ayon_container_info: str):
-        return validate(ayon_container_info)
+        return validate(ayon_container_info, VIDEO_EXTENSIONS)
 
     @classmethod
     def execute(cls, ayon_container_info: str):
         """Load the container's video."""
         container = parse_container(ayon_container_info)
-        path = container_files(container)[0]
+        path = container_files(container, VIDEO_EXTENSIONS)[0]
         video = InputImpl.VideoFromFile(path)
 
         uploads = container.get("image_upload_info") or []
@@ -406,11 +472,11 @@ class AyonLoad3DModelNode(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, ayon_container_info: str, **kwargs):
-        return fingerprint(ayon_container_info)
+        return fingerprint(ayon_container_info, MODEL_EXTENSIONS)
 
     @classmethod
     def validate_inputs(cls, ayon_container_info: str, **kwargs):
-        return validate(ayon_container_info)
+        return validate(ayon_container_info, MODEL_EXTENSIONS)
 
     @classmethod
     def execute(cls, ayon_container_info: str, **kwargs) -> io.NodeOutput:
@@ -420,6 +486,6 @@ class AyonLoad3DModelNode(io.ComfyNode):
         .ksplat
         """
         container = parse_container(ayon_container_info)
-        model_file = container_files(container)[0]
+        model_file = container_files(container, MODEL_EXTENSIONS)[0]
         ext = os.path.splitext(model_file)[1].lstrip(".").lower()
         return io.NodeOutput(Types.File3D(model_file, ext))

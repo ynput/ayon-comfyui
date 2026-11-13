@@ -28,6 +28,16 @@ DOWNLOAD_TIMEOUT = 600.0
 MAX_ERROR_BODY = 64 * 1024
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects: AYON only fetches URLs it built itself."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201, PLR0913, PLR0917
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class ComfyHttp:
     """Small client for ComfyUI's HTTP API.
 
@@ -53,6 +63,7 @@ class ComfyHttp:
         *,
         params: dict | None = None,
         json: Any = None,  # noqa: A002, ANN401
+        headers: dict[str, str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> Any:  # noqa: ANN401
         """Send a request and return its decoded JSON response.
@@ -63,15 +74,18 @@ class ComfyHttp:
                 `body` holds the decoded error response), or `unreachable`.
         """
         data = None
-        headers = {"Accept": "application/json"}
+        all_headers = {"Accept": "application/json", **(headers or {})}
         if json is not None:
             data = _json_dumps(json).encode("utf-8")
-            headers["Content-Type"] = "application/json"
+            all_headers["Content-Type"] = "application/json"
         request = urllib.request.Request(  # noqa: S310
-            self.url(path, params), data=data, method=method, headers=headers
+            self.url(path, params),
+            data=data,
+            method=method,
+            headers=all_headers,
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            with _OPENER.open(request, timeout=timeout) as response:  # noqa: S310
                 body = response.read()
         except urllib.error.HTTPError as exc:
             raise _http_error(exc, method, path) from exc
@@ -112,9 +126,7 @@ class ComfyHttp:
         try:
             with os.fdopen(handle, "wb") as stream:
                 try:
-                    with urllib.request.urlopen(  # noqa: S310
-                        request, timeout=timeout
-                    ) as response:
+                    with _OPENER.open(request, timeout=timeout) as response:
                         shutil.copyfileobj(response, stream, 1024 * 1024)
                 except urllib.error.HTTPError as exc:
                     raise _http_error(exc, "GET", path) from exc

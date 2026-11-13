@@ -318,15 +318,17 @@ class RPCClientStub:  # noqa: PLR0904
 
         Returns the active workflow converted to an API-format prompt by
         the frontend (`prompt`), the UI workflow (`workflow`), the tab's
-        ComfyUI client id (`client_id`) and workflow path (`workflow_path`).
+        ComfyUI client id (`client_id`), workflow path (`workflow_path`)
+        and the `extra_data` the tab would queue it with (`extra_data`,
+        including its Comfy.org credentials: never store or log it).
         """
 
     @tab_method()
     def getQueuedPrompts(self) -> dict:  # noqa: N802
         """Call getQueuedPrompts.
 
-        Returns `prompt_ids`: ids of the prompts the tab queued, newest
-        first.
+        Returns `prompts`: `{prompt_id, workflow_path}` of the prompts the
+        tab queued, newest first.
         """
 
     @tab_method()
@@ -927,7 +929,8 @@ class RPCStub:  # noqa : PLR0904
         primitives are handled exactly like when the artist runs the graph.
 
         Returns:
-            Dict with `prompt`, `workflow`, `client_id` and `workflow_path`.
+            Dict with `prompt`, `workflow`, `client_id`, `workflow_path`
+            and `extra_data` (see `publish_lib.split_api_prompt`).
         """
         result = self.client_stub.getApiPrompt()
         if not isinstance(result, dict) or not isinstance(
@@ -937,15 +940,16 @@ class RPCStub:  # noqa : PLR0904
             raise RuntimeError(msg)
         return result
 
-    def get_queued_prompt_ids(self) -> list[str]:
-        """Return ids of the prompts the paired tab queued, newest first."""
+    def get_queued_prompts(self) -> list[dict]:
+        """Return the prompts the paired tab queued, newest first.
+
+        Each is `{prompt_id, workflow_path}`: the id ComfyUI gave it and
+        the ComfyUI workflow (tab) it was queued from.
+        """
         result = self.client_stub.getQueuedPrompts()
         if not isinstance(result, dict):
             return []
-        prompt_ids = result.get("prompt_ids")
-        if not isinstance(prompt_ids, list):
+        prompts = result.get("prompts")
+        if not isinstance(prompts, list):
             return []
-        return [
-            prompt_id for prompt_id in prompt_ids
-            if isinstance(prompt_id, str) and prompt_id
-        ]
+        return [entry for entry in prompts if isinstance(entry, dict)]
