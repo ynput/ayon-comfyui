@@ -1096,7 +1096,7 @@ app.registerExtension({
           notify_bridge_change(bridge)
         })
         bridge.addEventListener("notice", (event) => {
-          show_toast("warn", event.detail)
+          show_toast("warn", event.detail, 10000)
         })
 
         // The API-format prompt of the target workflow, made by the

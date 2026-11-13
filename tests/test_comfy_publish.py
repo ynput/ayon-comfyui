@@ -518,6 +518,97 @@ class RobustnessTests(unittest.TestCase):
         self.assertIn(("POST", "/api/jobs/theirs/cancel", {}), http.calls)
 
 
+def probed(*streams, duration=None, error=None):
+    """Return a fake `get_ffprobe_data` with this result."""
+    data = {"streams": list(streams), "format": {}}
+    if duration is not None:
+        data["format"]["duration"] = duration
+    if error is not None:
+        data = {"error": {"code": -1, "string": error}}
+    calls = []
+
+    def probe(path):
+        calls.append(path)
+        return data
+
+    probe.calls = calls
+    return probe
+
+
+class FrameRangeTests(unittest.TestCase):
+    def test_images_are_frames_from_one_without_handles(self):
+        self.assertEqual(cp.frame_range(3, 25.0), {
+            "frameStart": 1, "frameEnd": 3,
+            "handleStart": 0, "handleEnd": 0,
+            "frameStartHandle": 1, "frameEndHandle": 3,
+            "fps": 25.0,
+        })
+
+    def test_parse_frame_rate(self):
+        self.assertEqual(cp.parse_frame_rate("24/1"), 24.0)
+        self.assertAlmostEqual(cp.parse_frame_rate("24000/1001"), 23.976, 3)
+        self.assertEqual(cp.parse_frame_rate(" 25 "), 25.0)
+        for bad in ("0/0", "0/1", "-24/1", "", None, "N/A", "1/0",
+                    "__import__('os').getcwd()", "24*2"):
+            self.assertIsNone(cp.parse_frame_rate(bad), msg=bad)
+
+    def test_mp4_uses_frame_count_and_rate(self):
+        probe = probed(
+            {"codec_type": "audio", "nb_frames": "94"},
+            {"codec_type": "video", "nb_frames": "48",
+             "r_frame_rate": "24000/1001", "avg_frame_rate": "24000/1001",
+             "duration": "2.002000"},
+        )
+        data = cp.video_frame_range("/stage/v.mp4", 25.0, probe)
+        self.assertEqual(probe.calls, ["/stage/v.mp4"])
+        self.assertEqual((data["frameStart"], data["frameEnd"]), (1, 48))
+        self.assertEqual((data["handleStart"], data["handleEnd"]), (0, 0))
+        self.assertAlmostEqual(data["fps"], 24000 / 1001)
+
+    def test_webm_without_frame_count_uses_duration(self):
+        # What ffprobe tells of a 49 frame WebM from the AYON video save.
+        probe = probed(
+            {"codec_type": "video", "r_frame_rate": "2997/125",
+             "avg_frame_rate": "2997/125"},
+            duration="2.044000",
+        )
+        data = cp.video_frame_range("v.webm", 25.0, probe)
+        self.assertEqual(data["frameEnd"], 49)
+        self.assertAlmostEqual(data["fps"], 23.976)
+
+    def test_rate_falls_back(self):
+        probe = probed({"codec_type": "video", "r_frame_rate": "0/0",
+                        "avg_frame_rate": "30/1", "duration": "2"})
+        self.assertEqual(
+            cp.video_frame_range("v.webm", 25.0, probe)["fps"], 30.0)
+        probe = probed({"codec_type": "video", "r_frame_rate": "0/0",
+                        "avg_frame_rate": "0/0"}, duration="2.0")
+        data = cp.video_frame_range("v.webm", 25.0, probe)
+        self.assertEqual((data["frameEnd"], data["fps"]), (50, 25.0))
+
+    def test_unreadable_video_is_an_error_naming_it(self):
+        def missing_ffprobe(_path):
+            raise FileNotFoundError("[WinError 2] ffprobe not found")
+
+        def no_json(_path):
+            return json.loads(b"")
+
+        for probe, reason in (
+            (probed(error="Invalid data found when processing input"),
+             "Invalid data found"),
+            (probed({"codec_type": "audio"}, duration="2"),
+             "no video stream"),
+            (probed({"codec_type": "video", "r_frame_rate": "24/1"}),
+             "neither the frame count nor the duration"),
+            (missing_ffprobe, "ffprobe not found"),
+            (no_json, "JSONDecodeError|Expecting value"),
+            (lambda _path: None, "no video stream"),
+        ):
+            with self.assertRaisesRegex(cp.PublishError, reason) as ctx:
+                cp.video_frame_range("/stage/broken.mp4", 25.0, probe)
+            self.assertIn("/stage/broken.mp4", str(ctx.exception))
+
+
 class ReviewFixTests(unittest.TestCase):
     def no_jobs_api(self):
         error = BridgeError("HTTP 404", "http_404")

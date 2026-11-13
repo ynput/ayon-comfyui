@@ -99,6 +99,16 @@ export class AyonBridge extends EventTarget {
       this.emit()
       return true
     })
+    // Something the AYON host tells the artist (e.g. why a load uploaded
+    // files instead of referencing them), shown like the bridge's own
+    // notices.
+    this.register("showNotice", (data) => {
+      const message = data?.message
+      if (typeof message === "string" && message) {
+        this.dispatchEvent(new CustomEvent("notice", {detail: message}))
+      }
+      return true
+    })
   }
 
   get connected() {

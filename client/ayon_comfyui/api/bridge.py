@@ -38,6 +38,7 @@ from ayon_comfyui.api.menu_actions import (
     save_current_workfile,
     show_tool_by_name,
 )
+from ayon_comfyui.api.pickers import register_picker_handlers
 from ayon_comfyui.api.rpc_stub import RPCStub
 
 if TYPE_CHECKING:
@@ -162,6 +163,9 @@ class ComfyUIBridge(QtCore.QObject):
         self._failed = False
         self._sig_call.connect(self._run_callable)
         self._sig_event.connect(self._handle_event)
+        # After connecting `_sig_call`: registering warms the loaders on the
+        # Qt main thread through it.
+        register_picker_handlers(self)
 
         self._window = SessionWindow(self)
         self._timer = QtCore.QTimer(self)
@@ -463,6 +467,27 @@ class ComfyUIBridge(QtCore.QObject):
         def _log_failure(done: concurrent.futures.Future) -> None:
             if not done.cancelled() and done.exception() is not None:
                 log.debug("Unable to send session info: %s", done.exception())
+
+        future.add_done_callback(_log_failure)
+
+    def show_notice(self, message: str) -> None:
+        """Show `message` to the artist in the ComfyUI tab, as a warning.
+
+        Doesn't wait for the tab. Without a tab, or with one older than
+        this addon, nothing is shown; log the message as well.
+        """
+        try:
+            future = self.client.call_nowait(
+                "showNotice", {"message": message}
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("Unable to show a notice in ComfyUI", exc_info=True)
+            return
+
+        def _log_failure(done: concurrent.futures.Future) -> None:
+            if not done.cancelled() and done.exception() is not None:
+                log.debug("Unable to show a notice in ComfyUI: %s",
+                          done.exception())
 
         future.add_done_callback(_log_failure)
 

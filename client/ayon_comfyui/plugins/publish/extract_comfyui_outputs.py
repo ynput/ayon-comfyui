@@ -6,6 +6,7 @@ import os
 from typing import ClassVar
 
 import pyblish.api
+from ayon_core.lib.transcoding import get_ffprobe_data
 from ayon_core.pipeline.publish import KnownPublishError
 from ayon_core.pipeline.publish.lib import get_instance_staging_dir
 
@@ -30,9 +31,14 @@ class ExtractComfyUIOutputs(pyblish.api.InstancePlugin):
     from this session's ComfyUI URL, never from URLs given by the browser.
 
     - Images: one (sequence) representation for review, plus the first
-      image as thumbnail.
-    - Videos: the video for review, plus the save node's thumbnail.
+      image as thumbnail. Frames 1 to the number of images.
+    - Videos: the video for review, plus the save node's thumbnail. The
+      frame range and frame rate are the video's own, read with ffprobe.
     - Models: the model file(s).
+
+    Reviewables get their frame range here, as only now the files exist;
+    Extract Review needs it. Images and videos without their own frame
+    rate use the instance's, else the context's.
     """
 
     order = pyblish.api.ExtractorOrder - 0.44
@@ -93,6 +99,9 @@ class ExtractComfyUIOutputs(pyblish.api.InstancePlugin):
         }
         if product_type in {"image", "render"}:
             representation["tags"] = ["review"]
+            instance.data.update(
+                self._frame_range(instance, staging_dir, names)
+            )
         representations.append(representation)
 
         thumbnail = None
@@ -108,6 +117,46 @@ class ExtractComfyUIOutputs(pyblish.api.InstancePlugin):
                 "stagingDir": staging_dir,
                 "tags": ["thumbnail"],
             })
+
+    def _frame_range(
+        self,
+        instance: pyblish.api.Instance,
+        staging_dir: str,
+        names: list[str],
+    ) -> dict:
+        """Return the frame range of an image or video product's outputs.
+
+        Extract Review (and Integrate's version data) read it from the
+        instance only, so it isn't set on the representation; there a
+        `frameStart` would also renumber an image sequence.
+
+        A video ffprobe can't read fails the publish rather than skipping
+        its review: Extract Review reads it with ffmpeg as well, so keeping
+        the review would only fail there with a less clear error, and
+        dropping it would publish a probably broken video without the
+        review the artist expects, behind a warning that's easily missed.
+        """
+        fps = instance.data.get("fps") or instance.context.data.get("fps")
+        if instance.data.get("productType") == "image":
+            data = comfy_publish.frame_range(len(names), fps)
+        else:
+            try:
+                data = comfy_publish.video_frame_range(
+                    os.path.join(staging_dir, names[0]),
+                    fps,
+                    lambda path: get_ffprobe_data(path, logger=self.log),
+                )
+            except comfy_publish.PublishError as exc:
+                msg = (
+                    f"{exc} Its review can't be made. Check the video in "
+                    "ComfyUI's output folder and run the workflow again."
+                )
+                raise KnownPublishError(msg) from exc
+        self.log.debug(
+            "Frame range %s-%s at %s fps.",
+            data["frameStart"], data["frameEnd"], data["fps"],
+        )
+        return data
 
     @staticmethod
     def _check_extension(product_type: str | None, ext: str) -> None:

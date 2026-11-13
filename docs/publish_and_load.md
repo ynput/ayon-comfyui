@@ -74,27 +74,37 @@ In the Loader's options, **Reference files on the ComfyUI server** makes the
 load node read the published files where they are, without copying them:
 quicker for large plates, and a hero version republished in place is picked
 up by the next run. AYON only references the files when the ComfyUI server
-reports it can read them; otherwise it uploads them as before. Updating a
-container keeps its mode.
+reports it can read them; otherwise it uploads them as before, and says why
+in the Loader's log and as a warning in the ComfyUI tab (e.g. ComfyUI has
+no such AYON root, or ignores it). Updating a container keeps its mode.
 
 The ComfyUI server must know where the AYON roots are on its side:
 
 - `AYON_COMFYUI_ROOTS`: a JSON object of root name to path, e.g.
   `{"work": "/mnt/projects"}`, or the path of a JSON file with it.
 - `<ComfyUI user directory>/__ayon/roots.json`, with the same object.
-- `AYON_COMFYUI_PROJECTS` (optional): project folders below the roots that
-  may be read, as a JSON list or comma separated.
+- `AYON_COMFYUI_PROJECTS`: project folders below the roots that may be
+  read, as a JSON list or comma separated. Optional, except for a root
+  that is a whole drive or share (see below).
 
 When AYON launches ComfyUI locally it sets `AYON_COMFYUI_ROOTS` to this
 machine's roots and `AYON_COMFYUI_PROJECTS` to the current project. For a
 remote or shared ComfyUI, its administrator configures them.
 
+A root that is a whole drive, share or filesystem (`P:\`, `\\nas\share`,
+`/`) is only used while `AYON_COMFYUI_PROJECTS` limits it to project
+folders; without that ComfyUI ignores the root (and logs why), so loads
+upload instead. AYON sets both when it launches ComfyUI locally, so
+projects on a drive letter or a share root can be referenced there; with
+an explicit `AYON_COMFYUI_ROOTS`, set `AYON_COMFYUI_PROJECTS` as well.
+
 !!! warning
     Anyone who can queue prompts on that ComfyUI can read media files below
     the configured roots through an AYON load node. On a shared server, map
     roots narrowly and set `AYON_COMFYUI_PROJECTS`, or don't configure roots
-    (loading then always uploads). A root may not be a whole drive or
-    filesystem.
+    (loading then always uploads). With `AYON_COMFYUI_PROJECTS` set, only
+    files inside those project folders can be read, which is why a whole
+    drive is only accepted as a root with it.
 
 ## Requirements
 
