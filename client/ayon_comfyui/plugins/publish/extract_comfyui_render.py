@@ -86,7 +86,7 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
                     "the collected workflow."
                 )
                 raise KnownPublishError(msg)
-            # What actually runs, for provenance.
+            # What actually runs, for later plugins to describe the run.
             data.update(
                 prompt=api_prompt["prompt"],
                 workflow=api_prompt.get("workflow"),
