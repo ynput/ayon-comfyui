@@ -92,9 +92,11 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
     def save_workfile(self, dst_path: str | None = None) -> None:
         """Save the active ComfyUI workflow to `dst_path`.
 
-        When `dst_path` is not passed, saves to the current workfile path.
+        When `dst_path` is not passed, saves to the current workfile path,
+        unless the user switched tabs since it was queried.
         """
-        if dst_path is None:
+        in_place = dst_path is None
+        if in_place:
             dst_path = self.get_current_workfile()
             if not dst_path:
                 msg = (
@@ -102,10 +104,8 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
                     "Use the Workfiles tool to save it."
                 )
                 raise RuntimeError(msg)
-            self.stub.save_workfile(dst_path, in_place=True)
-            return
 
-        self.stub.save_workfile(dst_path)
+        self.stub.save_workfile(dst_path, in_place=in_place)
 
     @property
     def stub(self) -> RPCStub:
