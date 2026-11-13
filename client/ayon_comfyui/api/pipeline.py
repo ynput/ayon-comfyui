@@ -199,6 +199,104 @@ def list_instances() -> list[dict[str, Any]]:
     return instances or []
 
 
+VERSION_MODE_LATEST = "latest"
+VERSION_MODE_PINNED = "pinned"
+VERSION_MODES = (VERSION_MODE_LATEST, VERSION_MODE_PINNED)
+
+
+def build_selection(context: dict, version_mode: str) -> dict:
+    """Return what the AYON pickers on a load node show and keep.
+
+    Stored in the container as `selection`: ids with their labels, so the
+    node can show what it loads while AYON isn't connected, and recognize
+    renamed entities by id. Only `version_mode` is an intent of its own;
+    everything else is derived from the loaded representation's context.
+    Node execution ignores it.
+    """
+    if version_mode not in VERSION_MODES:
+        version_mode = VERSION_MODE_PINNED
+    folder = context["folder"]
+    product = context["product"]
+    version = context["version"]
+    representation = context["representation"]
+    return {
+        "project_name": context["project"]["name"],
+        "folder_id": folder["id"],
+        "folder_path": folder["path"],
+        "product_id": product["id"],
+        "product_name": product["name"],
+        "version_mode": version_mode,
+        "version_id": version["id"],
+        "version": version["version"],
+        "representation_id": representation["id"],
+        "representation_name": representation["name"],
+    }
+
+
+def resolve_version_mode(context: dict, previous_mode: str | None) -> str:
+    """Return the version mode to keep after loading `context`.
+
+    A container stays on "latest" only when the loaded version is the
+    product's latest one, e.g. a Scene Inventory "set version v003" on a
+    node that followed the latest version pins it to v003.
+    """
+    if previous_mode != VERSION_MODE_LATEST:
+        return VERSION_MODE_PINNED
+    import ayon_api  # noqa: PLC0415
+
+    last_version = ayon_api.get_last_version_by_product_id(
+        context["project"]["name"],
+        context["product"]["id"],
+        fields={"id"},
+    )
+    if last_version and last_version["id"] == context["version"]["id"]:
+        return VERSION_MODE_LATEST
+    return VERSION_MODE_PINNED
+
+
+def make_container(  # noqa: PLR0913
+    *,
+    name: str,
+    namespace: str | None,
+    context: dict,
+    image_upload_info: dict | list[dict],
+    loader: str | None = None,
+    container_uuid: str | None = None,
+    version_mode: str = VERSION_MODE_PINNED,
+    suffix: str = "_CON",
+) -> dict:
+    """Return the container data of a load node, without imprinting it.
+
+    Arguments:
+        name (str): Name of resulting assembly
+        namespace (str): Namespace under which to host container
+        context (dict): Representation context that is loaded.
+        image_upload_info (dict, list[dict]): Uploaded image information,
+            gotten back from /upload/image endpoint
+        loader (str, optional): Name of loader used to produce this container.
+        container_uuid (str, optional): Keep this container identifier,
+            e.g. when loading into an existing node; a new one by default.
+        version_mode (str): "latest" or "pinned", see `build_selection`.
+        suffix (str, optional): Suffix of container, defaults to `_CON`.
+    """
+    if isinstance(image_upload_info, dict):
+        image_upload_info = [image_upload_info]
+
+    return {
+        "schema": "ayon:container-3.0",
+        "id": AYON_CONTAINER_ID,
+        "name": name,
+        "namespace": namespace,
+        "loader": str(loader),
+        "image_upload_info": image_upload_info,
+        "representation": context["representation"]["id"],
+        "project_name": context["project"]["name"],
+        "container_uuid": container_uuid or str(uuid4()),
+        "container_name": name + suffix,
+        "selection": build_selection(context, version_mode),
+    }
+
+
 def containerise(  # noqa: PLR0913, PLR0917
     name: str,
     namespace: str,
@@ -224,24 +322,14 @@ def containerise(  # noqa: PLR0913, PLR0917
     Returns:
         container (str): Name of container assembly
     """
-    # TODO(@sas): Retrieve filename and store in container dict.
-
-    container_name = name + suffix
-
-    if isinstance(image_upload_info, dict):
-        image_upload_info = [image_upload_info]
-
-    data = {
-        "schema": "ayon:container-3.0",
-        "id": AYON_CONTAINER_ID,
-        "name": name,
-        "namespace": namespace,
-        "loader": str(loader),
-        "image_upload_info": image_upload_info,
-        "representation": context["representation"]["id"],
-        "container_uuid": str(uuid4()),
-        "container_name": container_name,
-    }
+    data = make_container(
+        name=name,
+        namespace=namespace,
+        context=context,
+        image_upload_info=image_upload_info,
+        loader=loader,
+        suffix=suffix,
+    )
     stub = get_stub()
 
     # TODO(@sas): Expand stub logic to keep track of containers separately,

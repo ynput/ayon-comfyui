@@ -11,13 +11,20 @@ from ayon_core.pipeline import (
     Creator,
     LoaderPlugin,
 )
+from ayon_core.pipeline.load import LoadError
 
 if TYPE_CHECKING:
     from ayon_core.pipeline.create.context import CreateContext
 
 from ayon_comfyui.api.bridge import get_bridge, get_stub
-from ayon_comfyui.api.pipeline import list_instances
-from ayon_comfyui.api.rpc_stub import RPCStub
+from ayon_comfyui.api.pipeline import (
+    build_selection,
+    list_instances,
+    make_container,
+    resolve_version_mode,
+)
+from ayon_comfyui.api.rpc_stub import LoadType, RPCStub
+from ayon_comfyui.api.upload_util import upload_input_images
 
 
 class ComfyUICreator(Creator):
@@ -137,10 +144,19 @@ class ComfyUIAutoCreator(AutoCreator):
 
 
 class ComfyUILoader(LoaderPlugin):
-    """Base for loader plugins."""
+    """Base for loader plugins.
+
+    Loading uploads the representation's files to ComfyUI's input directory
+    and puts the resulting container on an `AYON Load ...` node of type
+    `load_type`. `build_container` does the upload and returns the container
+    without touching the graph; it is shared by load, update/switch and the
+    AYON pickers on the nodes (`ayon_comfyui.api.pickers`).
+    """
 
     hosts: ClassVar[list[str]] = ["comfyui"]
     settings_category = "comfyui"
+
+    load_type: ClassVar[LoadType] = LoadType.IMAGE
 
     @property
     def stub(self) -> RPCStub:
@@ -151,3 +167,103 @@ class ComfyUILoader(LoaderPlugin):
     def comfy_url(self) -> str:
         """Return the URL of ComfyUI this session is connected to."""
         return get_bridge().comfy_url
+
+    def get_upload_files(self, context: dict) -> list[str]:
+        """Return the files of the representation to upload to ComfyUI."""
+        return [self.filepath_from_context(context=context)]
+
+    def build_container(  # noqa: PLR0913
+        self,
+        context: dict,
+        container: dict | None = None,
+        *,
+        name: str | None = None,
+        namespace: str | None = None,
+        container_uuid: str | None = None,
+        version_mode: str | None = None,
+    ) -> dict:
+        """Upload the files of `context` and return the container.
+
+        Arguments:
+            context: Representation context to load.
+            container: Existing container to update. Its identity, upload
+                subfolder and other keys are kept.
+            name: Name of a new container, defaults to the product name.
+            namespace: Namespace of a new container.
+            container_uuid: Identifier of a new container, e.g. of a node
+                that is loaded into; a new one by default.
+            version_mode: "latest" or "pinned". By default an updated
+                container keeps "latest" only while it loads the latest
+                version, see `resolve_version_mode`.
+        """
+        previous_selection = (container or {}).get("selection") or {}
+        if version_mode is None:
+            version_mode = resolve_version_mode(
+                context, previous_selection.get("version_mode")
+            )
+
+        if name is None:
+            name = context["product"]["name"]
+        subfolder = ""
+        if container is not None:
+            upload_infos = container.get("image_upload_info") or []
+            if upload_infos:
+                subfolder = upload_infos[0].get("subfolder") or ""
+        if not subfolder:
+            subfolder = f"{namespace}_{name}" if namespace else name
+
+        image_upload_info = upload_input_images(
+            self.get_upload_files(context), self.comfy_url, subfolder=subfolder
+        )
+        if not image_upload_info:
+            msg = (
+                "Unable to upload "
+                f"{context['representation']['name']} to ComfyUI."
+            )
+            raise LoadError(msg)
+
+        if container is None:
+            return make_container(
+                name=name,
+                namespace=namespace,
+                context=context,
+                image_upload_info=image_upload_info,
+                loader=self.__class__.__name__,
+                container_uuid=container_uuid,
+                version_mode=version_mode,
+            )
+
+        container = dict(container)
+        container["representation"] = context["representation"]["id"]
+        container["project_name"] = context["project"]["name"]
+        container["image_upload_info"] = image_upload_info
+        container["selection"] = build_selection(context, version_mode)
+        return container
+
+    def load(
+        self,
+        context: dict,
+        name: str | None = None,
+        namespace: str | None = None,
+        options: dict | None = None,  # noqa: ARG002
+    ) -> None:
+        """Upload the representation and add a load node for it."""
+        container = self.build_container(
+            context, name=name, namespace=namespace
+        )
+        self.stub.add_containers(container)
+        self.stub.create_load_node(container, self.load_type)
+
+    def update(self, container: dict, context: dict) -> None:
+        """Upload the new representation and update the container."""
+        container = self.build_container(context, container)
+        self.stub.update_containers(container)
+
+    def switch(self, container: dict, context: dict) -> None:
+        """Switch the container to another representation."""
+        self.update(container=container, context=context)
+
+    def remove(self, container: dict) -> None:
+        """Remove container from context and scene."""
+        self.stub.remove_containers(container)
+        self.stub.remove_load_nodes(container, self.load_type)

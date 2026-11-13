@@ -9,9 +9,8 @@ import clique
 
 from ayon_core.lib.transcoding import IMAGE_EXTENSIONS
 
-from ayon_comfyui.api.pipeline import containerise
 from ayon_comfyui.api.plugin import ComfyUILoader
-from ayon_comfyui.api.upload_util import upload_input_images
+from ayon_comfyui.api.rpc_stub import LoadType
 
 
 class ImageLoader(ComfyUILoader):
@@ -26,72 +25,11 @@ class ImageLoader(ComfyUILoader):
     icon = "image"
     order = -10
 
-    def load(
-        self,
-        context: dict,
-        name: str | None = None,
-        namespace: str | None = None,
-        options: dict | None = None,
-    ) -> None:
-        """Load asset via database.
+    load_type = LoadType.IMAGE
 
-        Arguments:
-            context (dict): Full parenthood of representation to load
-            name (str, optional): Use pre-defined name
-            namespace (str, optional): Use pre-defined namespace
-            options (dict, optional): Additional settings dictionary
-        """
-        # Retrieve filepath
-        filepaths = self.expand_files_if_sequence(context)
-        self.log.debug(filepaths)
-        folder = f"{namespace}_{name}" if namespace else name
-        # Upload image to ComfyUI.
-        # TODO(@sas): Maybe fire this off in a thread,
-        #             and infer the upload info.
-        image_upload_info = upload_input_images(
-            filepaths, self.comfy_url, subfolder=folder
-        )
-
-        # containerizing also adds to context.
-        container: dict = containerise(
-            name=name,
-            namespace=namespace,
-            context=context,
-            image_upload_info=image_upload_info,
-            loader=self.__class__.__name__,
-        )
-
-        # Create the image loader node with the data on it.
-        self.stub.create_load_node(container)
-
-    def remove(self, container: dict) -> None:
-        """Remove container from context and scene."""
-        self.stub.remove_containers(container)
-        self.stub.remove_load_nodes(container)
-
-    def update(self, container: dict, context: dict) -> None:
-        """Update container with new uploded file."""
-        # Retrieve filepaths
-        # filepath = self.filepath_from_context(context=context)
-        filepaths = self.expand_files_if_sequence(context)
-        # Upload image to ComfyUI.
-        # TODO(@sas): Maybe fire this off in a thread,
-        #             and infer the upload info.
-
-        old_subfolder = next(iter(container["image_upload_info"]))["subfolder"]
-
-        image_upload_info = upload_input_images(
-            filepaths, self.comfy_url, subfolder=old_subfolder
-        )
-
-        container["representation"] = context["representation"]["id"]
-        container["image_upload_info"] = image_upload_info
-
-        self.stub.update_containers(container)
-
-    def switch(self, container: dict, context: dict) -> None:
-        """Provide interface for switching calls."""
-        self.update(container=container, context=context)
+    def get_upload_files(self, context: dict) -> list[str]:
+        """Return all images of the sequence, if it is one."""
+        return self.expand_files_if_sequence(context)
 
     def expand_files_if_sequence(self, context: dict) -> list[str]:
         """Return all images in sequence if appliccable."""
