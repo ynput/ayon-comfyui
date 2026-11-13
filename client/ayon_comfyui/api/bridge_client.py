@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 PROTOCOL = 1
 MAX_MSG_SIZE = 64 * 1024 * 1024
 HEARTBEAT = 30.0
+HANDSHAKE_TIMEOUT = 30.0
 RECONNECT_DELAYS = (0.5, 1.0, 2.0, 3.0, 5.0)
 
 CLOSE_REJECTED = 4001
@@ -329,12 +330,18 @@ class BridgeClient:
         async with aiohttp.ClientSession() as session:
             while not self._stopping:
                 try:
-                    async with session.ws_connect(
-                        self.ws_url,
-                        heartbeat=HEARTBEAT,
-                        max_msg_size=MAX_MSG_SIZE,
-                        **ssl_kwargs,
-                    ) as ws:
+                    # Don't wait forever on a server that accepts the
+                    # connection but never answers the handshake.
+                    ws = await asyncio.wait_for(
+                        session.ws_connect(
+                            self.ws_url,
+                            heartbeat=HEARTBEAT,
+                            max_msg_size=MAX_MSG_SIZE,
+                            **ssl_kwargs,
+                        ),
+                        HANDSHAKE_TIMEOUT,
+                    )
+                    async with ws:
                         self._ws = ws
                         attempt = 0
                         fatal = await self._session(ws)
