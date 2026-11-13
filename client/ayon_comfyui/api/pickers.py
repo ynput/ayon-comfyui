@@ -150,6 +150,63 @@ def _default_loaders() -> dict[str, type]:
     return loaders
 
 
+_loaders_cache = _Cache()
+
+
+def loaders_by_node_type() -> dict[str, type]:
+    """Return the ComfyUI loader plugin for each load node type.
+
+    Cached: the Loader asks for every representation it lists.
+    """
+    return _loaders_cache.get("loaders", _default_loaders)
+
+
+# --- "Open AYON Loader" for one node -----------------------------------------
+#
+# A node's "Open AYON Loader..." button makes it the load target of this
+# session and opens the AYON Loader; its "Load into waiting ComfyUI node"
+# action (`plugins/load/load_into_node.py`) loads the chosen representation
+# into that node. One target at a time; it ends when it is used, when the
+# Loader closes, or after LOAD_TARGET_TTL.
+
+LOAD_TARGET_TTL = 30 * 60.0
+MIN_BROWSE_INTERVAL = 1.0
+
+_load_target_lock = threading.Lock()
+_load_target: dict | None = None
+
+
+def get_load_target() -> dict | None:
+    """Return the node waiting for a representation from the Loader."""
+    with _load_target_lock:
+        target = _load_target
+        if target and time.monotonic() - target["at"] > LOAD_TARGET_TTL:
+            return None
+        return dict(target) if target else None
+
+
+def set_load_target(target: dict | None) -> dict | None:
+    """Replace the load target; return the previous one."""
+    global _load_target  # noqa: PLW0603
+    with _load_target_lock:
+        previous = _load_target
+        _load_target = dict(target, at=time.monotonic()) if target else None
+    return previous
+
+
+def take_load_target(token: str | None = None) -> dict | None:
+    """Return and end the load target (only `token`'s, when given)."""
+    global _load_target  # noqa: PLW0603
+    with _load_target_lock:
+        target = _load_target
+        if target is None or (token and target["token"] != token):
+            return None
+        _load_target = None
+    if time.monotonic() - target["at"] > LOAD_TARGET_TTL:
+        return None
+    return target
+
+
 class PickerService:
     """Answers the pickers' queries and loads picked representations.
 
@@ -183,6 +240,7 @@ class PickerService:
         self._apply_lock = threading.Lock()
         self._apply_times: deque[float] = deque()
         self._applying: set[str] = set()
+        self._last_browse = 0.0
 
     def clear_cache(self) -> None:
         """Forget cached query results, e.g. after a context change."""
@@ -438,6 +496,38 @@ class PickerService:
 
     # --- loading ------------------------------------------------------------
 
+    def validate_browse(self, params: dict) -> dict:
+        """Check an "Open AYON Loader" request from the tab."""
+        token = params.get("token")
+        if not isinstance(token, str) or not _TOKEN.match(token):
+            msg = "Invalid token."
+            raise PickerError(msg)
+        container_uuid = params.get("container_uuid")
+        if container_uuid in {None, ""}:
+            container_uuid = None
+        elif not (
+            isinstance(container_uuid, str)
+            and _CONTAINER_UUID.match(container_uuid)
+        ):
+            msg = "Invalid container_uuid."
+            raise PickerError(msg)
+        title = params.get("title")
+        if not isinstance(title, str):
+            title = ""
+        node_type = _node_type(params)
+        now = time.monotonic()
+        with self._apply_lock:
+            if now - self._last_browse < MIN_BROWSE_INTERVAL:
+                msg = "The AYON Loader is opening."
+                raise PickerError(msg)
+            self._last_browse = now
+        return {
+            "token": token,
+            "node_type": node_type,
+            "container_uuid": container_uuid,
+            "title": title[:MAX_NAME_LENGTH],
+        }
+
     def validate_apply(self, params: dict) -> dict:
         """Check a load request from the tab and reserve its node.
 
@@ -560,6 +650,18 @@ class PickerService:
         )
 
 
+# Errors for a node that waits for the Loader; the tab shows them quietly.
+LOADER_TARGET_REPLACED = "The AYON Loader was opened for another node."
+LOADER_CLOSED = "The AYON Loader was closed."
+
+
+def open_loader() -> Any:  # noqa: ANN401
+    """Show the AYON Loader (on the Qt main thread); return its window."""
+    from ayon_core.tools.utils import host_tools  # noqa: PLC0415
+
+    return host_tools.show_loader(use_context=True)
+
+
 def register_picker_handlers(
     bridge: ComfyUIBridge, service: PickerService | None = None
 ) -> PickerService:
@@ -612,6 +714,51 @@ def register_picker_handlers(
     client.register_handler("picker.options", _query(service.options))
     client.register_handler("picker.status", _query(service.status))
     client.register_handler("picker.apply", _apply)
+
+    def _browse(params: dict) -> dict:
+        request = service.validate_browse(params)
+        bridge.run_in_main_thread(partial(_open_loader, request))
+        return {"scheduled": True}
+
+    def _notify(token: str, error: str) -> None:
+        try:
+            bridge.stub.picker_applied(token, error=error)
+        except Exception:  # noqa: BLE001
+            log.debug("Unable to notify the ComfyUI tab", exc_info=True)
+
+    def _open_loader(request: dict) -> None:
+        previous = set_load_target(request)
+        if previous and previous["token"] != request["token"]:
+            _notify(previous["token"], LOADER_TARGET_REPLACED)
+        try:
+            window = open_loader()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Unable to open the AYON Loader", exc_info=True)
+            take_load_target(request["token"])
+            _notify(request["token"], f"Unable to open the Loader: {exc}")
+            return
+        _watch_loader_close(window)
+
+    watched: list = []
+
+    def _watch_loader_close(window: Any) -> None:  # noqa: ANN401
+        """End the load target when the Loader window closes."""
+        if window is None or any(item is window for item in watched):
+            return
+        from qtpy import QtCore  # noqa: PLC0415
+
+        class _CloseFilter(QtCore.QObject):
+            def eventFilter(self, obj, event):  # noqa: ANN001, ANN202, N802, PLR6301
+                if event.type() == QtCore.QEvent.Close:
+                    target = take_load_target()
+                    if target:
+                        _notify(target["token"], LOADER_CLOSED)
+                return False
+
+        window.installEventFilter(_CloseFilter(window))
+        watched.append(window)
+
+    client.register_handler("picker.browse", _browse)
 
     def _on_context_changed(*_args: Any) -> None:  # noqa: ANN401
         service.clear_cache()

@@ -49,6 +49,15 @@ const WIDGETS = {
   representation: ["ayon_pick_representation", "representation"],
 }
 const STATUS_WIDGET = "ayon_pick_status"
+const LOADER_WIDGET = "ayon_pick_loader"
+const WAITING_FOR_LOADER =
+  "waiting for the AYON Loader: use 'Load into waiting ComfyUI node'"
+// Errors the AYON host sends when the Loader was closed or opened for
+// another node: not worth a toast.
+const QUIET_LOADER_ERRORS = [
+  "The AYON Loader was opened for another node.",
+  "The AYON Loader was closed.",
+]
 
 export function parse_json(text) {
   if (typeof text !== "string" || !text) {
@@ -169,6 +178,12 @@ export class LoadPicker {
     this.status_widget = add_ui_widget(
       node, "button", STATUS_WIDGET, "AYON", () => this.on_status_click(), {}
     )
+    this.loader_widget = add_ui_widget(
+      node, "button", LOADER_WIDGET, "Open AYON Loader…",
+      () => this.open_loader(), {}
+    )
+    // Token of an open "Open AYON Loader" request.
+    this.browse_token = null
     this.sync_from_container()
   }
 
@@ -335,6 +350,9 @@ export class LoadPicker {
         this.set_state("update")
       } else {
         this.set_state("ok")
+      }
+      if (this.browse_token) {
+        this.set_state("busy", WAITING_FOR_LOADER)
       }
     } catch (err) {
       if (generation === this.generation) {
@@ -543,12 +561,61 @@ export class LoadPicker {
     }, APPLY_TIMEOUT_MS)
   }
 
+  // Let the artist pick in the AYON Loader what this node loads.
+  async open_loader() {
+    if (this.applying) {
+      return
+    }
+    if (!this.hub.connected) {
+      this.hub.toast("warn", this.hub.not_connected_message())
+      return
+    }
+    const container = this.container()
+    let container_uuid = container?.container_uuid ?? null
+    if (container_uuid && this.hub.shares_container(this.node, container)) {
+      container_uuid = null
+    }
+    if (this.browse_token) {
+      this.hub.pending.delete(this.browse_token)
+    }
+    const token = new_token()
+    this.browse_token = token
+    this.hub.pending.set(token, {picker: this, root: root_graph_of(this.node)})
+    this.set_state("busy", WAITING_FOR_LOADER)
+    try {
+      await this.hub.call("picker.browse", {
+        token,
+        node_type: this.node_type,
+        container_uuid,
+        title: this.node.title ?? "",
+      })
+    } catch (err) {
+      this.hub.pending.delete(token)
+      if (this.browse_token === token) {
+        this.browse_token = null
+        this.fail(error_message(err))
+      }
+    }
+  }
+
+  // Whether `token` is this node's pending load or Loader request; ends it.
+  take_token(token) {
+    if (token && token === this.applying) {
+      this.applying = null
+      return true
+    }
+    if (token && token === this.browse_token) {
+      this.browse_token = null
+      return true
+    }
+    return false
+  }
+
   // AYON loaded the selection: put the container on the node.
   applied(token, container) {
-    if (this.applying !== token) {
+    if (!this.take_token(token)) {
       return false
     }
-    this.applying = null
     const widget = find_widget(this.node, CONTAINER_WIDGET)
     if (!widget) {
       this.fail("The node has no AYON container input")
@@ -567,10 +634,13 @@ export class LoadPicker {
   }
 
   failed(token, message) {
-    if (this.applying !== token) {
+    if (!this.take_token(token)) {
       return
     }
-    this.applying = null
+    if (QUIET_LOADER_ERRORS.includes(message)) {
+      this.refresh()
+      return
+    }
     this.fail(message)
   }
 
@@ -601,6 +671,7 @@ export class LoadPicker {
   dispose() {
     this.generation += 1
     this.applying = null
+    this.browse_token = null
     this.hub.forget(this)
   }
 }
@@ -840,7 +911,10 @@ export class PickerHub {
     if (!attached) {
       // The node was removed, or the artist switched to another workflow;
       // never write into whatever graph is open now.
-      picker.applying = null
+      picker.take_token(token)
+      if (params.error) {
+        return false
+      }
       this.toast("warn",
         "AYON finished loading after the node was removed or its " +
         "workflow was closed; nothing was changed.")
