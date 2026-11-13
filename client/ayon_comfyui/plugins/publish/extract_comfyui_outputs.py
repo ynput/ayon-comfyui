@@ -19,7 +19,7 @@ from ayon_comfyui.api.publish_lib import (
 VIDEO_EXTENSIONS = {".mp4", ".webm"}
 MODEL_EXTENSIONS = {
     ".gltf", ".glb", ".obj", ".fbx", ".stl", ".spz", ".splat", ".ply",
-    ".ksplat",
+    ".ksplat", ".usdz",
 }
 
 

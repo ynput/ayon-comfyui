@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import struct
+import time
 import uuid
 from fractions import Fraction
 from secrets import token_hex
@@ -42,6 +43,9 @@ AYON_OUTPUT_ROOT = "AYON"
 # (the newest), so publishing an earlier run still finds its files without
 # the output directory growing forever.
 KEEP_RUNS_PER_INSTANCE = 5
+# ...and never delete runs younger than this (seconds), since copies of a
+# workfile (other artists, on a shared ComfyUI) write to the same folder.
+KEEP_RUNS_MIN_AGE = 24 * 60 * 60
 
 _UNSAFE_ID_CHARS = re.compile(r"[^A-Za-z0-9_-]")
 _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
@@ -121,16 +125,24 @@ def staging_folder(ayon_json: dict) -> tuple[str, str, str, str]:
 
 
 def prune_old_runs(instance_folder: str, keep: str) -> None:
-    """Delete all but the newest run folders of an instance."""
+    """Delete an instance's run folders beyond the newest, once old."""
     try:
         runs = [
             entry for entry in os.scandir(instance_folder)
             if entry.is_dir(follow_symlinks=False) and entry.path != keep
         ]
         runs.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+        cutoff = time.time() - KEEP_RUNS_MIN_AGE
     except OSError:
         return
     for entry in runs[KEEP_RUNS_PER_INSTANCE - 1:]:
+        try:
+            if entry.stat().st_mtime > cutoff:
+                # Recent: e.g. another artist working on a copy of this
+                # workfile may be about to publish it.
+                continue
+        except OSError:
+            continue
         shutil.rmtree(entry.path, ignore_errors=True)
         log.debug("AYON: Removed old outputs %s", entry.path)
 

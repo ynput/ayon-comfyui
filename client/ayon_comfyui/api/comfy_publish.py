@@ -247,7 +247,13 @@ def cancel_prompt(http: Http, prompt_id: str) -> bool:
     # ComfyUI without the jobs API.
     try:
         http.http_json("POST", "/queue", json={"delete": [prompt_id]})
-        http.http_json("POST", "/interrupt", json={"prompt_id": prompt_id})
+        # An older `/interrupt` ignores the prompt id and stops whatever
+        # runs, maybe someone else's render: only call it for ours.
+        state = queue_state(http.http_json("GET", "/queue"), prompt_id)
+        if state == "running":
+            http.http_json(
+                "POST", "/interrupt", json={"prompt_id": prompt_id}
+            )
     except BridgeError as exc:
         log.warning("Unable to cancel ComfyUI run %s: %s", prompt_id, exc)
         return False
@@ -477,10 +483,10 @@ def run_from_history(
             f"{prompt_id}."
         )
         raise PublishError(msg)
-    expected = f"{AYON_OUTPUT_ROOT}/{instance_id}/"
     for file in files:
-        subfolder = view_params(file)["subfolder"] + "/"
-        if not subfolder.startswith(expected):
+        # Exactly `AYON/<instance id>/<run folder>`.
+        parts = view_params(file)["subfolder"].split("/")
+        if len(parts) != 3 or parts[:2] != [AYON_OUTPUT_ROOT, instance_id]:  # noqa: PLR2004
             msg = (
                 f"The AYON save node {node_id} reported a file outside its "
                 f"output folder: {file!r}"
@@ -662,6 +668,8 @@ def view_params(file: dict) -> dict:
         or os.path.basename(filename) != filename
         or "/" in filename
         or "\\" in filename
+        # Drive letters and NTFS alternate data streams.
+        or ":" in filename
     ):
         msg = f"Refusing to download an invalid output file name: {file!r}"
         raise PublishError(msg)

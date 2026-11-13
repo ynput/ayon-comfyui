@@ -6,6 +6,7 @@ import time
 
 from ayon_comfyui.api.bridge import get_bridge
 from ayon_comfyui.api.comfy_http import ComfyHttp
+from ayon_comfyui.api.comfy_publish import PublishError
 
 #: Families of the instances made by the AYON save nodes' creators.
 OUTPUT_FAMILIES = ["image", "render", "model"]
@@ -53,28 +54,95 @@ def get_comfy_http() -> ComfyHttp:
     return ComfyHttp(get_bridge().comfy_url)
 
 
-def responsive_sleep(seconds: float) -> None:
-    """Sleep, but keep the Qt UI (e.g. the Publisher) responsive.
+class RenderCancelled(PublishError):
+    """The artist cancelled waiting for a ComfyUI render."""
+
+
+class RenderWait:
+    """Wait for a ComfyUI render without freezing the UI, and let it be
+    cancelled.
 
     Publish plugins run on the Qt main thread, so waiting for a long render
-    would otherwise freeze the Publisher and make Windows report it as not
-    responding. Only non-input events are processed (repaints, timers), so
-    nothing can be clicked meanwhile, and the Publisher only queues its next
-    step after a plugin returns.
+    would otherwise freeze the Publisher (and make Windows report it as not
+    responding), and its Stop button only acts between plugins. While
+    waiting, a small window shows the render's progress with a "Cancel
+    render" button. It is application-modal: everything repaints, but only
+    that window takes input, so nothing else runs in the middle of the
+    publish. Without a Qt application (e.g. a headless publish) it just
+    sleeps.
+
+    Use as a context manager; pass `sleep` and `progress` to
+    `comfy_publish.wait_for_prompt`.
     """
-    try:
-        from qtpy import QtCore, QtWidgets  # noqa: PLC0415
-    except ImportError:
-        time.sleep(seconds)
-        return
-    app = QtWidgets.QApplication.instance()
-    if app is None or QtCore.QThread.currentThread() != app.thread():
-        time.sleep(seconds)
-        return
-    deadline = time.monotonic() + seconds
-    while True:
-        app.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents, 50)
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._status = "queued"
+        self._started = time.monotonic()
+        self._dialog = None
+        self._app = None
+
+    def __enter__(self) -> RenderWait:
+        try:
+            from qtpy import QtCore, QtWidgets  # noqa: PLC0415
+        except ImportError:
+            return self
+        app = QtWidgets.QApplication.instance()
+        if app is None or QtCore.QThread.currentThread() != app.thread():
+            return self
+        dialog = QtWidgets.QProgressDialog(
+            self._text, "Cancel render", 0, 0, app.activeWindow()
+        )
+        dialog.setWindowTitle("AYON - ComfyUI")
+        dialog.setWindowModality(QtCore.Qt.ApplicationModal)
+        # Closing it must not quit an application that has no other window.
+        dialog.setAttribute(QtCore.Qt.WA_QuitOnClose, False)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setMinimumWidth(420)
+        dialog.show()
+        self._app = app
+        self._dialog = dialog
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._dialog is not None:
+            self._dialog.close()
+            self._dialog.deleteLater()
+            self._dialog = None
+
+    @property
+    def dialog(self):  # noqa: ANN201
+        """The progress window, None without Qt (for tests)."""
+        return self._dialog
+
+    def progress(self, message: str) -> None:
+        """Show the render's state (from `wait_for_prompt`)."""
+        self._status = message
+
+    def sleep(self, seconds: float) -> None:
+        """Sleep while keeping the UI alive.
+
+        Raises:
+            RenderCancelled: When the artist pressed "Cancel render".
+        """
+        if self._dialog is None:
+            time.sleep(seconds)
             return
-        time.sleep(min(0.05, remaining))
+        from qtpy import QtCore  # noqa: PLC0415
+
+        deadline = time.monotonic() + seconds
+        while True:
+            elapsed = time.monotonic() - self._started
+            self._dialog.setLabelText(
+                f"{self._text}\n\n{self._status}\n{elapsed:.0f} s"
+            )
+            self._app.processEvents(QtCore.QEventLoop.AllEvents, 50)
+            if self._dialog.wasCanceled():
+                msg = "The ComfyUI render was cancelled."
+                raise RenderCancelled(msg)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.05, remaining))

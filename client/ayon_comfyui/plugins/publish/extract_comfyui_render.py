@@ -16,7 +16,8 @@ from ayon_comfyui.api.publish_lib import (
     COMFYUI_KEY,
     OUTPUT_FAMILIES,
     get_comfy_http,
-    responsive_sleep,
+    RenderCancelled,
+    RenderWait,
     split_api_prompt,
 )
 
@@ -25,7 +26,8 @@ if TYPE_CHECKING:
 
 # Errors of API nodes that didn't get the artist's Comfy.org login.
 AUTH_ERROR_HINTS = re.compile(
-    r"unauthori[sz]ed|401|api[ _-]?key|log ?in|sign ?in|auth", re.IGNORECASE
+    r"\b(unauthori[sz]ed|401|api[ _-]?key|log ?in|sign ?in)\b",
+    re.IGNORECASE,
 )
 
 
@@ -116,15 +118,31 @@ class ExtractComfyUIRender(pyblish.api.ContextPlugin):
         try:
             # The wait keeps processing Qt events; hold back what the tab
             # asks for meanwhile (e.g. "Save Workfile") until it's done.
-            with get_bridge().busy():
+            products = ", ".join(
+                str(instance.data.get("productName")) for instance in instances
+            )
+            # The wait keeps processing Qt events: show the progress with a
+            # way to cancel, and hold back what the tab asks for meanwhile
+            # (e.g. "Save Workfile") until it's done.
+            with get_bridge().busy(), RenderWait(
+                f"ComfyUI is rendering {products} for publishing.\n"
+                "Cancel here, or in ComfyUI's queue, to stop it."
+            ) as waiter:
+
+                def log_progress(message: str) -> None:
+                    self.log.info(message)
+                    waiter.progress(message)
+
                 entry = comfy_publish.wait_for_prompt(
                     http,
                     prompt_id,
                     timeout=self.timeout,
-                    log_progress=self.log.info,
-                    sleep=responsive_sleep,
+                    log_progress=log_progress,
+                    sleep=waiter.sleep,
                 )
             finished = True
+        except RenderCancelled as exc:
+            raise KnownPublishError(str(exc)) from exc
         except comfy_publish.PublishError as exc:
             msg = str(exc)
             if AUTH_ERROR_HINTS.search(msg):
