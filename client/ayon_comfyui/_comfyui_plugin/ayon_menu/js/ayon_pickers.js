@@ -26,6 +26,23 @@ async function wait_for_bridge() {
   return null
 }
 
+// Run `before` right before the AYON menu's handler for `method`.
+function before_handler(bridge, method, before) {
+  const handler = bridge.handlers?.get(method)
+  if (!handler) {
+    console.warn(`AYON pickers: no '${method}' handler to precede`)
+    return
+  }
+  bridge.register(method, async (params) => {
+    try {
+      before(params)
+    } catch (err) {
+      console.warn(`AYON pickers: failed before '${method}'`, err)
+    }
+    return await handler(params)
+  })
+}
+
 // Run `after` once the AYON menu's handler for `method` is done, so the
 // pickers show changes AYON makes to load nodes directly (Loader, Scene
 // Inventory).
@@ -61,6 +78,8 @@ app.registerExtension({
       HUB.sync_container(container?.container_uuid ?? null)
     })
     after_handler(bridge, "addLoadProductNode", () => HUB.sync_container())
+    // Containers of deleted load nodes don't belong in the saved workfile.
+    before_handler(bridge, "beginSaveWorkfile", () => HUB.prune_containers())
   },
 
   beforeRegisterNodeDef(nodeType, nodeData) {

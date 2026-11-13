@@ -42,6 +42,8 @@ const APPLY_TIMEOUT_MS = 5 * 60 * 1000
 const LOADER_TARGET_TTL_MS = 30 * 60 * 1000
 const LATEST = "latest"
 const STATUS_BATCH_MS = 30
+// Representation ids per `picker.status` call (the host's limit).
+const MAX_STATUS_IDS = 500
 const REFRESH_DEBOUNCE_MS = 50
 
 const WIDGETS = {
@@ -319,7 +321,13 @@ export class LoadPicker {
         return
       }
       let warning = ""
-      if (status?.missing) {
+      let note = ""
+      if (status?.missing && !loaded_project) {
+        // Loaded before containers recorded their project: it may come
+        // from another (library) project rather than be deleted.
+        note = `What this node loads isn't in project ${project}; ` +
+          "pick to load from it"
+      } else if (status?.missing) {
         warning = `The loaded ${status.missing} no longer exists in AYON`
       } else if (status) {
         // AYON is the truth for labels: picks up renamed entities.
@@ -356,6 +364,8 @@ export class LoadPicker {
       this.render()
       if (warning) {
         this.set_state("error", warning)
+      } else if (note) {
+        this.set_state("idle", note)
       } else if (!container?.representation) {
         this.set_state("idle", "Pick a folder and a product to load")
       } else if (this.hub.shares_container(this.node, container)) {
@@ -689,16 +699,38 @@ export class LoadPicker {
       return
     }
     if (this.state.kind === "update" && this.hub.connected) {
-      this.selection = {
-        ...this.selection,
-        version_id: this.latest.id,
-        version: this.latest.version,
-      }
-      this.apply()
+      this.update_to_latest()
       return
     }
     this.hub.invalidate()
     this.refresh({force: true})
+  }
+
+  // Load the latest version, with the same representation when it has one.
+  async update_to_latest() {
+    const generation = ++this.generation
+    const latest = this.latest
+    try {
+      this.set_state("busy", `loading ${version_label(latest.version)}`)
+      const options = await this.load_options({
+        folder_id: this.selection.folder_id,
+        product_id: this.selection.product_id,
+        version_id: latest.id,
+      }, generation)
+      if (!options) {
+        return
+      }
+      this.selection = {
+        ...this.selection,
+        version_id: latest.id,
+        version: latest.version,
+      }
+      await this.apply_with_representation()
+    } catch (err) {
+      if (generation === this.generation) {
+        this.fail(error_message(err))
+      }
+    }
   }
 
   // The node was removed. `live_pickers` stops refreshing it; a node that
@@ -882,18 +914,64 @@ export class PickerHub {
     if (this.status_batch === batch) {
       this.status_batch = null
     }
-    try {
-      const result = await this.call("picker.status", {
-        representation_ids: [...batch.keys()],
-      })
-      for (const [id, entry] of batch) {
-        entry.resolve(result.items?.[id] ?? {missing: "representation"})
-      }
-    } catch (err) {
-      for (const entry of batch.values()) {
-        entry.reject(err)
+    const ids = [...batch.keys()]
+    for (let start = 0; start < ids.length; start += MAX_STATUS_IDS) {
+      const chunk = ids.slice(start, start + MAX_STATUS_IDS)
+      try {
+        const result = await this.call("picker.status", {
+          representation_ids: chunk,
+        })
+        for (const id of chunk) {
+          batch.get(id).resolve(
+            result.items?.[id] ?? {missing: "representation"}
+          )
+        }
+      } catch (err) {
+        for (const id of chunk) {
+          batch.get(id).reject(err)
+        }
       }
     }
+  }
+
+  // Remove containers whose load node no longer exists from the AYON
+  // Context node, so AYON's Scene Inventory doesn't list them. Run right
+  // before AYON saves the workfile: AYON adds a container and then its node
+  // on its main thread, and it is busy saving then, so a container that is
+  // about to get its node is never removed.
+  prune_containers() {
+    const root = this.app.rootGraph ?? this.app.graph
+    const context_node = (root?.nodes ?? []).find(
+      (node) => node.type === CONTEXT_NODE_TYPE
+    )
+    const widget = find_widget(context_node, CONTEXT_WIDGET)
+    const data = parse_json(widget?.value)
+    if (!Array.isArray(data?.containers)) {
+      return 0
+    }
+    const live = new Set()
+    for (const node of graph_nodes(root)) {
+      if (!LOAD_NODE_TYPES.includes(node.type)) {
+        continue
+      }
+      const uuid = parse_json(
+        find_widget(node, CONTAINER_WIDGET)?.value
+      )?.container_uuid
+      if (uuid) {
+        live.add(uuid)
+      }
+    }
+    const kept = data.containers.filter(
+      (container) => live.has(container?.container_uuid)
+    )
+    const removed = data.containers.length - kept.length
+    if (removed) {
+      data.containers = kept
+      widget.value = JSON.stringify(data)
+      context_node.setDirtyCanvas?.(true, true)
+      console.info(`AYON: removed ${removed} container(s) without a node`)
+    }
+    return removed
   }
 
   // Whether another node of the graph holds the same container, e.g. a
