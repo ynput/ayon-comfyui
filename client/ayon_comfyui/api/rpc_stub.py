@@ -81,10 +81,6 @@ class RPCClientStub:  # noqa: PLR0904
     def __init__(self, client: BridgeClient) -> None:  # noqa: D107
         self.client = client
 
-    @tab_method()
-    def getPublishNodes(self, node_type: str):  # noqa: N802, ANN201
-        """Call getPublishNodes."""
-
     # def do_update_publishnodes(self) -> None: # Never used
 
     @tab_method()

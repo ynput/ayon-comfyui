@@ -872,14 +872,6 @@ app.registerExtension({
           show_toast("warn", event.detail)
         })
 
-        bridge.register('getPublishNodes', (data) => {
-          const nodeType = data.node_type
-
-          let foundNodes = app.graph.nodes.filter((node) => node.type == nodeType);
-          return JSON.stringify(foundNodes)
-        })
-
-
         bridge.register('getWorkfile', (data) => {
           // Serialize the live graph so the result always reflects the
           // current state, instead of ComfyUI's debounced storage drafts.
