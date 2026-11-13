@@ -457,7 +457,9 @@ class BridgeClient:
     ) -> None:
         request_id = frame.get("id")
         method = frame.get("method")
-        handler = self._handlers.get(method)
+        handler = (
+            self._handlers.get(method) if isinstance(method, str) else None
+        )
         response: dict = {"type": "response", "id": request_id}
         if handler is None:
             response["error"] = {
