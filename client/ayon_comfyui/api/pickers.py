@@ -11,16 +11,18 @@ ComfyUI page can reach them through the paired tab, so:
 
 - Queries are read-only, scoped to the session's current project (the tab
   can't choose another project) and return ids, names and version numbers,
-  never file paths or people.
+  never file paths or people. (A loaded container may hold rootless
+  `{root[...]}` paths when its node reads files by path; those are what
+  ComfyUI resolves on its own server, not paths of this machine.)
 - Every id is validated and checked to belong to its parent entity.
 - Loading resolves the representation, the loader and the container here;
   nothing the tab sends ends up in a container except the container id of
   the node to load into. Loads are rate limited.
-- Loading runs on the Qt main thread (`ComfyUIBridge.run_in_main_thread`)
-  and the handler answers right away; the result is sent to the tab with
-  `pickerApplied`, addressed by a token the tab chose, so the tab updates
-  exactly the node that asked, also when the artist switched workflows in
-  the meantime.
+- Loading runs on one dedicated worker thread, so uploads never freeze the
+  AYON tools; it doesn't touch Qt or the host's state, and the handler
+  answers right away. The result is sent to the tab with `pickerApplied`,
+  addressed by a token the tab chose, so the tab updates exactly the node
+  that asked, also when the artist switched workflows in the meantime.
 
 Queries run on the bridge's worker threads and are cached for a minute
 (`refresh` bypasses the cache; changing the AYON context clears it).
@@ -33,6 +35,7 @@ import re
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +54,8 @@ LOAD_NODE_TYPES = frozenset({
 VERSION_MODES = frozenset({"latest", "pinned"})
 
 CACHE_TTL = 60.0
+# Entries a query cache keeps at most; its keys come from the tab.
+MAX_CACHE_ITEMS = 2000
 MAX_STATUS_ITEMS = 500
 MAX_NAME_LENGTH = 255
 # Queries a tab may make per minute, and how often it may bypass the cache.
@@ -114,8 +119,23 @@ class _Cache:
                 return item[1]
         value = compute()
         with self._lock:
+            self._items.pop(key, None)
             self._items[key] = (now, value)
+            self._evict(now)
         return value
+
+    def _evict(self, now: float) -> None:
+        """Drop expired entries, then the oldest beyond MAX_CACHE_ITEMS."""
+        items = self._items
+        expired = [
+            key for key, (at, _) in items.items() if now - at >= self._ttl
+        ]
+        for key in expired:
+            del items[key]
+        while len(items) > MAX_CACHE_ITEMS:
+            # Dicts keep insertion order and entries are re-inserted when
+            # updated, so the first one is the oldest.
+            del items[next(iter(items))]
 
     def clear(self) -> None:
         with self._lock:
@@ -171,16 +191,23 @@ def _default_loaders() -> dict[str, type]:
     return pick_node_loaders(discover_loader_plugins())
 
 
-# Loader plugins don't change during a session.
-_loaders_cache = _Cache(ttl=3600.0)
+# Loader plugins don't change during a session: discover them once (the
+# pickers warm this on the Qt main thread when they start).
+_loaders_lock = threading.Lock()
+_loaders: dict[str, type] | None = None
 
 
 def loaders_by_node_type() -> dict[str, type]:
     """Return the ComfyUI loader plugin for each load node type.
 
-    Cached: the Loader asks for every representation it lists.
+    Discovered once and shared by the pickers and the Loader action; the
+    Loader asks for every representation it lists.
     """
-    return _loaders_cache.get("loaders", _default_loaders)
+    global _loaders  # noqa: PLW0603
+    with _loaders_lock:
+        if _loaders is None:
+            _loaders = _default_loaders()
+        return _loaders
 
 
 # --- "Open AYON Loader" for one node -----------------------------------------
@@ -245,7 +272,7 @@ class PickerService:
         api: Any = None,  # noqa: ANN401
         *,
         project_name: Callable[[], str] = _default_project_name,
-        loaders: Callable[[], dict[str, type]] = _default_loaders,
+        loaders: Callable[[], dict[str, type]] = loaders_by_node_type,
         representation_context: Callable[
             [str, dict], dict
         ] = _default_representation_context,
@@ -305,8 +332,7 @@ class PickerService:
         return project_name
 
     def _loader(self, node_type: str) -> type:
-        loaders = self._cache.get("loaders", self._loaders)
-        loader = loaders.get(node_type)
+        loader = self._loaders().get(node_type)
         if loader is None:
             msg = f"No AYON loader is available for '{node_type}' nodes."
             raise PickerError(msg)
@@ -657,8 +683,8 @@ class PickerService:
     def apply(self, request: dict) -> dict:
         """Upload the picked representation; return the node's container.
 
-        Runs on the Qt main thread. Does not touch the graph: the tab puts
-        the container on the node that asked.
+        Runs on the pickers' load worker thread. Does not touch the graph:
+        the tab puts the container on the node that asked.
         """
         project_name = self._project()
         api = self._api
@@ -747,6 +773,22 @@ def register_picker_handlers(
     if service is None:
         service = PickerService()
     client = bridge.client
+    # Loads (uploads) run one at a time off the Qt main thread.
+    load_worker = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="AYON-ComfyUI-picker-load"
+    )
+
+    def _warm_loaders() -> None:
+        try:
+            loaders_by_node_type()
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "Unable to discover the ComfyUI loaders", exc_info=True
+            )
+
+    # Discovery applies settings to the plugin classes: do it once, on the
+    # Qt main thread, before the pickers or the Loader need it.
+    bridge.run_in_main_thread(_warm_loaders)
 
     def _query(func: Callable[[dict], dict]) -> Callable[[dict], dict]:
         def _handler(params: dict) -> dict:
@@ -765,7 +807,7 @@ def register_picker_handlers(
     def _apply(params: dict) -> dict:
         request = service.validate_apply(params)
         try:
-            bridge.run_in_main_thread(partial(_run_apply, request))
+            load_worker.submit(_run_apply, request)
         except Exception:
             service.release(request)
             raise
