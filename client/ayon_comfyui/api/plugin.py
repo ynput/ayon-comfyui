@@ -170,7 +170,7 @@ class ComfyUILoader(LoaderPlugin):
                 "Read the files where they are published instead of "
                 "uploading a copy to ComfyUI. Needs the ComfyUI server to "
                 "reach the project's AYON roots; otherwise the files are "
-                "uploaded after all."
+                "uploaded after all, and ComfyUI shows why."
             ),
         ),
     ]
@@ -196,7 +196,24 @@ class ComfyUILoader(LoaderPlugin):
             reference=reference,
             session_secret=get_bridge().client.secret,
             plugin_features=get_bridge().client.plugin_features,
+            on_fallback=lambda reason: self._reference_refused(
+                context, reason
+            ),
         )
+
+    def _reference_refused(self, context: dict, reason: str) -> None:
+        """Tell the artist why files they wanted referenced were uploaded.
+
+        In the loader's log, and as a warning in the ComfyUI tab, as the
+        load node looks the same either way.
+        """
+        product = (context.get("product") or {}).get("name") or "product"
+        message = (
+            f"AYON uploaded the files of '{product}' to ComfyUI instead of "
+            f"referencing them on the ComfyUI server. {reason}"
+        )
+        self.log.warning(message)
+        get_bridge().show_notice(message)
 
     def update_files(
         self, container: dict, context: dict, filepaths: list[str]

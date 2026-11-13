@@ -23,6 +23,11 @@ projects with:
 - `AYON_COMFYUI_PROJECTS`: project folder names (a JSON list, or comma
   separated), the first folder below a root. AYON sets it to the current
   project when it launches a local ComfyUI.
+
+A root that is a whole drive, share or filesystem (`P:\\`, `\\\\nas\\share`,
+`/`) would open up every file on it, so it is only used while
+`AYON_COMFYUI_PROJECTS` narrows it to project folders, and ignored
+otherwise (see `ignored_roots`).
 """
 
 from __future__ import annotations
@@ -46,7 +51,11 @@ ROOTS_FILE = os.path.join("__ayon", "roots.json")
 _ROOTLESS = re.compile(r"^\{root\[([A-Za-z0-9_-]+)\]\}(.*)$", re.DOTALL)
 MAX_CHECK_PATHS = 20_000
 
-_cache: dict = {"key": None, "roots": {}}
+#: `ignored_roots` reason of a whole drive or filesystem root while
+#: `AYON_COMFYUI_PROJECTS` isn't set.
+WHOLE_DRIVE = "whole_drive"
+
+_cache: dict = {"key": None, "roots": {}, "ignored": {}}
 
 
 def _roots_file() -> str | None:
@@ -66,42 +75,77 @@ def _read_roots(source: str) -> dict:
     if not isinstance(data, dict):
         msg = "AYON roots must be a JSON object of root name to path"
         raise TypeError(msg)
-    roots = {}
-    for name, path in data.items():
-        if not isinstance(path, str) or not path:
-            continue
-        path = os.path.abspath(path)  # noqa: PLW2901
-        if os.path.dirname(path) == path:
-            # A whole drive or filesystem would open up every file on it.
-            log.warning("Ignoring AYON root '%s': %s is a filesystem root",
-                        name, path)
-            continue
-        roots[str(name)] = path
-    return roots
+    return {
+        str(name): os.path.abspath(path)
+        for name, path in data.items()
+        if isinstance(path, str) and path
+    }
 
 
-def configured_roots() -> dict[str, str]:
-    """Return the AYON roots configured on this ComfyUI server."""
+def is_filesystem_root(path: str) -> bool:
+    """Return whether `path` is a whole drive, share or filesystem."""
+    path = os.path.abspath(path)
+    return os.path.dirname(path) == path
+
+
+def _roots() -> tuple[dict[str, str], dict[str, dict]]:
     env = os.environ.get(ROOTS_ENV, "")
     path = _roots_file()
     try:
         mtime = os.path.getmtime(path) if path else None
     except OSError:
         mtime = None
-    key = (env, path, mtime)
+    # Whether whole drives may be used depends on the projects.
+    key = (env, os.environ.get(PROJECTS_ENV, ""), path, mtime)
     if _cache["key"] == key:
-        return _cache["roots"]
+        return _cache["roots"], _cache["ignored"]
 
-    roots: dict[str, str] = {}
+    configured: dict[str, str] = {}
     try:
         if mtime is not None:
-            roots.update(_read_roots(path))
+            configured.update(_read_roots(path))
         if env:
-            roots.update(_read_roots(env))
+            configured.update(_read_roots(env))
     except (OSError, ValueError, TypeError) as exc:
         log.warning("Invalid AYON roots configuration: %s", exc)
-    _cache.update(key=key, roots=roots)
-    return roots
+
+    narrowed = allowed_projects() is not None
+    roots: dict[str, str] = {}
+    ignored: dict[str, dict] = {}
+    for name, root in configured.items():
+        if is_filesystem_root(root) and not narrowed:
+            # Anyone who can queue prompts on this ComfyUI can read the
+            # files below its roots, so a whole drive (or share) is only
+            # acceptable while access is narrowed to project folders.
+            log.warning(
+                "Ignoring AYON root '%s': %s is a whole drive or share, "
+                "which is only used while %s limits it to project folders.",
+                name, root, PROJECTS_ENV,
+            )
+            ignored[name] = {"path": root, "reason": WHOLE_DRIVE}
+            continue
+        roots[name] = root
+    _cache.update(key=key, roots=roots, ignored=ignored)
+    return roots, ignored
+
+
+def configured_roots() -> dict[str, str]:
+    """Return the AYON roots path references may read below.
+
+    Leaves out the `ignored_roots`.
+    """
+    return _roots()[0]
+
+
+def ignored_roots() -> dict[str, dict]:
+    """Return the configured roots that aren't used, and why.
+
+    Returns:
+        Root name to `{"path": ..., "reason": ...}`, where the reason is
+        `WHOLE_DRIVE`: the root is a whole drive, share or filesystem, and
+        `AYON_COMFYUI_PROJECTS` doesn't narrow it to project folders.
+    """
+    return _roots()[1]
 
 
 def allowed_projects() -> set[str] | None:
@@ -124,8 +168,9 @@ def allowed_projects() -> set[str] | None:
 def resolve_rootless(path: str, *, strict: bool = True) -> str | None:
     """Return the local path of an AYON rootless path, or None.
 
-    Only paths below a configured root (and an allowed project folder, see
-    `AYON_COMFYUI_PROJECTS`) resolve; `..` can't escape it.
+    Only paths below a configured root (and inside an allowed project
+    folder, see `AYON_COMFYUI_PROJECTS`) resolve; `..` and symlinks can't
+    escape it.
 
     Args:
         path: AYON rootless path, e.g. `{root[work]}/project/...`.
@@ -140,6 +185,11 @@ def resolve_rootless(path: str, *, strict: bool = True) -> str | None:
     root = configured_roots().get(match.group(1))
     if not root:
         return None
+    projects = allowed_projects()
+    if projects is None and is_filesystem_root(root):
+        # Never read a whole drive unless narrowed to project folders;
+        # `configured_roots` already leaves such roots out.
+        return None
     relative = match.group(2).replace("\\", "/").lstrip("/")
     if ":" in relative or "\0" in relative:
         # Drive letters and NTFS alternate data streams.
@@ -148,11 +198,13 @@ def resolve_rootless(path: str, *, strict: bool = True) -> str | None:
     full = resolve(os.path.join(root, relative))
     if not is_inside(full, resolve(root)):
         return None
-    projects = allowed_projects()
     if projects is not None:
+        # Checked on the resolved path, so a symlink can't leave the
+        # project folder either; files next to the project folders (e.g.
+        # at the top of a drive) aren't inside one.
         below_root = os.path.relpath(full, resolve(root))
-        project = below_root.replace("\\", "/").split("/", 1)[0]
-        if os.path.normcase(project) not in projects:
+        project, _sep, inside = below_root.replace("\\", "/").partition("/")
+        if not inside or os.path.normcase(project) not in projects:
             return None
     return full
 
@@ -193,9 +245,11 @@ async def handle_check(request):  # noqa: ANN001, ANN201
     """Tell AYON which rootless paths this server can read.
 
     Body: `{"paths": ["{root[work]}/...", ...]}`. Answers
-    `{"roots": [names], "exists": [bool, ...]}`. Only paths below a
-    configured root are ever checked, and only for AYON sessions, so this
-    doesn't tell anyone else which files exist.
+    `{"roots": [names], "ignored_roots": {name: {"path", "reason"}},
+    "exists": [bool, ...]}`, so AYON can tell the artist why it uploads
+    files instead. Only paths below a configured root are ever checked, and
+    only for AYON sessions, so this doesn't tell anyone else which files
+    exist.
     """
     from aiohttp import web  # noqa: PLC0415
 
@@ -214,7 +268,11 @@ async def handle_check(request):  # noqa: ANN001, ANN201
         None, _paths_exist, paths
     )
     return web.json_response(
-        {"roots": sorted(configured_roots()), "exists": exists},
+        {
+            "roots": sorted(configured_roots()),
+            "ignored_roots": ignored_roots(),
+            "exists": exists,
+        },
         headers={"Cache-Control": "no-store"},
     )
 
