@@ -531,51 +531,74 @@ function register_ayon_sidebar_tab() {
   })
 }
 
-// Ids of the prompts this tab queued, newest first. The AYON host only
-// publishes earlier runs ("Recook on publish" off) from these, so it never
-// picks up another artist's run of the same workfile on a shared ComfyUI.
-// Kept in sessionStorage so they survive reloads of the tab.
+// The prompts this tab queued, newest first, as {prompt_id, workflow_path}.
+// The AYON host only publishes earlier runs ("Recook on publish" off) from
+// these, and only those of the workflow being published, so it never picks
+// up another artist's run, or a copied workflow's run, of the same AYON
+// instance. Kept in sessionStorage so they survive reloads of the tab.
 const AYON_QUEUED_PROMPTS_KEY = "ayon.queued_prompts"
 const AYON_QUEUED_PROMPTS_LIMIT = 200
 
 function get_queued_prompts() {
   try {
-    const ids = JSON.parse(sessionStorage.getItem(AYON_QUEUED_PROMPTS_KEY) ?? "[]")
-    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : []
+    const entries = JSON.parse(sessionStorage.getItem(AYON_QUEUED_PROMPTS_KEY) ?? "[]")
+    return Array.isArray(entries)
+      ? entries.filter((entry) => typeof entry?.prompt_id === "string")
+      : []
   } catch (err) {
     return []
   }
 }
 
-function remember_queued_prompt(prompt_id) {
+function remember_queued_prompt(prompt_id, workflow_path) {
   if (typeof prompt_id !== "string" || !prompt_id) {
     return
   }
   try {
-    const ids = get_queued_prompts().filter((id) => id !== prompt_id)
-    ids.unshift(prompt_id)
+    const entries = get_queued_prompts().filter((entry) => entry.prompt_id !== prompt_id)
+    entries.unshift({prompt_id, workflow_path: workflow_path ?? null})
     sessionStorage.setItem(
       AYON_QUEUED_PROMPTS_KEY,
-      JSON.stringify(ids.slice(0, AYON_QUEUED_PROMPTS_LIMIT))
+      JSON.stringify(entries.slice(0, AYON_QUEUED_PROMPTS_LIMIT))
     )
   } catch (err) {
     console.warn("AYON: Unable to remember queued prompt", err)
   }
 }
 
-// Record the id of every prompt this tab queues (Run, Queue, partial runs).
+// Record every prompt this tab queues (Run, Queue, partial runs), with the
+// workflow it was queued from.
 function track_queued_prompts(api) {
   const original = api?.queuePrompt
   if (typeof original !== "function" || original.__ayon_tracked) {
     return
   }
   const tracked = async function (...args) {
+    const workflow_path = get_workflow_store()?.activeWorkflow?.path
     const result = await original.apply(this, args)
-    remember_queued_prompt(result?.prompt_id)
+    remember_queued_prompt(result?.prompt_id, workflow_path)
     return result
   }
   tracked.__ayon_tracked = true
   api.queuePrompt = tracked
+}
+
+// The `extra_data` the frontend adds when it queues a prompt itself
+// (ComfyApi.queuePrompt): Comfy.org credentials for API nodes, and the
+// preview method. ComfyUI keeps the credentials out of its history.
+function queue_extra_data() {
+  const extra = {}
+  if (app.api.authToken) {
+    extra.auth_token_comfy_org = app.api.authToken
+  }
+  if (app.api.apiKey) {
+    extra.api_key_comfy_org = app.api.apiKey
+  }
+  const preview_method = app.extensionManager?.setting?.get?.("Comfy.Execution.PreviewMethod")
+  if (preview_method && preview_method !== "default") {
+    extra.preview_method = preview_method
+  }
+  return extra
 }
 
 // Queue just `node` so it shows its preview (load nodes only: they have no
@@ -750,12 +773,13 @@ app.registerExtension({
             workflow,
             client_id: app.api.clientId ?? app.api.initialClientId ?? null,
             workflow_path: get_workflow_store()?.activeWorkflow?.path ?? null,
+            extra_data: queue_extra_data(),
           }
         })
 
-        // Ids of the prompts this tab queued, newest first.
+        // The prompts this tab queued, newest first.
         bridge.register('getQueuedPrompts', () => {
-          return {prompt_ids: get_queued_prompts()}
+          return {prompts: get_queued_prompts()}
         })
 
 
