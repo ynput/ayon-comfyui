@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,7 @@ from ayon_comfyui.api.deduce_python import (
     venv_check_existence,
     venv_get_python,
 )
+from ayon_comfyui.api.macos_util import bring_to_front, hide_from_dock
 from ayon_comfyui.api.profile_selector import (
     ProfileDialog,
     ProfileTypeEnum,
@@ -52,6 +54,38 @@ log = logging.getLogger("ayon_comfyui")
 
 def safe_excepthook(*args):  # noqa: ANN201, ANN002, D103
     traceback.print_exception(*args)
+
+
+def _local_port_in_use(port: int | str) -> bool:
+    """Return whether something is already listening on 127.0.0.1:port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", int(port))) == 0
+
+
+def _exit_if_session_running(*ports: int | str) -> None:
+    """Refuse to start a second host next to a running one.
+
+    A second host can't bind the static/RPC ports, and the browser tab it
+    opens takes over the first session's frontend connection. The first host
+    then treats its tab as closed and kills ComfyUI, so both sessions die.
+    """
+    busy = [str(p) for p in ports if p and _local_port_in_use(p)]
+    if not busy:
+        return
+    log.warning("AYON ComfyUI session already running (ports in use: %s)",
+                ", ".join(busy))
+    show_message_dialog(
+        title="ComfyUI is already running",
+        message=(
+            "An AYON ComfyUI session is already running "
+            f"(port {', '.join(busy)} in use).\n\n"
+            "Use the existing browser tab, or close that session "
+            "before launching ComfyUI again."
+        ),
+        level="warning",
+    )
+    sys.exit(0)
 
 
 def adjust_consts_comfyui_plugin(plugin_path: Path) -> None:
@@ -163,13 +197,10 @@ def _subproc_launch_ComfyUI() -> subprocess.Popen:
             "x-terminal-emulator",
             "-e",
         ]
-
     elif sys.platform == "darwin":
-        shell_args = [
-            "open",
-            "-a",
-            "Terminal",
-        ]
+        # Launch python directly: `open -a Terminal` returns immediately, so
+        # the Popen handle would track `open` instead of ComfyUI.
+        shell_args = []
 
     comfy_main_location = profile.base_folder
     if not comfy_main_location.endswith("main.py"):
@@ -277,6 +308,11 @@ def main(*args):
 
     log.info("got QT app")
 
+    # The host must outlive ComfyUI's startup (it serves the RPC bridge and
+    # AYON tools), so hide it from the Dock instead of exiting.
+    hide_from_dock()
+    bring_to_front()
+
     try:
         project_name = get_current_project_name() or None
 
@@ -299,10 +335,16 @@ def main(*args):
         settings, profile = (
             profile_selector.settings_local.pull_committed_settings()
         )
+        _exit_if_session_running(
+            settings.port_static_frontend, settings.port_webui
+        )
         launch_local(app, settings, profile)
     elif res == ProfileTypeEnum.REMOTE:
         settings, profile = (
             profile_selector.settings_remote.pull_committed_settings()
+        )
+        _exit_if_session_running(
+            profile.port_static_frontend, profile.port_webui
         )
         launch_remote(app, settings, profile)
 
