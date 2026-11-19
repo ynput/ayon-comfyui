@@ -15,6 +15,7 @@ from ayon_core.tools.utils import host_tools
 from wsrpc_aiohttp import Route, WebSocketAsync, decorators
 
 from ayon_comfyui.api.consts import LOG_LEVEL
+from ayon_comfyui.api.macos_util import bring_to_front
 from ayon_comfyui.api.util import extract_default_kwargs
 from ayon_comfyui.settings_util import ComfyLocalSettings, ComfyRemoteSettings
 
@@ -40,6 +41,8 @@ def show_tool_by_name(tool_name: str) -> None:
         kwargs["tab"] = "publish"
 
     host_tools.show_tool_by_name(tool_name, **kwargs)
+    # Host runs without a Dock icon on macOS; raise it above the browser.
+    bring_to_front()
 
 
 # TODO(@sas): look for a better way to do this.
