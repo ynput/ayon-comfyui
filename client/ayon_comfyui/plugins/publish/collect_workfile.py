@@ -1,7 +1,6 @@
 import os
 
 import pyblish.api
-from ayon_core.pipeline.publish import KnownPublishError
 
 
 class CollectWorkfile(pyblish.api.InstancePlugin):
@@ -22,12 +21,11 @@ class CollectWorkfile(pyblish.api.InstancePlugin):
 
         current_workfile: str | None = instance.context.data["currentFile"]
         if not current_workfile:
-            msg = (
-                "Can't publish the workfile because the current ComfyUI "
-                "workflow is not saved as an AYON workfile. Save it with the "
-                "AYON Workfiles tool first."
+            # Reported to the artist by `ValidateCurrentSaveFile` of core
+            self.log.warning(
+                "Current workflow is not saved as an AYON workfile."
             )
-            raise KnownPublishError(msg)
+            return
 
         staging_dir, filename = os.path.split(current_workfile)
         ext = os.path.splitext(filename)[1]
