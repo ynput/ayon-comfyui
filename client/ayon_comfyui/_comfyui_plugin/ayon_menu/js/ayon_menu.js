@@ -535,24 +535,75 @@ async function is_saved_for_workfile(workflow, path) {
   }
 }
 
+// The path for a workflow (tab) named after the AYON workfile `name`:
+// `<directory>/<name>.json`, or `<name> (2).json` etc. when another ComfyUI
+// workflow has that name. A closed copy that ComfyUI saved earlier for this
+// same AYON workfile can be replaced, the file on disk managed by AYON is the
+// source of truth, so it's returned as `replace`. Any other workflow is left
+// untouched.
+async function find_workflow_path(store, directory, name, workfile_path, workflow = null) {
+  for (let i = 1; ; i++) {
+    const path = `${directory}/${i === 1 ? name : `${name} (${i})`}.json`
+    const existing = store.getWorkflowByPath(path)
+    if (!existing || existing === workflow) {
+      return {path, replace: null}
+    }
+    if (!store.isOpen(existing) && await is_saved_for_workfile(existing, workfile_path)) {
+      return {path, replace: existing}
+    }
+  }
+}
+
 async function rename_workflow(store, workflow, name, workfile_path) {
   // Rename the workflow (tab) to `name`, keeping it in its current directory.
   const directory = workflow.directory ?? "workflows"
-  const new_path = `${directory}/${name}.json`
-  if (workflow.path === new_path) {
+  const {path, replace} = await find_workflow_path(store, directory, name, workfile_path, workflow)
+  if (workflow.path === path) {
     return
   }
-  const existing = store.getWorkflowByPath(new_path)
-  if (existing && existing !== workflow) {
-    // Only replace a closed copy that ComfyUI saved earlier for this same
-    // AYON workfile, the file on disk managed by AYON is the source of
-    // truth. Leave any other workflow at that path untouched.
-    if (store.isOpen(existing) || !await is_saved_for_workfile(existing, workfile_path)) {
-      throw new Error(`A ComfyUI workflow named '${existing.filename ?? name}' already exists.`)
-    }
-    await store.deleteWorkflow(existing)
+  if (replace) {
+    await store.deleteWorkflow(replace)
   }
-  await store.renameWorkflow(workflow, new_path)
+  await store.renameWorkflow(workflow, path)
+}
+
+// Save the workflow in ComfyUI as well. ComfyUI shows unsaved changes for any
+// tab it didn't save, even when it matches the AYON workfile on disk.
+async function save_in_comfyui(store, workflow) {
+  const tracker = workflow.changeTracker
+  if (typeof tracker?.prepareForSave === "function") {
+    tracker.prepareForSave()
+  } else {
+    capture_tracker_state(tracker)
+  }
+  await store.saveWorkflow(workflow)
+}
+
+// Make `workflow`, an open tab, the active one. ComfyUI's API can only open
+// the next tab, so move the tab next to the active one, open the next tab and
+// restore the order of the tabs.
+async function switch_to_tab(store, workflow) {
+  if (store.isActive(workflow)) {
+    return true
+  }
+  const command = app.extensionManager?.command
+  if (typeof store.reorderWorkflows !== "function" || typeof command?.execute !== "function") {
+    return false
+  }
+  const tabs = store.openWorkflows
+  const from = tabs.indexOf(workflow)
+  const active = tabs.findIndex((tab) => store.isActive(tab))
+  if (from === -1 || active === -1) {
+    return false
+  }
+  const next = from > active ? active + 1 : active
+  store.reorderWorkflows(from, next)
+  try {
+    await command.execute("Workspace.NextOpenedWorkflow")
+  } finally {
+    store.reorderWorkflows(next, from)
+  }
+  return store.isActive(workflow)
 }
 
 // Step one of saving an AYON workfile: name the tab after the file, record
@@ -626,6 +677,31 @@ async function begin_save_workfile(data) {
     // to save it inside ComfyUI (see `finishSaveWorkfile`)
     comfy_workflow_path: renamed ? workflow.path : null,
     warnings,
+  }
+}
+
+// [x, y, width, height] of a node, including its title bar
+function node_rect(node) {
+  const title = LiteGraph.NODE_TITLE_HEIGHT ?? 30
+  return [node.pos[0], node.pos[1] - title, node.size[0], node.size[1] + title]
+}
+
+function rects_overlap(a, b) {
+  return a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
+// Move `node` down until it doesn't cover any of `nodes`.
+function move_below_overlapping_nodes(node, nodes, margin = 20) {
+  const others = nodes.filter((other) => other !== node)
+  // Each step moves below another node, so this ends after all of them.
+  for (let i = 0; i < others.length; i++) {
+    const rect = node_rect(node)
+    const other = others.find((other) => rects_overlap(rect, node_rect(other)))
+    if (!other) {
+      return
+    }
+    const other_rect = node_rect(other)
+    node.pos = [node.pos[0], other_rect[1] + other_rect[3] + margin + (rect[3] - node.size[1])]
   }
 }
 
@@ -1078,6 +1154,7 @@ app.registerExtension({
             cx - node.size[0] / 2,
             cy - node.size[1] / 2
           ];
+          move_below_overlapping_nodes(node, app.graph.nodes);
 
           app.graph.afterChange(); 
           app.graph.setDirtyCanvas(true, true);
@@ -1201,13 +1278,7 @@ app.registerExtension({
             // User switched tabs in the meantime; do not save another tab.
             return false
           }
-          const tracker = workflow.changeTracker
-          if (typeof tracker?.prepareForSave === "function") {
-            tracker.prepareForSave()
-          } else {
-            capture_tracker_state(tracker)
-          }
-          await store.saveWorkflow(workflow)
+          await save_in_comfyui(store, workflow)
           return true
         })
 
@@ -1385,6 +1456,23 @@ app.registerExtension({
         })
 
         bridge.register('loadWorkfile', async (data) => {
+          const store = get_workflow_store()
+          let name = data.workfile_name || null
+          if (store && data.workfile_path) {
+            // Like ComfyUI does for its own workflows, show the tab the
+            // workfile is open in instead of opening it again.
+            const tab = find_tab_with_workfile(store, data.workfile_path, null)
+            if (tab && await switch_to_tab(store, tab)) {
+              return true
+            }
+            // ComfyUI loads into a closed workflow with the same name, so
+            // don't let it pick one that isn't a copy of this workfile.
+            if (name) {
+              const {path} = await find_workflow_path(store, "workflows", name, data.workfile_path)
+              name = path.slice("workflows/".length, -".json".length)
+            }
+          }
+
           const graph_data = JSON.parse(data.workfile_json)
           if (data.workfile_path) {
             // Record the AYON workfile path *before* loading, so that it
@@ -1397,21 +1485,17 @@ app.registerExtension({
             }
           }
 
-          await app.loadGraphData(graph_data, true, true, data.workfile_name || null)
+          await app.loadGraphData(graph_data, true, true, name)
 
           // Record which ComfyUI workflow (tab) this AYON workfile lives in
-          // and make that the change tracker baseline, so the freshly opened
-          // tab is not flagged as modified.
-          const workflow = get_workflow_store()?.activeWorkflow
+          // and save it in ComfyUI, so the tab doesn't show unsaved changes.
+          const workflow = store?.activeWorkflow
           if (data.workfile_path && workflow) {
             set_ayon_extra({comfy_workflow_path: workflow.path})
-            const tracker = workflow.changeTracker
             try {
-              capture_tracker_state(tracker)
-              tracker?.reset?.()
-              tracker?.updateModified?.()
+              await save_in_comfyui(store, workflow)
             } catch (err) {
-              console.warn("AYON: Failed to reset change tracker:", err)
+              console.warn("AYON: Failed to save the workflow in ComfyUI:", err)
             }
           }
           return true

@@ -6,6 +6,7 @@ from urllib.request import urlretrieve
 import pyblish.api
 from ayon_comfyui.api.pipeline import ComfyUIHost
 from ayon_core.pipeline import registered_host
+from ayon_core.pipeline.publish import PublishError
 from ayon_core.pipeline.publish.lib import get_instance_staging_dir
 
 
@@ -22,6 +23,14 @@ class CollectImage(pyblish.api.InstancePlugin):
     def process(self, instance: pyblish.api.Instance):
         host: ComfyUIHost = registered_host()
         image_urls = host.stub.get_publish_node_images(instance.data)
+        if not image_urls:
+            product_name = instance.data["productName"]
+            msg = (
+                f"No images to publish for '{product_name}': its node has"
+                " no output yet. Run the workflow in ComfyUI, then publish"
+                " again."
+            )
+            raise PublishError(msg)
         ext = ".png"
         instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = os.path.join(
