@@ -303,6 +303,33 @@ async function save_in_comfyui(store, workflow) {
   await store.saveWorkflow(workflow)
 }
 
+// Make `workflow`, an open tab, the active one. ComfyUI's API can only open
+// the next tab, so move the tab next to the active one, open the next tab and
+// restore the order of the tabs.
+async function switch_to_tab(store, workflow) {
+  if (store.isActive(workflow)) {
+    return true
+  }
+  const command = app.extensionManager?.command
+  if (typeof store.reorderWorkflows !== "function" || typeof command?.execute !== "function") {
+    return false
+  }
+  const tabs = store.openWorkflows
+  const from = tabs.indexOf(workflow)
+  const active = tabs.findIndex((tab) => store.isActive(tab))
+  if (from === -1 || active === -1) {
+    return false
+  }
+  const next = from > active ? active + 1 : active
+  store.reorderWorkflows(from, next)
+  try {
+    await command.execute("Workspace.NextOpenedWorkflow")
+  } finally {
+    store.reorderWorkflows(next, from)
+  }
+  return store.isActive(workflow)
+}
+
 // Step one of saving an AYON workfile: name the tab after the file, record
 // the AYON workfile path and return the serialized graph. The host writes it
 // to disk, then calls `finishSaveWorkfile`.
@@ -1106,11 +1133,19 @@ app.registerExtension({
         this.IFRAMERPC.register('loadWorkfile', async (data) => {
           const store = get_workflow_store()
           let name = data.workfile_name || null
-          if (store && data.workfile_path && name) {
+          if (store && data.workfile_path) {
+            // Like ComfyUI does for its own workflows, show the tab the
+            // workfile is open in instead of opening it again.
+            const tab = find_tab_with_workfile(store, data.workfile_path, null)
+            if (tab && await switch_to_tab(store, tab)) {
+              return true
+            }
             // ComfyUI loads into a closed workflow with the same name, so
             // don't let it pick one that isn't a copy of this workfile.
-            const {path} = await find_workflow_path(store, "workflows", name, data.workfile_path)
-            name = path.slice("workflows/".length, -".json".length)
+            if (name) {
+              const {path} = await find_workflow_path(store, "workflows", name, data.workfile_path)
+              name = path.slice("workflows/".length, -".json".length)
+            }
           }
 
           const graph_data = JSON.parse(data.workfile_json)
