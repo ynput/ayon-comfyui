@@ -65,7 +65,6 @@ class ComfyPrelaunchHook(PreLaunchHook):
         elif is_staging_enabled():
             args.append("--use-staging")
 
-
         new_launch_args = get_ayon_launcher_args(*args, "run", script_path)
         self.launch_context.launch_args = new_launch_args
 

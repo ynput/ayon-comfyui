@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import MutableMapping
-from urllib.parse import urlparse
 
 import aiohttp
+
+from ayon_comfyui.api.bridge_client import join_url
 
 
 async def upload_image(
@@ -81,8 +82,8 @@ async def upload_image(
         # Maybe raise
         return None
 
-    url_parsed = urlparse(base_url)
-    post_url = url_parsed._replace(path="/upload/image").geturl()
+    # Keep the sub-path of a ComfyUI served behind a reverse proxy.
+    post_url = join_url(base_url, "/upload/image")
 
     # we allow a file object here to allow for streaming in a session.
     async with aiohttp.ClientSession() as session:

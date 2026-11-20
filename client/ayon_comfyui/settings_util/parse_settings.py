@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import sys
 from typing import Any, ClassVar, TypeVar
-from urllib.parse import ParseResult, urlparse
 
 from ayon_core.settings import get_project_settings, get_studio_settings
 
-from ayon_comfyui.api.connection_util import (
-    poll_site_availability_timeout,
-    poll_site_headers,
+from ayon_comfyui.api.bridge_client import (
+    BridgeError,
+    check_plugin,
+    is_unencrypted_remote,
+    plugin_version,
+    version_mismatch,
 )
 from ayon_comfyui.settings_util import ComfyUICustomDirectories
 
@@ -342,9 +344,6 @@ class ComfyLocalSettings:
                 get_studio_settings().get("comfyui").get("local_settings")
             )
 
-        self._port_server: int = self._settings["server_pulse_port"]
-        self._port_web: int = self._settings["frontend_port"]
-        self._port_http_static: int = self._settings["http_server_port"]
         self._parse_settings()
 
     def _parse_settings(self) -> None:
@@ -352,26 +351,6 @@ class ComfyLocalSettings:
         for setting in self._settings.get("local_setting_list"):
             profile = ComfyLocalSettings.ComfyLocalProfile(setting)
             self._profiles[profile.name] = profile
-
-    @property
-    def port_webui(self) -> int:
-        """Return webui connection port."""
-        return self._port_web
-
-    @property
-    def port_backend(self) -> int:
-        """Return backend connection port."""
-        return self._port_server
-
-    @property
-    def port_static_frontend(self) -> int:
-        """Return static frontend port (hosts <iframe> with ComfyUI)."""
-        return self._port_http_static
-
-    @property
-    def address_frontend(self) -> str:
-        """Return static frontend adress."""
-        return f"http://127.0.0.1:{self.port_static_frontend}"
 
     @property
     def profiles(self) -> list[str]:
@@ -465,60 +444,26 @@ class ComfyRemoteSettings:
                     " (must have contents)"
                 )
 
-            is_available = poll_site_availability_timeout(
-                self.comfy_url, timeout=1
-            )
-
-            static_origin = f"http://127.0.0.1:{self.port_static_frontend}"
-
-            if is_available:
-                logs.append(
-                    f"{self.name} | Remote: site {self.comfy_url}"
-                    " is reachable!"
-                )
-                headers = poll_site_headers(self.comfy_url)
-                if "X-Frame-Options" in headers:
-                    errors.append(
-                        f"{self.name} | Remote: X-Frame-Options header set!"
-                        " This likely causes ComfyUI not to embed properly."
-                    )
-
-                    xframeopts = headers.get("X-Frame-Options")
-                    possible_working_xframeopts = f"ALLOW-FROM {static_origin}"
-                    if xframeopts != possible_working_xframeopts:
-                        errors.append(
-                            f"{self.name} | Remote: X-Frame -Options header: "
-                            f"'{xframeopts}' will not work."
-                        )
-                    else:
-                        logs.append(
-                            f"{self.name} | Remote: there is a small chance "
-                            f"X-Frame-Options: {possible_working_xframeopts} "
-                            "could still allow the plugin to function."
-                        )
-
-                if "Content-Security-Policy" in headers:
-                    csp = headers.get("Content-Security-Policy")
-                    ideal_csps = {
-                        "frame-ancestors *",
-                        f"frame-ancestors {static_origin}",
-                    }
-
-                    if csp in ideal_csps:
-                        logs.append(
-                            f"{self.name} | Remote: Content-Security-Policy "
-                            f"header present, but value '{csp}' should work."
-                        )
-                    else:
-                        errors.append(
-                            f"{self.name} | Remote: Content-Security-Policy "
-                            f"header present, with a value of {csp}. "
-                            "This makes embedding likely impossible."
-                        )
+            try:
+                info = check_plugin(self.comfy_url, timeout=2)
+            except BridgeError as exc:
+                errors.append(f"{self.name} | Remote: {exc}")
             else:
-                errors.append(
-                    f"{self.name} | Remote: site {self.comfy_url} is "
-                    "unreachable. Couldn't connect."
+                version = plugin_version(info)
+                logs.append(
+                    f"{self.name} | Remote: ComfyUI at {self.comfy_url} is "
+                    f"reachable and has AYON plugin {version} (bridge "
+                    f"protocols {info.get('protocols')})."
+                )
+                mismatch = version_mismatch(self.comfy_url, version)
+                if mismatch:
+                    logs.append(f"{self.name} | Remote: {mismatch}")
+            if is_unencrypted_remote(self.comfy_url):
+                logs.append(
+                    f"{self.name} | Remote: {self.comfy_url} uses plain "
+                    "http, so the AYON session secret and workflows travel "
+                    "unencrypted. Prefer https for a ComfyUI on another "
+                    "machine."
                 )
 
             self._is_valid = not bool(errors)
@@ -532,64 +477,14 @@ class ComfyRemoteSettings:
             return self._name
 
         @property
-        def port_webui(self) -> int:
-            """Return webui connection port."""
-            return self._profile_dict.get("frontend_port")
-
-        @property
-        def port_backend(self) -> int:
-            """Return backend connection port."""
-            return self._profile_dict.get("server_pulse_port")
-
-        @property
-        def port_static_frontend(self) -> int:
-            """Return port to static frontend."""
-            return self._profile_dict.get("http_server_port")
-
-        @property
-        def address_frontend(self) -> str:
-            """Return static frontend adress."""
-            return f"http://127.0.0.1:{self.port_static_frontend}"
-
-        @property
         def comfy_url(self) -> str:
-            """Return URL to embed in browser."""
+            """Return the URL of ComfyUI."""
             return self._profile_dict.get("comfy_web_adress")
-
-        # TODO(@sas): Look into deprecation, since origin checking
-        #             is likely unnecessary.
-        @property
-        def comfy_origin(self) -> str:
-            """Return URL expected to be in Origin header."""
-            parsed = urlparse(self.comfy_url)
-            return f"{parsed.scheme}://{parsed.netloc}"
-
-        @property
-        def is_https(self) -> bool:
-            """Return whether url is https."""
-            parsed = urlparse(self.comfy_url)
-            return parsed.scheme == "https"
-
-        @property
-        def netloc_webui(self) -> str:
-            """Return netloc of webui."""
-            url = urlparse(self.comfy_url)._replace(netloc="127.0.0.1")
-            url = ComfyRemoteSettings.url_specify_port(url, self.port_webui)
-            return urlparse(url).netloc
-
-        @property
-        def netloc_backend(self) -> str:
-            """Return netloc of webui."""
-            url_comfy = urlparse(self.comfy_url)
-            url = ComfyRemoteSettings.url_specify_port(
-                url_comfy, self.port_backend
-            )
-            return urlparse(url).netloc
 
         @property
         def open_browser(self) -> bool:
             """Whether to open browser."""
-            return self._profile_dict.get("open_browser_on_connect")
+            return self._profile_dict.get("open_browser_on_connect", True)
 
         @property
         def is_valid(self) -> bool:
@@ -617,20 +512,6 @@ class ComfyRemoteSettings:
         for setting in self._settings.get("remote_setting_list"):
             profile = ComfyRemoteSettings.ComfyRemoteProfile(setting)
             self._profiles[profile.name] = profile
-
-    @staticmethod
-    def url_specify_port(parsed_url: ParseResult, port: int) -> str:
-        """Change the port on an URL and return it.
-
-        Returns:
-            Updated url.
-        """
-        netloc = parsed_url.netloc
-        if ":" in netloc:
-            netloc = f"{netloc.split(':')[0]}:{port}"
-        else:
-            netloc += f":{port}"
-        return parsed_url._replace(netloc=netloc).geturl()
 
     @property
     def profiles(self) -> list[str]:

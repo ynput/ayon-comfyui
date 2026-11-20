@@ -1,11 +1,8 @@
-"""The Ayon ComfyUI addon.
+"""The AYON ComfyUI addon.
 
-We should:
-- On launch, check settings
-- If not set to connect to external running ComfyUI, run local
-- Establish a websocket connection as a Client.
-  (comfyUI is running a server through a plugin
-  on port 55055 endpoint ws:/x.x.x.x:port/ws)
+On launch, AYON either starts ComfyUI locally or uses a running (remote)
+ComfyUI, then connects to the AYON bridge route of the ComfyUI plugin as a
+websocket client and pairs the ComfyUI browser tab with this session.
 """
 
 from .addon import COMFYUI_ADDON_ROOT, ComfyUIAddon, get_launch_script_path

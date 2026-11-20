@@ -12,48 +12,29 @@ class ComfyRemoteSetting(BaseSettingsModel):
 
     name: str = SettingsField(default="", title="Entry Name")
 
-    server_pulse_port: int = SettingsField(
-        55055,
-        title="Default port to pulse connection to backend",
-        description=(
-            "Websocket port to send heartbeat over, "
-            "to make sure the backend process is still alive. "
-            "This port must be configured to be the same on the "
-            "server you are connecting to."
-        ),
-    )
-
-    frontend_port: int = SettingsField(
-        55056,
-        title="Default port for frontend RPC",
-        description=(
-            "Websocket port to communicate with local browser instance"
-        ),
-    )
-
-    http_server_port: int = SettingsField(
-        5454,
-        title="Default port for website user interacts with.",
-        description=(
-            "This port is used to launch a wrapper website "
-            "for ComfyUI. This websites hosts an <iframe> the "
-            "'real' ComfyUI will be embedded in."
-        ),
-    )
-
     comfy_web_adress: str = SettingsField(
         default="http://127.0.0.1:8188",
         title="ComfyUI Web Address",
         description=(
-            "Web address of the frontend. On localhost, "
-            "ComfyUI runs on port 8188, so the address would be "
-            "'http://127.0.0.1:8188'. If comfyui is on the web, "
-            "use something like 'https://comfyui.contoso.com'."
+            "Web address of ComfyUI. On localhost, ComfyUI runs on port "
+            "8188, so the address would be 'http://127.0.0.1:8188'. For a "
+            "shared server use something like 'https://comfyui.contoso.com' "
+            "(a sub-path such as 'https://contoso.com/comfyui' works too). "
+            "The AYON ComfyUI plugin must be installed on that ComfyUI, "
+            "and a reverse proxy in front of it must pass websockets for "
+            "'/ayon/ws' and '/api/ayon/ws', like it does for ComfyUI's "
+            "own '/ws'."
         ),
     )
 
     open_browser_on_connect: bool = SettingsField(
-        default=True, title="Open browser on connect?"
+        default=True,
+        title="Open browser on connect?",
+        description=(
+            "Open the ComfyUI tab for this AYON session automatically. "
+            "When disabled, AYON shows the link (and a pairing code) to "
+            "open or paste manually."
+        ),
     )
 
 
