@@ -353,6 +353,31 @@ async function begin_save_workfile(data) {
   }
 }
 
+// [x, y, width, height] of a node, including its title bar
+function node_rect(node) {
+  const title = LiteGraph.NODE_TITLE_HEIGHT ?? 30
+  return [node.pos[0], node.pos[1] - title, node.size[0], node.size[1] + title]
+}
+
+function rects_overlap(a, b) {
+  return a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
+// Move `node` down until it doesn't cover any of `nodes`.
+function move_below_overlapping_nodes(node, nodes, margin = 20) {
+  const others = nodes.filter((other) => other !== node)
+  // Each step moves below another node, so this ends after all of them.
+  for (let i = 0; i < others.length; i++) {
+    const rect = node_rect(node)
+    const other = others.find((other) => rects_overlap(rect, node_rect(other)))
+    if (!other) {
+      return
+    }
+    const other_rect = node_rect(other)
+    node.pos = [node.pos[0], other_rect[1] + other_rect[3] + margin + (rect[3] - node.size[1])]
+  }
+}
+
 function ensure_ayon_sidebar_style() {
   if (document.getElementById(AYON_SIDEBAR_STYLE_ID)) {
     return
@@ -729,6 +754,7 @@ app.registerExtension({
             cx - node.size[0] / 2,
             cy - node.size[1] / 2
           ];
+          move_below_overlapping_nodes(node, app.graph.nodes);
 
           app.graph.afterChange(); 
           app.graph.setDirtyCanvas(true, true);
