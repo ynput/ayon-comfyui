@@ -62,13 +62,9 @@ class CollectVideo(pyblish.api.InstancePlugin):
             raise PublishError(msg)
 
         video_info = VideoInfo()
-
         video_exts = {".mp4", ".webm"}
         video_info.thumbnail_extension = ".png"
 
-        # f"{filename}_{format}_thumb.png"
-
-        instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = get_instance_staging_dir(instance)
         self.log.debug("Outputting video to %s", staging_dir)
 
@@ -78,11 +74,8 @@ class CollectVideo(pyblish.api.InstancePlugin):
             return
 
         # Download video
-        self.log.debug(video_link)
         parse = urlsplit(video_link)
-        self.log.debug(parse)
         query = parse_qs(parse.query)
-        self.log.debug(query)
         filename = next(iter(query.get("filename")), None)
         if filename is None:
             self.log.warning(
@@ -96,8 +89,6 @@ class CollectVideo(pyblish.api.InstancePlugin):
             )
             return
         video_info.video_extension = extension
-        self.log.debug(filename)
-        self.log.debug(staging_dir)
         destination = os.path.join(
             staging_dir, instance.data.get("productName"), filename
         )
@@ -113,8 +104,7 @@ class CollectVideo(pyblish.api.InstancePlugin):
         thumb_url = parse._replace(
             query=naive_reconstruct_querydict(query)
         ).geturl()
-        self.log.debug("Retrieving generated thumbnail")
-        self.log.debug(thumb_url)
+        self.log.debug(f"Retrieving generated thumbnail via: {thumb_url}")
         thumb_destination = os.path.join(
             staging_dir, instance.data.get("productName"), thumb_filename
         )
@@ -122,8 +112,6 @@ class CollectVideo(pyblish.api.InstancePlugin):
         video_info.thumbnail_file = os.path.join(
             instance.data.get("productName"), thumb_filename
         )
-
-        instance.context.data["currentFile"] = video_info.video_file
 
         # marking instance as reviewable
         instance.data["review"] = True

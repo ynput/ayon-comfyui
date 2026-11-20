@@ -11,6 +11,7 @@ from ayon_comfyui import get_launch_script_path
 from ayon_core.lib import (
     get_ayon_launcher_args,
     is_dev_mode_enabled,
+    is_staging_enabled,
     is_using_ayon_console,
 )
 
@@ -56,11 +57,16 @@ class ComfyPrelaunchHook(PreLaunchHook):
 
     def execute(self) -> None:
         script_path = get_launch_script_path()
-        # uses ayon_console to launch a script, respecting dev mode.
-        dev_args = ["--use-dev"] if is_dev_mode_enabled() else []
 
-        new_launch_args = get_ayon_launcher_args(*dev_args, "run", script_path)
+        # use ayon_console to launch a script
+        args = []
+        if is_dev_mode_enabled():
+            args.append("--use-dev")
+        elif is_staging_enabled():
+            args.append("--use-staging")
 
+
+        new_launch_args = get_ayon_launcher_args(*args, "run", script_path)
         self.launch_context.launch_args = new_launch_args
 
         self.launch_context.kwargs = get_launch_kwargs(

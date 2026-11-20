@@ -81,15 +81,18 @@ class RPCClientStub:  # noqa: PLR0904
         """Call getWorkfile."""
 
     @call_on_origin()
-    def updateTab(self, *, new_name: str):  # noqa: N802, ANN201
-        """Call updateTab.
+    def loadWorkfile(  # noqa: N802, ANN201
+        self,
+        *,
+        workfile_json: str,
+        workfile_name: str,
+        workfile_path: str | None = None,
+    ):
+        """Call loadWorkfile.
 
-        switches context to a new tab with a new name.
+        When `workfile_path` is passed it is stored in the loaded graph as
+        `extra.AYON.workfile_path` to track the current AYON workfile.
         """
-
-    @call_on_origin()
-    def loadWorkfile(self, *, workfile_json: str, workfile_name: str):  # noqa: N802, ANN201
-        """Call loadWorkfile."""
 
     def do_load_workfile(self, workfile_path: str | None = None) -> None:
         """Load contents of workfile into ComfyUI session."""
@@ -100,7 +103,9 @@ class RPCClientStub:  # noqa: PLR0904
             encoding="utf-8"
         )
         self.loadWorkfile(
-            workfile_json=workfile_json, workfile_name=workfile.name
+            workfile_json=workfile_json,
+            workfile_name=workfile.name,
+            workfile_path=str(workfile),
         )
 
     @call_on_origin()
@@ -110,6 +115,55 @@ class RPCClientStub:  # noqa: PLR0904
     @call_on_origin()
     def setImprintContext(self, *, imprint_info: str) -> bool:  # noqa: N802, ANN201
         """Call setImprintContext."""
+
+    @call_on_origin()
+    def setGraphExtra(self, *, extra_json: str):  # noqa: N802, ANN201
+        """Call setGraphExtra.
+
+        Merges arbitrary extra metadata into the current graph.extra.
+        """
+
+    @call_on_origin()
+    def beginSaveWorkfile(  # noqa: N802, ANN201
+        self,
+        *,
+        workfile_path: str,
+        workflow_name: str | None = None,
+        in_place: bool = False,
+    ):
+        """Call beginSaveWorkfile.
+
+        Renames the active ComfyUI workflow (tab) to `workflow_name`, stores
+        `workfile_path` in the graph and returns a dict with the serialized
+        graph (`workfile`), the ComfyUI workflow path (`comfy_workflow_path`)
+        and a list of `warnings`. Or a dict with an `error` when the active
+        workflow must not be saved to `workfile_path`.
+        """
+
+    @call_on_origin()
+    def finishSaveWorkfile(  # noqa: N802, ANN201
+        self, *, comfy_workflow_path: str | None = None
+    ):
+        """Call finishSaveWorkfile.
+
+        Saves the ComfyUI workflow internally so it's no longer flagged as
+        modified. Returns whether it was saved.
+        """
+
+    @call_on_origin()
+    def getWorkfilePath(self):  # noqa: N802, ANN201
+        """Call getWorkfilePath.
+
+        Returns stored workfile path metadata from active graph, or null.
+        """
+
+    @call_on_origin()
+    def getGraphExtra(self, *, key: str | None = None):  # noqa: N802, ANN201
+        """Call getGraphExtra.
+
+        Returns stringified JSON of graph.extra (or {}), or of only
+        graph.extra[key] when `key` is passed.
+        """
 
     def do_context_imprint(self, imprint_info: str = "No imprint.") -> bool:
         """Creates a node in the browser session.
@@ -402,6 +456,94 @@ class RPCStub:  # noqa : PLR0904
         json_data = json.dumps(data)
         log.debug(json_data)
         self.client_stub.do_context_imprint(imprint_info=json_data)
+
+    def set_graph_extra(self, extra: dict) -> bool:
+        """Set arbitrary extra metadata on the currently opened graph.
+
+        The extra dict will be merged into graph.extra on the client side.
+        Returns True on success, None/False on failure.
+        """
+        log.debug(f"set_graph_extra\n{extra}")  # noqa: G004
+        try:
+            json_data = json.dumps(extra)
+            result = self.client_stub.setGraphExtra(extra_json=json_data)
+            return result
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"set_graph_extra failed: {e}")  # noqa: G004
+            return None
+
+    def save_workfile(self, path: str, *, in_place: bool = False) -> None:
+        """Save the active ComfyUI workflow as AYON workfile to `path`.
+
+        The active workflow (tab) is renamed to match the filename, the path
+        is stored in the graph so `get_workfile_path` reports it, the graph
+        is written to disk and finally saved in ComfyUI as well so the tab
+        is no longer flagged as modified.
+
+        Args:
+            path: The workfile path to save to.
+            in_place: Only save when `path` still is the workfile of the
+                active workflow, e.g. because the user may have switched tabs
+                since it was queried.
+
+        Raises:
+            RuntimeError: When the graph could not be retrieved from ComfyUI
+                or ComfyUI refused to save the active workflow to `path`, e.g.
+                because another tab has that workfile open.
+        """
+        log.debug(f"save_workfile: {path}")  # noqa: G004
+        result = self.client_stub.beginSaveWorkfile(
+            workfile_path=path,
+            workflow_name=Path(path).stem,
+            in_place=in_place,
+        )
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(result["error"])
+        if not isinstance(result, dict) or not result.get("workfile"):
+            msg = (
+                f"Unable to retrieve workflow from ComfyUI to save: {path}\n"
+                "Make sure the AYON ComfyUI page is open and up to date; "
+                "if in doubt, reload it with Ctrl+Shift+R."
+            )
+            raise RuntimeError(msg)
+
+        for warning in result.get("warnings") or []:
+            log.warning(warning)
+
+        Path(path).write_text(result["workfile"], encoding="utf-8")
+
+        # Saving the workflow inside ComfyUI is a convenience (tab name and
+        # modified state), the file on disk is what matters. So never fail
+        # the save because of it.
+        try:
+            self.client_stub.finishSaveWorkfile(
+                comfy_workflow_path=result.get("comfy_workflow_path")
+            )
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "Saved workfile to disk, but failed to save the workflow "
+                "inside ComfyUI.",
+                exc_info=True,
+            )
+
+    def get_workfile_path(self) -> str | None:
+        """Return the AYON workfile path of the active workflow, or None."""
+        try:
+            return self.client_stub.getWorkfilePath() or None
+        except Exception:  # noqa: BLE001
+            # E.g. no browser connected (yet); treat as 'unsaved'
+            log.warning("Unable to query workfile path.", exc_info=True)
+            return None
+
+    def get_graph_extra(self, key: str | None = None):  # noqa: ANN201
+        """Retrieve graph.extra from the active workflow.
+
+        Returns the full `extra` dict, or only `extra[key]` if key is passed.
+        """
+        raw = self.client_stub.getGraphExtra(key=key)
+        if not raw:
+            return None if key else {}
+        return json.loads(raw)
 
     def _load_context(self) -> MutableMapping:
         """Query load entire context operation.

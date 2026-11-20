@@ -58,7 +58,6 @@ class CollectModel(pyblish.api.InstancePlugin):
             )
             raise PublishError(msg)
 
-        instance.data["anatomyData"] = instance.context.data["anatomyData"]
         staging_dir = get_instance_staging_dir(instance)
         self.log.info("Outputting model to: %s", staging_dir)
 
@@ -70,9 +69,7 @@ class CollectModel(pyblish.api.InstancePlugin):
         # Download model
         self.log.debug("Downloading model: %s", model_link)
         parse = urlsplit(model_link)
-        self.log.debug(parse)
         query = parse_qs(parse.query)
-        self.log.debug(query)
         filename = next(iter(query.get("filename")), None)
         if filename is None:
             self.log.warning(
@@ -82,7 +79,7 @@ class CollectModel(pyblish.api.InstancePlugin):
         if (extension := Path(filename).suffix) not in self.model_exts:
             self.log.warning(
                 "Nothing could be collected. "
-                "(filename has invalid extension for video.)"
+                "(filename has invalid extension for model.)"
             )
             return
 
@@ -91,8 +88,6 @@ class CollectModel(pyblish.api.InstancePlugin):
         model_file = os.path.join(product_name, filename)
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
         urlretrieve(model_link, destination)  # noqa: S310
-
-        instance.context.data["currentFile"] = model_file
 
         # creating representation
         instance.data["representations"].append(
@@ -103,4 +98,3 @@ class CollectModel(pyblish.api.InstancePlugin):
                 "stagingDir": staging_dir,
             }
         )
-        # no thumbnail here...

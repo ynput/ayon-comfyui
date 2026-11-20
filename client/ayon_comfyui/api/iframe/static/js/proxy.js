@@ -18,8 +18,28 @@ window.onload = async (e) => {
     return await IFRAME_RPC.call('getWorkfile', data)
   })
 
-  RPC.addRoute('updateTab', async (data) => {
-    return await IFRAME_RPC.call('updateTab', data)
+  // Allow host to set arbitrary extra metadata on the currently opened graph
+  RPC.addRoute('setGraphExtra', async (data) => {
+    return await IFRAME_RPC.call('setGraphExtra', data)
+  })
+
+  // Two-step AYON workfile save: serialize (and rename tab), then mark saved
+  RPC.addRoute('beginSaveWorkfile', async (data) => {
+    return await IFRAME_RPC.call('beginSaveWorkfile', data)
+  })
+
+  RPC.addRoute('finishSaveWorkfile', async (data) => {
+    return await IFRAME_RPC.call('finishSaveWorkfile', data)
+  })
+
+  // Allow host to query the currently stored workfile path (if present)
+  RPC.addRoute('getWorkfilePath', async (data) => {
+    return await IFRAME_RPC.call('getWorkfilePath', data)
+  })
+
+  // Allow host to request the full graph.extra object (stringified JSON)
+  RPC.addRoute('getGraphExtra', async (data) => {
+    return await IFRAME_RPC.call('getGraphExtra', data)
   })
 
   RPC.addRoute('addPublishNode', async (data) => {

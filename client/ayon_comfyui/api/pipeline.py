@@ -46,13 +46,6 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
 
     name = "comfyui"
 
-    _last_path: str = ""
-
-    def __init__(self):
-        super().__init__()
-        # Establish connection?
-        # If not done here then deperecate this.
-
     def get_app_information(self) -> ApplicationInformation:
         """Return application information."""
         return ApplicationInformation(
@@ -83,20 +76,36 @@ class ComfyUIHost(HostBase, IWorkfileHost, ILoadHost, IPublishHost):
     def update_context_data(self, data, changes):
         self.stub.imprint_context(data)
 
-    def get_current_workfile(self):
-        # Not too great, relies on a workfile having been opened
-        return self._last_path or None
+    def get_current_workfile(self) -> str | None:
+        """Return the AYON workfile path of the active ComfyUI workflow.
 
-    def open_workfile(self, filepath):
+        ComfyUI has no notion of files on disk, so we store the AYON workfile
+        path in the graph (`extra.AYON.workfile_path`) on open and save.
+        """
+        return self.stub.get_workfile_path()
+
+    def open_workfile(self, filepath: str) -> bool:
+        """Open workfile in a ComfyUI workflow tab."""
         self.stub.load_workfile(filepath)
         return True
 
-    def save_workfile(self, dst_path=None):
-        workfile: str = self.stub.query_workfile()
-        if workfile and isinstance(dst_path, str):
-            with open(dst_path, mode="w", encoding="utf-8") as f:
-                f.write(workfile)
-                self.__class__._last_path = dst_path  # noqa: SLF001
+    def save_workfile(self, dst_path: str | None = None) -> None:
+        """Save the active ComfyUI workflow to `dst_path`.
+
+        When `dst_path` is not passed, saves to the current workfile path,
+        unless the user switched tabs since it was queried.
+        """
+        in_place = dst_path is None
+        if in_place:
+            dst_path = self.get_current_workfile()
+            if not dst_path:
+                msg = (
+                    "The active ComfyUI workflow is not an AYON workfile yet. "
+                    "Use the Workfiles tool to save it."
+                )
+                raise RuntimeError(msg)
+
+        self.stub.save_workfile(dst_path, in_place=in_place)
 
     @property
     def stub(self) -> RPCStub:

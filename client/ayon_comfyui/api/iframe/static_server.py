@@ -40,7 +40,19 @@ class StaticServerThread(Thread):
                 content_type="text/html",
             )
 
+        async def no_cache(  # noqa: RUF029
+            request: web.Request,  # noqa: ARG001
+            response: web.StreamResponse,
+        ) -> None:
+            """Always revalidate, so addon updates aren't masked by caches.
+
+            Without this, browsers heuristically cache e.g. `proxy.js` for
+            days, leaving a stale proxy that lacks newly added RPC routes.
+            """
+            response.headers["Cache-Control"] = "no-cache"
+
         self._app = web.Application()
+        self._app.on_response_prepare.append(no_cache)
         self._app.router.add_get("/", index)
         self._app.router.add_static("/static/", fpath / "static/")
 
