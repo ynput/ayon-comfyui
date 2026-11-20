@@ -259,24 +259,36 @@ async function is_saved_for_workfile(workflow, path) {
   }
 }
 
+// The path for a workflow (tab) named after the AYON workfile `name`:
+// `<directory>/<name>.json`, or `<name> (2).json` etc. when another ComfyUI
+// workflow has that name. A closed copy that ComfyUI saved earlier for this
+// same AYON workfile can be replaced, the file on disk managed by AYON is the
+// source of truth, so it's returned as `replace`. Any other workflow is left
+// untouched.
+async function find_workflow_path(store, directory, name, workfile_path, workflow = null) {
+  for (let i = 1; ; i++) {
+    const path = `${directory}/${i === 1 ? name : `${name} (${i})`}.json`
+    const existing = store.getWorkflowByPath(path)
+    if (!existing || existing === workflow) {
+      return {path, replace: null}
+    }
+    if (!store.isOpen(existing) && await is_saved_for_workfile(existing, workfile_path)) {
+      return {path, replace: existing}
+    }
+  }
+}
+
 async function rename_workflow(store, workflow, name, workfile_path) {
   // Rename the workflow (tab) to `name`, keeping it in its current directory.
   const directory = workflow.directory ?? "workflows"
-  const new_path = `${directory}/${name}.json`
-  if (workflow.path === new_path) {
+  const {path, replace} = await find_workflow_path(store, directory, name, workfile_path, workflow)
+  if (workflow.path === path) {
     return
   }
-  const existing = store.getWorkflowByPath(new_path)
-  if (existing && existing !== workflow) {
-    // Only replace a closed copy that ComfyUI saved earlier for this same
-    // AYON workfile, the file on disk managed by AYON is the source of
-    // truth. Leave any other workflow at that path untouched.
-    if (store.isOpen(existing) || !await is_saved_for_workfile(existing, workfile_path)) {
-      throw new Error(`A ComfyUI workflow named '${existing.filename ?? name}' already exists.`)
-    }
-    await store.deleteWorkflow(existing)
+  if (replace) {
+    await store.deleteWorkflow(replace)
   }
-  await store.renameWorkflow(workflow, new_path)
+  await store.renameWorkflow(workflow, path)
 }
 
 // Step one of saving an AYON workfile: name the tab after the file, record
@@ -1086,6 +1098,15 @@ app.registerExtension({
         })
 
         this.IFRAMERPC.register('loadWorkfile', async (data) => {
+          const store = get_workflow_store()
+          let name = data.workfile_name || null
+          if (store && data.workfile_path && name) {
+            // ComfyUI loads into a closed workflow with the same name, so
+            // don't let it pick one that isn't a copy of this workfile.
+            const {path} = await find_workflow_path(store, "workflows", name, data.workfile_path)
+            name = path.slice("workflows/".length, -".json".length)
+          }
+
           const graph_data = JSON.parse(data.workfile_json)
           if (data.workfile_path) {
             // Record the AYON workfile path *before* loading, so that it
@@ -1098,7 +1119,7 @@ app.registerExtension({
             }
           }
 
-          await app.loadGraphData(graph_data, true, true, data.workfile_name || null)
+          await app.loadGraphData(graph_data, true, true, name)
 
           // Record which ComfyUI workflow (tab) this AYON workfile lives in
           // and make that the change tracker baseline, so the freshly opened
