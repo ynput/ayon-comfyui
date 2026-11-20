@@ -291,6 +291,18 @@ async function rename_workflow(store, workflow, name, workfile_path) {
   await store.renameWorkflow(workflow, path)
 }
 
+// Save the workflow in ComfyUI as well. ComfyUI shows unsaved changes for any
+// tab it didn't save, even when it matches the AYON workfile on disk.
+async function save_in_comfyui(store, workflow) {
+  const tracker = workflow.changeTracker
+  if (typeof tracker?.prepareForSave === "function") {
+    tracker.prepareForSave()
+  } else {
+    capture_tracker_state(tracker)
+  }
+  await store.saveWorkflow(workflow)
+}
+
 // Step one of saving an AYON workfile: name the tab after the file, record
 // the AYON workfile path and return the serialized graph. The host writes it
 // to disk, then calls `finishSaveWorkfile`.
@@ -914,13 +926,7 @@ app.registerExtension({
             // User switched tabs in the meantime; do not save another tab.
             return false
           }
-          const tracker = workflow.changeTracker
-          if (typeof tracker?.prepareForSave === "function") {
-            tracker.prepareForSave()
-          } else {
-            capture_tracker_state(tracker)
-          }
-          await store.saveWorkflow(workflow)
+          await save_in_comfyui(store, workflow)
           return true
         })
 
@@ -1122,18 +1128,14 @@ app.registerExtension({
           await app.loadGraphData(graph_data, true, true, name)
 
           // Record which ComfyUI workflow (tab) this AYON workfile lives in
-          // and make that the change tracker baseline, so the freshly opened
-          // tab is not flagged as modified.
-          const workflow = get_workflow_store()?.activeWorkflow
+          // and save it in ComfyUI, so the tab doesn't show unsaved changes.
+          const workflow = store?.activeWorkflow
           if (data.workfile_path && workflow) {
             set_ayon_extra({comfy_workflow_path: workflow.path})
-            const tracker = workflow.changeTracker
             try {
-              capture_tracker_state(tracker)
-              tracker?.reset?.()
-              tracker?.updateModified?.()
+              await save_in_comfyui(store, workflow)
             } catch (err) {
-              console.warn("AYON: Failed to reset change tracker:", err)
+              console.warn("AYON: Failed to save the workflow in ComfyUI:", err)
             }
           }
           return true
